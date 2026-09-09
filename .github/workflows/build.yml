@@ -1,0 +1,155 @@
+name: Собрать Lunagram
+
+# Собираем настоящий Telegram для iOS с нашими правками.
+#
+# Исходники Telegram сюда не кладём — их полтора гигабайта. Вместо этого
+# качаем их в самой сборке на нужной версии и накладываем свои заплатки
+# из папки ios/patches. Так наш репозиторий остаётся лёгким, а обновиться
+# на новую версию Telegram — это поменять одну строчку TELEGRAM_TAG.
+
+on:
+  workflow_dispatch:
+    inputs:
+      buildNumber:
+        description: Номер сборки
+        required: false
+        default: "1"
+
+env:
+  # Версия Telegram, на которой всё проверено. Требования этой версии
+  # (Xcode, Bazel, macOS) лежат у них в versions.json — если менять тег,
+  # надо свериться с ним и поправить XCODE_VERSION и BAZEL_VERSION.
+  TELEGRAM_TAG: release-12.9.2
+  XCODE_VERSION: "26.2"
+  BAZEL_VERSION: "8.4.2"
+
+jobs:
+  build:
+    # macOS 26 нужен самому Telegram: на более старых их сборка не идёт.
+    runs-on: macos-26
+    # Полная сборка с нуля — часа два-три. Предел GitHub — шесть часов.
+    timeout-minutes: 350
+
+    steps:
+      - name: Забрать наши заплатки
+        uses: actions/checkout@v4
+
+      - name: Выбрать Xcode
+        run: |
+          set -eu
+          # Показываем, что вообще стоит на машине: если нужной версии нет,
+          # по этому списку сразу видно, на какую переключаться.
+          ls /Applications | grep -i '^Xcode' || true
+          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          xcodebuild -version
+
+      - name: Забрать исходники Telegram
+        run: |
+          set -eu
+          git clone --depth 1 --branch "$TELEGRAM_TAG" \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/TelegramMessenger/Telegram-iOS.git telegram-ios
+          echo "Версии, которых ждёт эта сборка:"
+          cat telegram-ios/versions.json
+
+      - name: Положить Bazel туда, где его ищет Telegram
+        run: |
+          set -eu
+          cd telegram-ios
+          # Их сборщик сам проверяет отпечаток файла по versions.json,
+          # поэтому берём точную версию с их же страницы выпусков.
+          mkdir -p build-input
+          curl -fL -o "build-input/bazel-${BAZEL_VERSION}-darwin-arm64" \
+            "https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-darwin-arm64"
+          chmod +x "build-input/bazel-${BAZEL_VERSION}-darwin-arm64"
+
+      - name: Подставить ключи Telegram API
+        env:
+          LG_API_ID: ${{ secrets.LG_API_ID }}
+          LG_API_HASH: ${{ secrets.LG_API_HASH }}
+        run: |
+          set -eu
+          if [ -z "${LG_API_ID:-}" ] || [ -z "${LG_API_HASH:-}" ]; then
+            echo "::error::Не заданы секреты LG_API_ID и LG_API_HASH."
+            echo "Получить: my.telegram.org -> API development tools."
+            echo "Положить: Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          cd telegram-ios
+          # Идентификатор оставляем телеграмовский нарочно: под него сделаны
+          # профили подписи в build-system/fake-codesigning, а SideStore при
+          # установке всё равно подставит свой. Ровно так же устроены все
+          # сборки, которые ставят в обход магазина.
+          cat > lunagram-configuration.json <<CONFIG
+          {
+            "bundle_id": "ph.telegra.Telegraph",
+            "api_id": "${LG_API_ID}",
+            "api_hash": "${LG_API_HASH}",
+            "team_id": "C67CF9S4VU",
+            "app_center_id": "0",
+            "is_internal_build": "false",
+            "is_appstore_build": "false",
+            "appstore_id": "0",
+            "app_specific_url_scheme": "tg",
+            "premium_iap_product_id": "",
+            "enable_siri": false,
+            "enable_icloud": false
+          }
+          CONFIG
+
+      - name: Наложить наши заплатки
+        run: |
+          set -eu
+          shopt -s nullglob
+          patches=("$GITHUB_WORKSPACE"/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "Заплаток нет — собираем Telegram как есть."
+            exit 0
+          fi
+          cd telegram-ios
+          for patch in "${patches[@]}"; do
+            echo "Накладываю $(basename "$patch")"
+            git apply --verbose "$patch"
+          done
+
+      - name: Собрать
+        run: |
+          set -eu
+          cd telegram-ios
+          python3 build-system/Make/Make.py \
+            --cacheDir="$HOME/telegram-bazel-cache" \
+            build \
+            --configurationPath=lunagram-configuration.json \
+            --codesigningInformationPath=build-system/fake-codesigning \
+            --buildNumber="${{ inputs.buildNumber }}" \
+            --configuration=release_arm64
+
+      - name: Переименовать в Lunagram
+        run: |
+          set -eu
+          cd telegram-ios
+          ipa=$(find . -name "Telegram.ipa" -not -path "*/external/*" | head -1)
+          if [ -z "$ipa" ]; then
+            echo "::error::Сборка прошла, но .ipa не найден."
+            find . -name "*.ipa" -not -path "*/external/*" | head -20
+            exit 1
+          fi
+          echo "Нашёл: $ipa"
+          ipa_full=$(cd "$(dirname "$ipa")" && pwd)/$(basename "$ipa")
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd "$GITHUB_WORKSPACE/out"
+          unzip -q "$ipa_full"
+          plist=Payload/Telegram.app/Info.plist
+          # Имя меняем в готовом файле, а не в исходниках: так правка не
+          # ломает сборочный граф Bazel и переживает обновление Telegram.
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Lunagram" "$plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName Lunagram" "$plist"
+          zip -qry Lunagram.ipa Payload
+          ls -lh Lunagram.ipa
+
+      - name: Выложить готовый файл
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lunagram-ipa
+          path: out/Lunagram.ipa
+          retention-days: 30
