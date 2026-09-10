@@ -1,0 +1,461 @@
+diff --git a/submodules/Lunagram/Sources/LunagramParticlesLayer.swift b/submodules/Lunagram/Sources/LunagramParticlesLayer.swift
+index 82da4c3d..93fc40e7 100644
+--- a/submodules/Lunagram/Sources/LunagramParticlesLayer.swift
++++ b/submodules/Lunagram/Sources/LunagramParticlesLayer.swift
+@@ -1,17 +1,62 @@
+ import UIKit
+ import QuartzCore
+ 
++/// Виды частиц — те же, что на ПК, и под теми же номерами.
++public enum LunagramParticleKind: Int, CaseIterable {
++    case snow = 1
++    case sakura = 2
++    case matrix = 3
++    case rain = 4
++    case leaves = 5
++
++    public var title: String {
++        switch self {
++        case .snow:
++            return "Снежинки"
++        case .sakura:
++            return "Сакура"
++        case .matrix:
++            return "Матрица"
++        case .rain:
++            return "Дождь"
++        case .leaves:
++            return "Осенние листья"
++        }
++    }
++
++    /// Струйки матрицы и капли дождя падают быстро и прямо, не кружась:
++    /// вращать их — значит сделать из дождя мусор, летящий боком.
++    var isHeavy: Bool {
++        return self == .matrix || self == .rain
++    }
++}
++
+ /// Частицы поверх фона переписки.
+ ///
+ /// Рисует их системный CAEmitterLayer — сам, на видеокарте, без таймеров и
+ /// перерисовок с нашей стороны. Поэтому снег почти ничего не стоит даже на
+ /// старых телефонах, и батарея от него не садится.
++///
++/// Картинки частиц нарисованы здесь же, кодом, — формы те же, что на ПК:
++/// шестилучевая снежинка, лепесток сакуры с выемкой, струйка матрицы,
++/// капля дождя, лист с прожилкой.
+ public final class LunagramParticlesLayer: CAEmitterLayer {
++    /// Сколько разных картинок на один вид. Одинаковые частицы читаются как
++    /// узор, а не как снегопад.
++    private static let variants = 3
++    /// Сторона картинки частицы в точках.
++    private static let spriteSide: CGFloat = 22.0
++    /// Картинки рисуем с запасом по чёткости и уменьшаем при показе: так
++    /// частица резкая на любом экране.
++    private static let spriteScale: CGFloat = 3.0
++
++    private var kind: LunagramParticleKind?
++    private var screenHeight: CGFloat = 800.0
++
+     public override init() {
+         super.init()
+         self.emitterShape = .line
+         self.emitterMode = .outline
+-        self.emitterCells = [LunagramParticlesLayer.makeCell()]
+         self.applyDensity(LunagramSettings.particlesDensity)
+     }
+ 
+@@ -35,63 +80,207 @@ public final class LunagramParticlesLayer: CAEmitterLayer {
+         CATransaction.begin()
+         CATransaction.setDisableActions(true)
+         self.frame = CGRect(origin: CGPoint(), size: size)
+-        self.emitterPosition = CGPoint(x: size.width / 2.0, y: -10.0)
+-        self.emitterSize = CGSize(width: size.width, height: 1.0)
++        self.emitterPosition = CGPoint(x: size.width / 2.0, y: -20.0)
++        self.emitterSize = CGSize(width: size.width * 1.2, height: 1.0)
+         CATransaction.commit()
++        // Сколько частиц живёт одновременно, зависит от того, сколько им
++        // лететь до низа. Экран сменил высоту — пересчитываем.
++        if abs(size.height - self.screenHeight) > 1.0 {
++            self.screenHeight = max(size.height, 100.0)
++            self.applyDensity(LunagramSettings.particlesDensity)
++        }
+     }
+ 
+-    /// Густота от 1 до 100 переводится в множитель рождения частиц.
++    /// Перечитывает настройки: вид, густоту и скорость. Имя осталось с
++    /// первой версии, когда настраивалась только густота, — так его зовёт
++    /// фон переписки.
+     public func applyDensity(_ density: Int) {
+-        self.birthRate = Float(density) / 20.0
++        let kind = LunagramParticleKind(rawValue: LunagramSettings.particlesKind) ?? .snow
++        if kind != self.kind {
++            self.kind = kind
++            self.emitterCells = (0 ..< LunagramParticlesLayer.variants).map { variant in
++                return LunagramParticlesLayer.makeCell(kind: kind, variant: variant)
++            }
++        }
++        let speed = Float(LunagramSettings.particlesSpeed) / 100.0
++        // Густота 1…100 — это сколько частиц на экране разом: 40 дают сотню,
++        // как на ПК по умолчанию. Рождаться им надо так часто, чтобы за время
++        // полёта набралось столько.
++        let alive = Float(density) * 2.5
++        let lifetime = Float(LunagramParticlesLayer.flightTime(kind: kind))
++        // Скорости у картинок заданы под экран в 800 точек. На высоком экране
++        // частицы летят быстрее — так время полёта сверху донизу то же, что
++        // на ПК, где скорость считается долями высоты.
++        self.velocity = speed * Float(self.screenHeight / 800.0)
++        self.lifetime = 1.0 / speed
++        self.birthRate = alive / lifetime * speed
++    }
++
++    /// Сколько секунд живёт частица на обычной скорости: сколько ей лететь
++    /// до низа самой медленной. Доли высоты в секунду — как на ПК, плюс
++    /// запас: рождаются частицы выше края, а гаснут ниже.
++    private static func flightTime(kind: LunagramParticleKind) -> CGFloat {
++        let slowest: CGFloat = kind.isHeavy ? 0.55 : 0.09
++        return 1.3 / slowest
+     }
+ 
+-    private static func makeCell() -> CAEmitterCell {
++    private static func makeCell(kind: LunagramParticleKind, variant: Int) -> CAEmitterCell {
+         let cell = CAEmitterCell()
+-        cell.contents = makeDot().cgImage
+-        cell.birthRate = 4.0
+-        cell.lifetime = 14.0
+-        cell.velocity = 40.0
+-        cell.velocityRange = 20.0
+-        // Вниз, с небольшим разбросом в стороны, и лёгкое ускорение вниз —
+-        // как у настоящего снега, который не падает строго по линейке.
++        cell.contents = makeSprite(kind: kind, variant: variant)?.cgImage
++        // Рождаемость делим поровну между картинками: общую задаёт слой.
++        cell.birthRate = 1.0 / Float(variants)
++        // Скорость — доля высоты экрана в секунду, как на ПК. Экран телефона
++        // около 800 точек, отсюда и числа.
++        if kind.isHeavy {
++            cell.velocity = 660.0
++            cell.velocityRange = 220.0
++            cell.emissionRange = 0.0
++            cell.spin = 0.0
++            cell.spinRange = 0.0
++        } else {
++            cell.velocity = 124.0
++            cell.velocityRange = 52.0
++            // Небольшой снос в стороны: настоящий снег не падает по линейке.
++            cell.emissionRange = CGFloat.pi / 18.0
++            cell.spinRange = 1.7
++        }
+         cell.emissionLongitude = CGFloat.pi
+-        cell.emissionRange = CGFloat.pi / 8.0
+-        cell.yAcceleration = 6.0
+-        cell.scale = 0.12
+-        cell.scaleRange = 0.08
+-        cell.alphaRange = 0.4
+-        cell.alphaSpeed = -0.05
+-        cell.spin = 0.3
+-        cell.spinRange = 0.6
++        cell.lifetime = Float(flightTime(kind: kind))
++        let base = 1.0 / spriteScale
++        cell.scale = base * 0.72
++        cell.scaleRange = base * 0.28
++        cell.alphaRange = 0.28
++        cell.color = UIColor(white: 1.0, alpha: 0.72).cgColor
+         return cell
+     }
+ 
+-    /// Мягкая белая точка: плотная в центре, прозрачная по краям.
+-    private static func makeDot() -> UIImage {
+-        let size = CGSize(width: 32.0, height: 32.0)
+-        let renderer = UIGraphicsImageRenderer(size: size)
+-        return renderer.image { context in
+-            let center = CGPoint(x: size.width / 2.0, y: size.height / 2.0)
+-            let colors = [
+-                UIColor.white.cgColor,
+-                UIColor.white.withAlphaComponent(0.0).cgColor
+-            ] as CFArray
+-            let locations: [CGFloat] = [0.0, 1.0]
+-            guard let gradient = CGGradient(
+-                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+-                colors: colors,
+-                locations: locations
+-            ) else {
+-                return
++    private static func makeSprite(kind: LunagramParticleKind, variant: Int) -> UIImage? {
++        let side = spriteSide
++        let format = UIGraphicsImageRendererFormat()
++        format.scale = spriteScale
++        format.opaque = false
++        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
++        return renderer.image { rendererContext in
++            let context = rendererContext.cgContext
++            context.translateBy(x: side / 2.0, y: side / 2.0)
++            switch kind {
++            case .snow:
++                drawSnow(context, side: side, variant: variant)
++            case .sakura:
++                drawSakura(context, side: side, variant: variant)
++            case .matrix:
++                drawMatrix(context, side: side, variant: variant)
++            case .rain:
++                drawRain(context, side: side, variant: variant)
++            case .leaves:
++                drawLeaf(context, side: side, variant: variant)
+             }
+-            context.cgContext.drawRadialGradient(
+-                gradient,
+-                startCenter: center,
+-                startRadius: 0.0,
+-                endCenter: center,
+-                endRadius: size.width / 2.0,
+-                options: []
+-            )
+         }
+     }
++
++    /// Снежинка: шесть лучей с боковыми отростками. Классическая форма, по
++    /// которой её узнают даже в десять точек.
++    private static func drawSnow(_ context: CGContext, side: CGFloat, variant: Int) {
++        let arm = side / 2.0 * (0.62 + CGFloat(variant) * 0.12)
++        context.setStrokeColor(UIColor.white.cgColor)
++        context.setLineWidth(max(side * 0.045, 1.0))
++        context.setLineCap(.round)
++        for _ in 0 ..< 6 {
++            context.rotate(by: CGFloat.pi / 3.0)
++            context.move(to: CGPoint())
++            context.addLine(to: CGPoint(x: 0.0, y: -arm))
++            let at = CGPoint(x: 0.0, y: -arm * 0.62)
++            context.move(to: at)
++            context.addLine(to: CGPoint(x: at.x - arm * 0.26, y: at.y - arm * 0.2))
++            context.move(to: at)
++            context.addLine(to: CGPoint(x: at.x + arm * 0.26, y: at.y - arm * 0.2))
++        }
++        context.strokePath()
++    }
++
++    /// Лепесток сакуры: капля с выемкой на кончике — ею он и отличается от
++    /// простого овала.
++    private static func drawSakura(_ context: CGContext, side: CGFloat, variant: Int) {
++        let half = side / 2.0
++        let w = half * (0.44 + CGFloat(variant) * 0.06)
++        let h = half * (0.86 - CGFloat(variant) * 0.06)
++        let petal = UIBezierPath()
++        petal.move(to: CGPoint(x: 0.0, y: h))
++        petal.addCurve(to: CGPoint(x: 0.0, y: -h), controlPoint1: CGPoint(x: w, y: h * 0.5), controlPoint2: CGPoint(x: w * 0.9, y: -h * 0.6))
++        petal.addCurve(to: CGPoint(x: 0.0, y: h), controlPoint1: CGPoint(x: -w * 0.9, y: -h * 0.6), controlPoint2: CGPoint(x: -w, y: h * 0.5))
++        // Выемку вырезаем: всё, что попадёт в неё, стирается.
++        context.saveGState()
++        context.addPath(petal.cgPath)
++        context.clip()
++        let colors = [UIColor(red: 1.0, green: 232.0 / 255.0, blue: 240.0 / 255.0, alpha: 1.0).cgColor, UIColor(red: 1.0, green: 176.0 / 255.0, blue: 206.0 / 255.0, alpha: 1.0).cgColor] as CFArray
++        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0]) {
++            context.drawLinearGradient(gradient, start: CGPoint(x: 0.0, y: -h), end: CGPoint(x: 0.0, y: h), options: [])
++        }
++        context.setBlendMode(.clear)
++        context.fillEllipse(in: CGRect(x: -w * 0.34, y: -h * 1.02 - h * 0.2, width: w * 0.68, height: h * 0.4))
++        context.restoreGState()
++    }
++
++    /// Матрица: не буква, а вертикальная струйка — яркая голова и гаснущий
++    /// хвост. Узнаётся ровно так же, а шрифт с катаканой не нужен.
++    private static func drawMatrix(_ context: CGContext, side: CGFloat, variant: Int) {
++        let width = max(side * (0.1 + CGFloat(variant) * 0.03), 1.0)
++        let rect = CGRect(x: -width / 2.0, y: -side / 2.0, width: width, height: side)
++        context.saveGState()
++        context.addPath(UIBezierPath(roundedRect: rect, cornerRadius: width / 2.0).cgPath)
++        context.clip()
++        let colors = [
++            UIColor(red: 120.0 / 255.0, green: 1.0, blue: 170.0 / 255.0, alpha: 0.0).cgColor,
++            UIColor(red: 80.0 / 255.0, green: 230.0 / 255.0, blue: 140.0 / 255.0, alpha: 0.75).cgColor,
++            UIColor(red: 220.0 / 255.0, green: 1.0, blue: 230.0 / 255.0, alpha: 1.0).cgColor
++        ] as CFArray
++        // Голова струйки внизу: она падает вниз и ведёт хвост за собой.
++        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 0.75, 1.0]) {
++            context.drawLinearGradient(gradient, start: CGPoint(x: 0.0, y: rect.minY), end: CGPoint(x: 0.0, y: rect.maxY), options: [])
++        }
++        context.restoreGState()
++    }
++
++    /// Дождь: короткая черта со скруглёнными концами, светлеющая книзу.
++    private static func drawRain(_ context: CGContext, side: CGFloat, variant: Int) {
++        let length = side * (0.5 + CGFloat(variant) * 0.12)
++        let width = max(side * 0.07, 1.0)
++        let rect = CGRect(x: -width / 2.0, y: -length / 2.0, width: width, height: length)
++        context.saveGState()
++        context.addPath(UIBezierPath(roundedRect: rect, cornerRadius: width / 2.0).cgPath)
++        context.clip()
++        let colors = [
++            UIColor(red: 200.0 / 255.0, green: 226.0 / 255.0, blue: 1.0, alpha: 0.24).cgColor,
++            UIColor(red: 226.0 / 255.0, green: 240.0 / 255.0, blue: 1.0, alpha: 0.86).cgColor
++        ] as CFArray
++        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0]) {
++            context.drawLinearGradient(gradient, start: CGPoint(x: 0.0, y: rect.minY), end: CGPoint(x: 0.0, y: rect.maxY), options: [])
++        }
++        context.restoreGState()
++    }
++
++    /// Осенний лист: две дуги и прожилка посередине — без неё лист
++    /// выглядит просто пятном.
++    private static func drawLeaf(_ context: CGContext, side: CGFloat, variant: Int) {
++        let half = side / 2.0
++        let w = half * 0.5
++        let h = half * (0.8 + CGFloat(variant) * 0.06)
++        let colors = [
++            UIColor(red: 226.0 / 255.0, green: 138.0 / 255.0, blue: 52.0 / 255.0, alpha: 1.0),
++            UIColor(red: 198.0 / 255.0, green: 88.0 / 255.0, blue: 44.0 / 255.0, alpha: 1.0),
++            UIColor(red: 214.0 / 255.0, green: 172.0 / 255.0, blue: 62.0 / 255.0, alpha: 1.0)
++        ]
++        let leaf = UIBezierPath()
++        leaf.move(to: CGPoint(x: 0.0, y: -h))
++        leaf.addQuadCurve(to: CGPoint(x: 0.0, y: h), controlPoint: CGPoint(x: w, y: -h * 0.1))
++        leaf.addQuadCurve(to: CGPoint(x: 0.0, y: -h), controlPoint: CGPoint(x: -w, y: -h * 0.1))
++        context.setFillColor(colors[variant % colors.count].cgColor)
++        context.addPath(leaf.cgPath)
++        context.fillPath()
++        context.setStrokeColor(UIColor(red: 1.0, green: 236.0 / 255.0, blue: 200.0 / 255.0, alpha: 0.6).cgColor)
++        context.setLineWidth(max(side * 0.03, 1.0))
++        context.move(to: CGPoint(x: 0.0, y: -h * 0.9))
++        context.addLine(to: CGPoint(x: 0.0, y: h * 0.9))
++        context.strokePath()
++    }
+ }
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 24a19954..5f509e79 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -17,6 +17,8 @@ public final class LunagramSettings {
+     private enum Key {
+         static let particlesEnabled = "lunagram.particles.enabled"
+         static let particlesDensity = "lunagram.particles.density"
++        static let particlesKind = "lunagram.particles.kind"
++        static let particlesSpeed = "lunagram.particles.speed"
+         static let liveWallpaperEnabled = "lunagram.liveWallpaper.enabled"
+         static let liveWallpaperDim = "lunagram.liveWallpaper.dim"
+         static let liveWallpaperFile = "lunagram.liveWallpaper.file"
+@@ -59,6 +61,34 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Вид частиц — номер из LunagramParticleKind, те же, что на ПК. По
++    /// умолчанию снежинки: с них всё и начиналось.
++    public static var particlesKind: Int {
++        get {
++            let value = defaults.integer(forKey: Key.particlesKind)
++            return (1 ... 5).contains(value) ? value : 1
++        }
++        set {
++            defaults.set(max(1, min(5, newValue)), forKey: Key.particlesKind)
++            changed()
++        }
++    }
++
++    /// Скорость частиц в процентах: 100 — обычная. Так же хранит и ПК.
++    public static var particlesSpeed: Int {
++        get {
++            let value = defaults.integer(forKey: Key.particlesSpeed)
++            if value == 0 {
++                return 100
++            }
++            return max(20, min(300, value))
++        }
++        set {
++            defaults.set(max(20, min(300, newValue)), forKey: Key.particlesSpeed)
++            changed()
++        }
++    }
++
+     // MARK: Ghost
+     //
+     // Сами значения живут в модуле LunagramGhost: их читает сетевая часть
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 1b382bc4..87b777f8 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -104,6 +104,20 @@ private let lunagramWallpaperDimTitles = ["Без затемнения", "Сле
+ private let lunagramBannerDimTitles = ["Без затемнения", "Слегка затемнить", "Затемнить", "Сильно затемнить"]
+ private let lunagramCardsDimTitles = ["Аватарка ярче", "Средне", "Аватарка тише"]
+ 
++/// Густота и скорость частиц — ступенями: название и число для настроек.
++private let lunagramParticlesDensityLevels: [(String, Int)] = [("Редко", 20), ("Средне", 40), ("Густо", 80)]
++private let lunagramParticlesSpeedLevels: [(String, Int)] = [("Медленно", 60), ("Обычно", 100), ("Быстро", 160)]
++
++/// Какая ступень ближе всего к числу из настроек: густоту в первой версии
++/// можно было задать любую, не только ступенью.
++private func lunagramNearestLevel(_ value: Int, _ levels: [(String, Int)]) -> Int {
++    var best = 0
++    for (index, level) in levels.enumerated() where abs(level.1 - value) < abs(levels[best].1 - value) {
++        best = index
++    }
++    return best
++}
++
+ private final class LunagramSettingsControllerArguments {
+     let toggle: (LunagramToggle, Bool) -> Void
+     let pick: (LunagramSettingsSection) -> Void
+@@ -122,6 +136,8 @@ private enum LunagramSettingsSection: Int32 {
+     case liveWallpaper
+     case dialogCards
+     case appearance
++    case particlesDensity
++    case particlesSpeed
+ }
+ 
+ private enum LunagramSettingsEntry: ItemListNodeEntry {
+@@ -224,9 +240,12 @@ private struct LunagramMediaState: Equatable {
+     var bannerDim: Int
+     var hasBanner: Bool
+     var cardsDim: Int
++    var particlesKind: Int
++    var particlesDensity: Int
++    var particlesSpeed: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed)
+     }
+ }
+ 
+@@ -277,10 +296,23 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+     entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
+ 
+     entries.append(contentsOf: [
+-        .header(.appearance, 0, "ОФОРМЛЕНИЕ"),
+-        .toggle(.appearance, .particles, value(.particles)),
+-        .info(.appearance, 0, "Снежинки медленно падают поверх фона переписки. Рисует их сама система, поэтому батарею они почти не тратят.")
++        .header(.appearance, 0, "ЧАСТИЦЫ В ПЕРЕПИСКЕ"),
++        .toggle(.appearance, .particles, value(.particles))
+     ])
++    for kind in LunagramParticleKind.allCases {
++        entries.append(.dim(.appearance, Int32(kind.rawValue - 1), kind.title, kind.rawValue == media.particlesKind))
++    }
++    entries.append(.header(.particlesDensity, 0, "ГУСТОТА"))
++    let density = lunagramNearestLevel(media.particlesDensity, lunagramParticlesDensityLevels)
++    for (index, level) in lunagramParticlesDensityLevels.enumerated() {
++        entries.append(.dim(.particlesDensity, Int32(index), level.0, index == density))
++    }
++    entries.append(.header(.particlesSpeed, 0, "СКОРОСТЬ"))
++    let speed = lunagramNearestLevel(media.particlesSpeed, lunagramParticlesSpeedLevels)
++    for (index, level) in lunagramParticlesSpeedLevels.enumerated() {
++        entries.append(.dim(.particlesSpeed, Int32(index), level.0, index == speed))
++    }
++    entries.append(.info(.particlesSpeed, 0, "Падают поверх фона переписки — те же пять видов, что на ПК. Рисует их сама система, поэтому батарею они почти не тратят."))
+     return entries
+ }
+ 
+@@ -394,6 +426,16 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+             LunagramSettings.profileBannerDim = dim
+         case .dialogCards:
+             LunagramSettings.dialogCardsDim = dim
++        case .appearance:
++            // Выбрал вид — значит хочет его видеть: включаем частицы сразу.
++            LunagramSettings.particlesKind = dim + 1
++            LunagramToggle.particles.set(true)
++            values[.particles] = true
++            valuesPromise.set(values)
++        case .particlesDensity:
++            LunagramSettings.particlesDensity = lunagramParticlesDensityLevels[max(0, min(lunagramParticlesDensityLevels.count - 1, dim))].1
++        case .particlesSpeed:
++            LunagramSettings.particlesSpeed = lunagramParticlesSpeedLevels[max(0, min(lunagramParticlesSpeedLevels.count - 1, dim))].1
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
