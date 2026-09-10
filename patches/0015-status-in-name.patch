@@ -1,0 +1,436 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 2dca8645..67d9b32f 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -33,6 +33,8 @@ public final class LunagramSettings {
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
+         static let hideOwnPhone = "lunagram.privacy.hideOwnPhone"
+         static let deviceModelName = "lunagram.privacy.deviceModelName"
++        static let statusBaseName = "lunagram.status.baseName"
++        static let statusTemplates = "lunagram.status.templates"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -403,6 +405,31 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: Статус в имени
++
++    /// Имя без статуса. Его надо помнить, чтобы уметь вернуть всё как было.
++    public static var statusBaseName: String? {
++        get {
++            return defaults.string(forKey: Key.statusBaseName)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.statusBaseName)
++        }
++    }
++
++    /// Недавние статусы, свежие первыми.
++    public static var statusTemplates: [String] {
++        return defaults.stringArray(forKey: Key.statusTemplates) ?? []
++    }
++
++    /// Запомнить статус. Больше десятка никто не помнит, а список
++    /// разрастается — держим последние, как на ПК.
++    public static func rememberStatus(_ status: String) {
++        var templates = statusTemplates.filter { $0 != status }
++        templates.insert(status, at: 0)
++        defaults.set(Array(templates.prefix(10)), forKey: Key.statusTemplates)
++    }
++
+     // MARK: Файлы
+ 
+     private enum ImportError: Error {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index ba6de563..423839a1 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -164,6 +164,7 @@ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case spy
+     case privacy
++    case profileStatus
+     case banner
+     case bannerPhoto
+     case avatarFrame
+@@ -180,11 +181,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+     case input(LunagramSettingsSection, String, String, String)
++    case disclosure(LunagramSettingsSection, String)
+     case info(LunagramSettingsSection, Int32, String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -202,6 +204,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + 60 + index
+         case let .input(section, _, _, _):
+             return section.rawValue * 100 + 50
++        case let .disclosure(section, _):
++            return section.rawValue * 100 + 5
+         case let .info(section, index, _):
+             return section.rawValue * 100 + 90 + index
+         }
+@@ -233,6 +237,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .disclosure(lhsSection, lhsTitle):
++            if case let .disclosure(rhsSection, rhsTitle) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle {
++                return true
++            } else {
++                return false
++            }
+         case let .input(lhsSection, lhsTitle, lhsPlaceholder, lhsText):
+             if case let .input(rhsSection, rhsTitle, rhsPlaceholder, rhsText) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle, lhsPlaceholder == rhsPlaceholder, lhsText == rhsText {
+                 return true
+@@ -269,6 +279,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                 arguments.setDim(section, Int(index))
+             })
++        case let .disclosure(section, title):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.pick(section)
++            })
+         case let .input(section, title, placeholder, text):
+             return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: title, textColor: presentationData.theme.list.itemPrimaryTextColor), text: text, placeholder: placeholder, type: .regular(capitalization: false, autocorrection: false), spacing: 10.0, clearType: .onFocus, maxLength: 64, sectionId: self.section, textUpdated: { value in
+                 arguments.updateText(section, value)
+@@ -317,6 +331,10 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
+         .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений»."),
+ 
++        .header(.profileStatus, 0, "ПРОФИЛЬ"),
++        .disclosure(.profileStatus, "Статус в имени"),
++        .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются."),
++
+         .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+         .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+         .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
+@@ -461,12 +479,18 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     var values: [LunagramToggle: Bool] = [:]
+     let mediaPromise = ValuePromise<LunagramMediaState>(LunagramMediaState.current(), ignoreRepeated: true)
+     let pickerHolder = LunagramPickerHolder()
++    // Вложенные экраны раздела открываем через сам экран — он появится ниже.
++    var pushImpl: ((ViewController) -> Void)?
+ 
+     let arguments = LunagramSettingsControllerArguments(toggle: { toggle, value in
+         toggle.set(value)
+         values[toggle] = value
+         valuesPromise.set(values)
+     }, pick: { section in
++        if section == .profileStatus {
++            pushImpl?(lunagramStatusController(context: context))
++            return
++        }
+         // Галерея без запроса доступа к фото есть только с iOS 14, а
+         // Telegram поддерживает и 13-ю.
+         guard #available(iOS 14.0, *) else {
+@@ -547,5 +571,8 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     }
+ 
+     let controller = ItemListController(context: context, state: signal)
++    pushImpl = { [weak controller] c in
++        controller?.push(c)
++    }
+     return controller
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramStatusController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramStatusController.swift
+new file mode 100644
+index 00000000..3aae465a
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramStatusController.swift
+@@ -0,0 +1,287 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// «Статус в имени» — как на ПК: к имени через черту дописывается статус,
++// «Вова | на паре». Это настоящее имя в Telegram, его видят все — в том и
++// смысл. Фамилию не трогаем.
++
++private final class LunagramStatusArguments {
++    let updateBase: (String) -> Void
++    let updateStatus: (String) -> Void
++    let apply: (String?) -> Void
++
++    init(updateBase: @escaping (String) -> Void, updateStatus: @escaping (String) -> Void, apply: @escaping (String?) -> Void) {
++        self.updateBase = updateBase
++        self.updateStatus = updateStatus
++        self.apply = apply
++    }
++}
++
++private enum LunagramStatusSection: Int32 {
++    case name
++    case status
++    case recent
++}
++
++private enum LunagramStatusEntry: ItemListNodeEntry {
++    case header(LunagramStatusSection, String)
++    case baseInput(String)
++    case statusInput(String)
++    case apply(Bool)
++    case clear(Bool)
++    case info(LunagramStatusSection, String)
++    case template(Int32, String, Bool)
++
++    var section: ItemListSectionId {
++        switch self {
++        case let .header(section, _), let .info(section, _):
++            return section.rawValue
++        case .baseInput:
++            return LunagramStatusSection.name.rawValue
++        case .statusInput, .apply, .clear:
++            return LunagramStatusSection.status.rawValue
++        case .template:
++            return LunagramStatusSection.recent.rawValue
++        }
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .header(section, _):
++            return section.rawValue * 100
++        case .baseInput:
++            return 1
++        case .statusInput:
++            return 101
++        case .apply:
++            return 102
++        case .clear:
++            return 103
++        case let .info(section, _):
++            return section.rawValue * 100 + 90
++        case let .template(index, _, _):
++            return 210 + index
++        }
++    }
++
++    static func ==(lhs: LunagramStatusEntry, rhs: LunagramStatusEntry) -> Bool {
++        switch lhs {
++        case let .header(lhsSection, lhsText):
++            if case let .header(rhsSection, rhsText) = rhs, lhsSection == rhsSection, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .baseInput(lhsText):
++            if case let .baseInput(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .statusInput(lhsText):
++            if case let .statusInput(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .apply(lhsEnabled):
++            if case let .apply(rhsEnabled) = rhs, lhsEnabled == rhsEnabled {
++                return true
++            }
++            return false
++        case let .clear(lhsEnabled):
++            if case let .clear(rhsEnabled) = rhs, lhsEnabled == rhsEnabled {
++                return true
++            }
++            return false
++        case let .info(lhsSection, lhsText):
++            if case let .info(rhsSection, rhsText) = rhs, lhsSection == rhsSection, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .template(lhsIndex, lhsText, lhsEnabled):
++            if case let .template(rhsIndex, rhsText, rhsEnabled) = rhs, lhsIndex == rhsIndex, lhsText == rhsText, lhsEnabled == rhsEnabled {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramStatusEntry, rhs: LunagramStatusEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramStatusArguments
++        switch self {
++        case let .header(_, text):
++            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++        case let .baseInput(text):
++            return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: text, placeholder: "Имя", type: .regular(capitalization: true, autocorrection: false), clearType: .onFocus, maxLength: 64, sectionId: self.section, textUpdated: { value in
++                arguments.updateBase(value)
++            }, action: {
++            })
++        case let .statusInput(text):
++            return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(), text: text, placeholder: "Например: на паре", type: .regular(capitalization: false, autocorrection: true), clearType: .onFocus, maxLength: 60, sectionId: self.section, textUpdated: { value in
++                arguments.updateStatus(value)
++            }, action: {
++            })
++        case let .apply(enabled):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: "Поставить статус", kind: enabled ? .generic : .disabled, alignment: .natural, sectionId: self.section, style: .blocks, action: {
++                arguments.apply(nil)
++            })
++        case let .clear(enabled):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: "Убрать статус", kind: enabled ? .destructive : .disabled, alignment: .natural, sectionId: self.section, style: .blocks, action: {
++                arguments.apply("")
++            })
++        case let .info(_, text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        case let .template(_, text, enabled):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: enabled ? .generic : .disabled, alignment: .natural, sectionId: self.section, style: .blocks, action: {
++                arguments.apply(text)
++            })
++        }
++    }
++}
++
++private struct LunagramStatusState: Equatable {
++    var base: String
++    var status: String
++    var templates: [String]
++    var isApplying: Bool
++    var currentName: String?
++}
++
++/// Имя со статусом. Telegram не принимает имя длиннее 64 знаков — лишнее
++/// от статуса обрезаем.
++private func lunagramStatusName(base: String, status: String) -> String {
++    let base = base.trimmingCharacters(in: .whitespacesAndNewlines)
++    let status = status.trimmingCharacters(in: .whitespacesAndNewlines)
++    if status.isEmpty {
++        return String(base.prefix(64))
++    }
++    return String("\(base) | \(status)".prefix(64))
++}
++
++private func lunagramStatusEntries(state: LunagramStatusState) -> [LunagramStatusEntry] {
++    let canApply = !state.isApplying && !state.base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
++    var entries: [LunagramStatusEntry] = [
++        .header(.name, "ИМЯ БЕЗ СТАТУСА"),
++        .baseInput(state.base),
++        .header(.status, "СТАТУС"),
++        .statusInput(state.status),
++        .apply(canApply && !state.status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
++        .clear(canApply)
++    ]
++    var info = "Будет так: «\(lunagramStatusName(base: state.base, status: state.status.isEmpty ? "статус" : state.status))». Это твоё настоящее имя в Telegram — его видят все, как и на ПК. Фамилия не меняется."
++    if let currentName = state.currentName {
++        info = "Сейчас в имени: «\(currentName)».\n\n" + info
++    }
++    entries.append(.info(.status, info))
++    if !state.templates.isEmpty {
++        entries.append(.header(.recent, "НЕДАВНИЕ"))
++        for (index, template) in state.templates.enumerated() {
++            entries.append(.template(Int32(index), template, canApply))
++        }
++        entries.append(.info(.recent, "Нажми — и статус встанет сразу."))
++    }
++    return entries
++}
++
++func lunagramStatusController(context: AccountContext) -> ViewController {
++    let initialState = LunagramStatusState(base: LunagramSettings.statusBaseName ?? "", status: "", templates: LunagramSettings.statusTemplates, isApplying: false, currentName: nil)
++    let statePromise = ValuePromise(initialState, ignoreRepeated: true)
++    let stateValue = Atomic(value: initialState)
++    let updateState: ((LunagramStatusState) -> LunagramStatusState) -> Void = { f in
++        statePromise.set(stateValue.modify { f($0) })
++    }
++
++    // Нынешнее имя: показать и, если имя без статуса ещё не запомнено,
++    // вынуть его — всё, что до черты.
++    let accountPeer = context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
++    let initialDisposable = (accountPeer |> deliverOnMainQueue).startStrict(next: { peer in
++        guard case let .user(user) = peer else {
++            return
++        }
++        let firstName = user.firstName ?? ""
++        updateState { state in
++            var state = state
++            state.currentName = firstName
++            if state.base.isEmpty {
++                state.base = firstName.components(separatedBy: " | ").first ?? firstName
++            }
++            return state
++        }
++    })
++
++    let applyDisposable = MetaDisposable()
++    let arguments = LunagramStatusArguments(updateBase: { value in
++        updateState { state in
++            var state = state
++            state.base = value
++            return state
++        }
++    }, updateStatus: { value in
++        updateState { state in
++            var state = state
++            state.status = value
++            return state
++        }
++    }, apply: { chosen in
++        // nil — статус из поля, пустая строка — убрать, иначе — готовый.
++        let state = stateValue.with { $0 }
++        let base = state.base.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard !base.isEmpty, !state.isApplying else {
++            return
++        }
++        let status = (chosen ?? state.status).trimmingCharacters(in: .whitespacesAndNewlines)
++        let name = lunagramStatusName(base: base, status: status)
++        LunagramSettings.statusBaseName = base
++        if !status.isEmpty {
++            LunagramSettings.rememberStatus(status)
++        }
++        updateState { state in
++            var state = state
++            state.isApplying = true
++            if let chosen = chosen {
++                state.status = chosen
++            }
++            return state
++        }
++        applyDisposable.set((accountPeer
++        |> mapToSignal { peer -> Signal<Void, NoError> in
++            guard case let .user(user) = peer else {
++                return .complete()
++            }
++            return context.engine.accountData.updateAccountPeerName(firstName: name, lastName: user.lastName ?? "")
++        }
++        |> deliverOnMainQueue).startStrict(completed: {
++            updateState { state in
++                var state = state
++                state.isApplying = false
++                state.currentName = name
++                state.templates = LunagramSettings.statusTemplates
++                return state
++            }
++        }))
++    })
++
++    let signal = combineLatest(context.sharedContext.presentationData, statePromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Статус в имени"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramStatusEntries(state: state), style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    |> afterDisposed {
++        initialDisposable.dispose()
++        applyDisposable.dispose()
++    }
++
++    return ItemListController(context: context, state: signal)
++}
