@@ -1,0 +1,19 @@
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index 0f587b3e..cf610524 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -530,8 +530,12 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         
+         let baseAppBundleId = Bundle.main.bundleIdentifier!
+         let appGroupName = "group.\(baseAppBundleId)"
+-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+-        
++        // Lunagram: при установке с компьютера общей папки приложения может не
++        // быть — программа установки не всегда её настраивает, и Telegram
++        // вставал бы на «Error 2». Тогда берём свою папку: пострадают только
++        // «Поделиться» и текст в уведомлениях, им нужна общая.
++        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName) ?? (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
++
+         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
+         self.buildConfig = buildConfig
+         let signatureDict = BuildConfigExtra.signatureDict()
