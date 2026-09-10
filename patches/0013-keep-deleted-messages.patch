@@ -1,0 +1,303 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b7ef3d77..36c0e837 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -145,6 +145,20 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: Сохранение удалённых
++
++    /// Удалённое собеседником не стирать, а оставлять с метлой возле
++    /// времени. Само значение — в LunagramGhost, по той же причине, что Ghost.
++    public static var keepDeletedMessages: Bool {
++        get {
++            return LunagramSpySettings.keepDeleted
++        }
++        set {
++            LunagramSpySettings.keepDeleted = newValue
++            changed()
++        }
++    }
++
+     // MARK: Живые обои
+ 
+     /// Видео вместо обоев переписки.
+diff --git a/submodules/LunagramGhost/BUILD b/submodules/LunagramGhost/BUILD
+index 98c07c7b..8b7ab881 100644
+--- a/submodules/LunagramGhost/BUILD
++++ b/submodules/LunagramGhost/BUILD
+@@ -5,7 +5,8 @@ load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+ # Их читает TelegramCore, сетевое сердце Telegram. Любая правка в том, от
+ # чего он зависит, пересобирает его, а за ним почти всё приложение. Пока
+ # Ghost жил в общем модуле Lunagram, каждая новая функция стоила лишних
+-# полчаса сборки. Здесь только Ghost: меняется он редко.
++# полчаса сборки. Здесь только то, что читает сетевая часть: Ghost и
++# сохранение удалённых. Меняется это редко.
+ swift_library(
+     name = "LunagramGhost",
+     module_name = "LunagramGhost",
+diff --git a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+new file mode 100644
+index 00000000..a797998b
+--- /dev/null
++++ b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+@@ -0,0 +1,23 @@
++import Foundation
++
++/// Сохранение удалённых — «шпионский режим», как его зовут в AyuGram.
++///
++/// Живёт рядом с Ghost по той же причине: его читает сетевая часть
++/// Telegram, в тот момент, когда сервер велит стереть сообщение.
++public enum LunagramSpySettings {
++    private static let defaults = UserDefaults.standard
++
++    private enum Key {
++        static let keepDeleted = "lunagram.spy.keepDeleted"
++    }
++
++    /// Удалённое собеседником не стирать, а оставлять с пометкой.
++    public static var keepDeleted: Bool {
++        get {
++            return defaults.bool(forKey: Key.keepDeleted)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.keepDeleted)
++        }
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/Account/AccountManager.swift b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+index 3f2b4794..8ffdb771 100644
+--- a/submodules/TelegramCore/Sources/Account/AccountManager.swift
++++ b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+@@ -138,6 +138,8 @@ private var declaredEncodables: Void = {
+     declareEncodable(SourceReferenceMessageAttribute.self, f: { SourceReferenceMessageAttribute(decoder: $0) })
+     declareEncodable(SourceAuthorInfoMessageAttribute.self, f: { SourceAuthorInfoMessageAttribute(decoder: $0) })
+     declareEncodable(EditedMessageAttribute.self, f: { EditedMessageAttribute(decoder: $0) })
++    // Lunagram: пометка «удалено у собеседника».
++    declareEncodable(LunagramDeletedMessageAttribute.self, f: { LunagramDeletedMessageAttribute(decoder: $0) })
+     declareEncodable(ReplyMarkupMessageAttribute.self, f: { ReplyMarkupMessageAttribute(decoder: $0) })
+     declareEncodable(OutgoingChatContextResultMessageAttribute.self, f: { OutgoingChatContextResultMessageAttribute(decoder: $0) })
+     declareEncodable(HttpReferenceMediaResource.self, f: { HttpReferenceMediaResource(decoder: $0) })
+diff --git a/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift b/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
+index 58db6c71..31de6fa7 100644
+--- a/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
++++ b/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
+@@ -4439,7 +4439,10 @@ func replayFinalState(
+                         let _ = transaction.addMessages(messages, location: .Random)
+                     }
+                 }
+-            case let .DeleteMessagesWithGlobalIds(ids):
++            case let .DeleteMessagesWithGlobalIds(allIds):
++                // Lunagram: удалённое собеседником оставляем с пометкой,
++                // стираем только остальное.
++                let ids = lunagramKeepDeletedMessages(transaction: transaction, globalIds: allIds)
+                 var resourceIds: [MediaResourceId] = []
+                 transaction.deleteMessagesWithGlobalIds(ids, forEachMedia: { media in
+                     addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
+@@ -4448,7 +4451,10 @@ func replayFinalState(
+                     let _ = mediaBox.removeCachedResources(Array(Set(resourceIds)), force: true).start()
+                 }
+                 deletedMessageIds.append(contentsOf: ids.map { .global($0) })
+-            case let .DeleteMessages(ids):
++            case let .DeleteMessages(allIds):
++                // Lunagram: удалённое собеседником оставляем с пометкой,
++                // стираем только остальное.
++                let ids = lunagramKeepDeletedMessages(transaction: transaction, ids: allIds)
+                 _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids, manualAddMessageThreadStatsDifference: { id, add, remove in
+                     addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
+                 })
+diff --git a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+new file mode 100644
+index 00000000..73e61b80
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+@@ -0,0 +1,64 @@
++import Foundation
++import Postbox
++import LunagramGhost
++
++// Lunagram: сохранение удалённых сообщений.
++//
++// Когда сервер велит стереть сообщение — его удалил собеседник, админ
++// канала или ты сам на другом устройстве, — мы его не стираем, а помечаем.
++// Свои удаления с этого телефона сюда не доходят: Telegram стирает их у себя
++// сразу, и к приходу команды от сервера стирать уже нечего.
++
++/// Возвращает те сообщения, что всё-таки надо стереть. Остальные помечены.
++func lunagramKeepDeletedMessages(transaction: Transaction, ids: [MessageId]) -> [MessageId] {
++    guard LunagramSpySettings.keepDeleted else {
++        return ids
++    }
++    let date = Int32(Date().timeIntervalSince1970)
++    return ids.filter { id in
++        return !lunagramKeepDeletedMessage(transaction: transaction, id: id, date: date)
++    }
++}
++
++/// То же для личек и обычных групп: там сервер присылает не номера в
++/// переписке, а сквозные номера сообщений.
++func lunagramKeepDeletedMessages(transaction: Transaction, globalIds: [Int32]) -> [Int32] {
++    guard LunagramSpySettings.keepDeleted else {
++        return globalIds
++    }
++    let date = Int32(Date().timeIntervalSince1970)
++    return globalIds.filter { globalId in
++        guard let id = transaction.messageIdsForGlobalIds([globalId]).first else {
++            return true
++        }
++        return !lunagramKeepDeletedMessage(transaction: transaction, id: id, date: date)
++    }
++}
++
++/// Помечает одно сообщение удалённым. false — стираем как обычно.
++private func lunagramKeepDeletedMessage(transaction: Transaction, id: MessageId, date: Int32) -> Bool {
++    // Только обычные сообщения переписки. Отложенные, быстрые ответы и
++    // исчезающие Telegram стирает тем же путём, но это не «удалил
++    // собеседник»: отложенное, например, стирается, когда отправилось.
++    guard id.namespace == Namespaces.Message.Cloud, let message = transaction.getMessage(id) else {
++        return false
++    }
++    // Боты стирают свои сообщения постоянно — меню, подсказки, «печатаю».
++    // Хранить их незачем; на ПК сохранение для ботов тоже выключено.
++    if let user = transaction.getPeer(id.peerId) as? TelegramUser, user.botInfo != nil {
++        return false
++    }
++    if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
++        return true
++    }
++    transaction.updateMessage(id, update: { currentMessage in
++        var storeForwardInfo: StoreMessageForwardInfo?
++        if let forwardInfo = currentMessage.forwardInfo {
++            storeForwardInfo = StoreMessageForwardInfo(authorId: forwardInfo.author?.id, sourceId: forwardInfo.source?.id, sourceMessageId: forwardInfo.sourceMessageId, date: forwardInfo.date, authorSignature: forwardInfo.authorSignature, psaType: forwardInfo.psaType, flags: forwardInfo.flags)
++        }
++        var attributes = currentMessage.attributes
++        attributes.append(LunagramDeletedMessageAttribute(date: date))
++        return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
++    })
++    return true
++}
+diff --git a/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramDeletedMessageAttribute.swift b/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramDeletedMessageAttribute.swift
+new file mode 100644
+index 00000000..89b7c894
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramDeletedMessageAttribute.swift
+@@ -0,0 +1,22 @@
++import Foundation
++import Postbox
++
++/// Lunagram: сообщение удалено у собеседника, но сохранено у нас.
++///
++/// date — когда пришло удаление. По этой пометке возле времени рисуется
++/// метла, как на ПК.
++public final class LunagramDeletedMessageAttribute: MessageAttribute {
++    public let date: Int32
++
++    public init(date: Int32) {
++        self.date = date
++    }
++
++    required public init(decoder: PostboxDecoder) {
++        self.date = decoder.decodeInt32ForKey("d", orElse: 0)
++    }
++
++    public func encode(_ encoder: PostboxEncoder) {
++        encoder.encodeInt32(self.date, forKey: "d")
++    }
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+index 98abd8ec..1fd2d0a9 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+@@ -61,6 +61,9 @@ private func monthAtIndex(_ index: Int, strings: PresentationStrings) -> String
+     }
+ }
+ 
++// Lunagram: удалённое собеседником, но сохранённое у нас, помечаем метлой
++// возле времени — как на ПК. Обёрткой, чтобы саму функцию Telegram не
++// трогать: время, «изменено» и прочее она считает как раньше.
+ public func stringForMessageTimestampStatus(
+     context: AccountContext,
+     message: EngineMessage,
+@@ -70,6 +73,23 @@ public func stringForMessageTimestampStatus(
+     format: MessageTimestampStatusFormat = .regular,
+     associatedData: ChatMessageItemAssociatedData,
+     ignoreAuthor: Bool = false
++) -> String {
++    let text = telegramStringForMessageTimestampStatus(context: context, message: message, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, strings: strings, format: format, associatedData: associatedData, ignoreAuthor: ignoreAuthor)
++    if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
++        return "🧹 " + text
++    }
++    return text
++}
++
++private func telegramStringForMessageTimestampStatus(
++    context: AccountContext,
++    message: EngineMessage,
++    dateTimeFormat: PresentationDateTimeFormat,
++    nameDisplayOrder: PresentationPersonNameOrder,
++    strings: PresentationStrings,
++    format: MessageTimestampStatusFormat = .regular,
++    associatedData: ChatMessageItemAssociatedData,
++    ignoreAuthor: Bool = false
+ ) -> String {
+     if let adAttribute = message.adAttribute {
+         switch adAttribute.messageType {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d9472ce7..45865d3d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -30,6 +30,7 @@ private enum LunagramToggle: Int32 {
+     case dialogCardsFadeMuted
+     case hideOwnPhone
+     case avatarFrame
++    case keepDeleted
+ 
+     var value: Bool {
+         switch self {
+@@ -55,6 +56,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.hideOwnPhone
+         case .avatarFrame:
+             return LunagramSettings.avatarFrameEnabled
++        case .keepDeleted:
++            return LunagramSettings.keepDeletedMessages
+         }
+     }
+ 
+@@ -82,6 +85,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.hideOwnPhone = value
+         case .avatarFrame:
+             LunagramSettings.avatarFrameEnabled = value
++        case .keepDeleted:
++            LunagramSettings.keepDeletedMessages = value
+         }
+     }
+ 
+@@ -109,6 +114,8 @@ private enum LunagramToggle: Int32 {
+             return "Скрыть свой номер"
+         case .avatarFrame:
+             return "Рамка вокруг аватарки"
++        case .keepDeleted:
++            return "Сохранять удалённые"
+         }
+     }
+ }
+@@ -148,6 +155,7 @@ private final class LunagramSettingsControllerArguments {
+ 
+ private enum LunagramSettingsSection: Int32 {
+     case ghost
++    case spy
+     case privacy
+     case banner
+     case bannerPhoto
+@@ -297,6 +305,10 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
+         .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
+ 
++        .header(.spy, 0, "УДАЛЁННЫЕ СООБЩЕНИЯ"),
++        .toggle(.spy, .keepDeleted, value(.keepDeleted)),
++        .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются."),
++
+         .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+         .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+         .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
