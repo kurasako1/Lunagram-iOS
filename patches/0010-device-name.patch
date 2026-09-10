@@ -1,0 +1,163 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1e5b4596..b155eb83 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -29,6 +29,7 @@ public final class LunagramSettings {
+         static let dialogCardsDim = "lunagram.dialogCards.dim"
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
+         static let hideOwnPhone = "lunagram.privacy.hideOwnPhone"
++        static let deviceModelName = "lunagram.privacy.deviceModelName"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -307,6 +308,28 @@ public final class LunagramSettings {
+         return hideOwnPhone ? "+•• ••• ••• ••" : formatted
+     }
+ 
++    /// Имя устройства для списка активных сеансов. Пусто — настоящее.
++    ///
++    /// Telegram сообщает его серверу при подключении, поэтому новое имя
++    /// начинает действовать после перезапуска. Рассылку о смене не делаем:
++    /// поле ввода сохраняет каждую букву, а на лету это имя никому не нужно.
++    public static var deviceModelName: String? {
++        get {
++            guard let value = defaults.string(forKey: Key.deviceModelName), !value.isEmpty else {
++                return nil
++            }
++            return value
++        }
++        set {
++            let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
++            if value.isEmpty {
++                defaults.removeObject(forKey: Key.deviceModelName)
++            } else {
++                defaults.set(String(value.prefix(64)), forKey: Key.deviceModelName)
++            }
++        }
++    }
++
+     // MARK: Файлы
+ 
+     private enum ImportError: Error {
+diff --git a/submodules/TelegramUI/BUILD b/submodules/TelegramUI/BUILD
+index 5da8c15e..02ad415d 100644
+--- a/submodules/TelegramUI/BUILD
++++ b/submodules/TelegramUI/BUILD
+@@ -414,6 +414,7 @@ swift_library(
+         "//submodules/MetalEngine",
+         "//submodules/TelegramUI/Components/DustEffect",
+         "//submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen",
++        "//submodules/Lunagram",
+         "//submodules/TelegramUI/Components/Chat/ChatMessageSelectionInputPanelNode",
+         "//submodules/TelegramUI/Components/Chat/ChatQrCodeScreen",
+         "//submodules/UIKitRuntimeUtils",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 45bcdd2a..fd7809ac 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -129,11 +129,13 @@ private final class LunagramSettingsControllerArguments {
+     let toggle: (LunagramToggle, Bool) -> Void
+     let pick: (LunagramSettingsSection) -> Void
+     let setDim: (LunagramSettingsSection, Int) -> Void
++    let updateText: (LunagramSettingsSection, String) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
++        self.updateText = updateText
+     }
+ }
+ 
+@@ -153,11 +155,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case toggle(LunagramSettingsSection, LunagramToggle, Bool)
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
++    case input(LunagramSettingsSection, String, String, String)
+     case info(LunagramSettingsSection, Int32, String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -173,6 +176,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + 40 + index
+         case let .dim(section, index, _, _):
+             return section.rawValue * 100 + 60 + index
++        case let .input(section, _, _, _):
++            return section.rawValue * 100 + 50
+         case let .info(section, index, _):
+             return section.rawValue * 100 + 90 + index
+         }
+@@ -204,6 +209,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .input(lhsSection, lhsTitle, lhsPlaceholder, lhsText):
++            if case let .input(rhsSection, rhsTitle, rhsPlaceholder, rhsText) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle, lhsPlaceholder == rhsPlaceholder, lhsText == rhsText {
++                return true
++            } else {
++                return false
++            }
+         case let .info(lhsSection, lhsIndex, lhsText):
+             if case let .info(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+@@ -234,6 +245,11 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                 arguments.setDim(section, Int(index))
+             })
++        case let .input(section, title, placeholder, text):
++            return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: title, textColor: presentationData.theme.list.itemPrimaryTextColor), text: text, placeholder: placeholder, type: .regular(capitalization: false, autocorrection: false), spacing: 10.0, clearType: .onFocus, maxLength: 64, sectionId: self.section, textUpdated: { value in
++                arguments.updateText(section, value)
++            }, action: {
++            })
+         case let .info(_, _, text):
+             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+         }
+@@ -272,7 +288,8 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+ 
+         .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+         .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+-        .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ."),
++        .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
++        .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Пусто — настоящее имя. Начнёт действовать после перезапуска Lunagram."),
+ 
+         .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+         .toggle(.banner, .profileBanner, value(.profileBanner)),
+@@ -452,6 +469,10 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+             LunagramSettings.liveWallpaperDim = dim
+         }
+         mediaPromise.set(LunagramMediaState.current())
++    }, updateText: { _, text in
++        // Поле пока одно — имя устройства. Экран не перестраиваем: поле само
++        // держит набранное, а на лету это имя никому не нужно.
++        LunagramSettings.deviceModelName = text
+     })
+ 
+     let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get(), mediaPromise.get())
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index b1ea96b8..0f587b3e 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -46,6 +46,7 @@ import NavigationBarImpl
+ import ContextUI
+ import ContextControllerImpl
+ import ProxyServerPreviewScreen
++import Lunagram
+ 
+ #if canImport(AppCenter)
+ import AppCenter
+@@ -636,7 +637,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             },
+             autolockDeadine: autolockDeadine,
+             encryptionProvider: OpenSSLEncryptionProvider(),
+-            deviceModelName: nil,
++            // Lunagram: своё имя устройства в списке активных сеансов.
++            deviceModelName: LunagramSettings.deviceModelName,
+             useBetaFeatures: !buildConfig.isAppStoreBuild,
+             isICloudEnabled: buildConfig.isICloudEnabled
+         )

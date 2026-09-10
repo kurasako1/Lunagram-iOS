@@ -1,0 +1,562 @@
+diff --git a/submodules/Lunagram/Sources/LunagramBannerPresets.swift b/submodules/Lunagram/Sources/LunagramBannerPresets.swift
+new file mode 100644
+index 00000000..421b0331
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramBannerPresets.swift
+@@ -0,0 +1,345 @@
++import UIKit
++
++/// Нарисованные баннеры — те же десять, что на ПК, под теми же номерами.
++/// Всё рисуется кодом, картинок в сборке нет.
++public enum LunagramBannerPreset: Int, CaseIterable {
++    case night = 1
++    case dawn = 2
++    case aurora = 3
++    case space = 4
++    case waves = 5
++    case honeycomb = 6
++    case circuit = 7
++    case neon = 8
++    case forest = 9
++    case ember = 10
++
++    public var title: String {
++        switch self {
++        case .night:
++            return "Ночь"
++        case .dawn:
++            return "Рассвет"
++        case .aurora:
++            return "Северное сияние"
++        case .space:
++            return "Космос"
++        case .waves:
++            return "Волны"
++        case .honeycomb:
++            return "Соты"
++        case .circuit:
++            return "Плата"
++        case .neon:
++            return "Неон"
++        case .forest:
++            return "Лес"
++        case .ember:
++            return "Угли"
++        }
++    }
++
++    /// Сколько затемнить поверх, чтобы белое имя читалось. Нарисованные
++    /// баннеры и так тёмные — затемнение из настроек для фото им лишнее,
++    /// только у рассвета низ светлый.
++    var dim: CGFloat {
++        return self == .dawn ? 0.25 : 0.0
++    }
++
++    /// Картинка баннера нужного размера. Последняя готовая хранится:
++    /// шапка создаётся при каждом открытии профиля, а рисовать звёзды заново
++    /// незачем.
++    public func image(size: CGSize) -> UIImage? {
++        if size.width < 1.0 || size.height < 1.0 {
++            return nil
++        }
++        if let cached = LunagramBannerPreset.cached, cached.preset == self, cached.size == size {
++            return cached.image
++        }
++        let format = UIGraphicsImageRendererFormat()
++        format.opaque = true
++        let image = UIGraphicsImageRenderer(size: size, format: format).image { rendererContext in
++            LunagramBannerPainter(context: rendererContext.cgContext, size: size).paint(self)
++        }
++        LunagramBannerPreset.cached = (self, size, image)
++        return image
++    }
++
++    private static var cached: (preset: LunagramBannerPreset, size: CGSize, image: UIImage)?
++}
++
++/// Свой генератор псевдослучайных чисел (xorshift32), как на ПК: звёзды
++/// ложатся одинаково при каждом запуске — и одинаково с ПК.
++private struct LunagramRandom {
++    private var state: UInt32
++
++    init(seed: UInt32) {
++        self.state = seed == 0 ? 1 : seed
++    }
++
++    mutating func next() -> UInt32 {
++        self.state ^= self.state << 13
++        self.state ^= self.state >> 17
++        self.state ^= self.state << 5
++        return self.state
++    }
++
++    mutating func real() -> CGFloat {
++        return CGFloat(self.next() & 0xFFFFFF) / CGFloat(0x1000000)
++    }
++
++    mutating func between(_ from: CGFloat, _ till: CGFloat) -> CGFloat {
++        return from + (till - from) * self.real()
++    }
++}
++
++/// Рисовальщик баннеров. Каждый — перенос одноимённой функции с ПК, те же
++/// цвета и пропорции; размеры везде — доли высоты или ширины.
++private struct LunagramBannerPainter {
++    let context: CGContext
++    let size: CGSize
++
++    private var w: CGFloat {
++        return self.size.width
++    }
++
++    private var h: CGFloat {
++        return self.size.height
++    }
++
++    private static let tau = CGFloat.pi * 2.0
++
++    private func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1.0) -> UIColor {
++        return UIColor(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: alpha)
++    }
++
++    func paint(_ preset: LunagramBannerPreset) {
++        switch preset {
++        case .night:
++            self.fillVertical(self.rgb(13, 24, 56), self.rgb(32, 51, 100))
++            self.glow(CGPoint(x: self.w * 0.5, y: self.h * 1.15), self.h * 1.1, self.rgb(96, 132, 214), 0.35)
++            self.stars(seed: 0x4C554E41, count: 70, color: self.rgb(226, 236, 255), maxRadius: 1.5)
++            self.crescent(CGPoint(x: self.w * 0.82, y: self.h * 0.30), self.h * 0.13, self.rgb(232, 240, 255))
++
++        case .dawn:
++            self.fillVertical(self.rgb(70, 52, 110), self.rgb(255, 176, 122))
++            self.glow(CGPoint(x: self.w * 0.5, y: self.h * 0.98), self.h * 0.85, self.rgb(255, 214, 150), 0.75)
++            // Дымка над горизонтом: три полосы разной прозрачности.
++            for i in 0 ..< 3 {
++                let y = self.h * (0.58 + CGFloat(i) * 0.13)
++                self.context.setFillColor(self.rgb(255, 236, 214, 0.10 - CGFloat(i) * 0.025).cgColor)
++                let band = CGRect(x: -self.w * 0.1, y: y, width: self.w * 1.2, height: self.h * 0.055)
++                self.context.addPath(UIBezierPath(roundedRect: band, cornerRadius: self.h * 0.03).cgPath)
++                self.context.fillPath()
++            }
++
++        case .aurora:
++            self.fillVertical(self.rgb(6, 20, 34), self.rgb(12, 42, 58))
++            self.stars(seed: 0x41555230, count: 55, color: self.rgb(210, 232, 245), maxRadius: 1.3)
++            self.ribbon(shiftY: 0.42, amplitude: 0.16, color: self.rgb(88, 232, 168))
++            self.ribbon(shiftY: 0.55, amplitude: 0.13, color: self.rgb(96, 176, 240))
++            self.ribbon(shiftY: 0.34, amplitude: 0.10, color: self.rgb(168, 128, 240))
++
++        case .space:
++            self.fillVertical(self.rgb(6, 7, 18), self.rgb(18, 14, 38))
++            self.glow(CGPoint(x: self.w * 0.24, y: self.h * 0.34), self.h * 0.72, self.rgb(126, 78, 214), 0.42)
++            self.glow(CGPoint(x: self.w * 0.74, y: self.h * 0.62), self.h * 0.62, self.rgb(52, 122, 208), 0.36)
++            self.stars(seed: 0x53504143, count: 110, color: self.rgb(240, 244, 255), maxRadius: 1.6)
++
++        case .waves:
++            self.fillVertical(self.rgb(10, 52, 76), self.rgb(20, 108, 130))
++            self.wave(baseY: self.h * 0.58, amplitude: self.h * 0.055, phase: 0.0, color: self.rgb(24, 126, 148, 130.0 / 255.0))
++            self.wave(baseY: self.h * 0.70, amplitude: self.h * 0.048, phase: 2.1, color: self.rgb(32, 152, 168, 150.0 / 255.0))
++            self.wave(baseY: self.h * 0.82, amplitude: self.h * 0.040, phase: 4.0, color: self.rgb(46, 180, 186, 170.0 / 255.0))
++
++        case .honeycomb:
++            self.fillVertical(self.rgb(28, 26, 62), self.rgb(58, 44, 96))
++            self.hexGrid(side: self.h * 0.085, color: self.rgb(184, 168, 255))
++            self.glow(CGPoint(x: self.w * 0.5, y: self.h * 1.05), self.h * 0.9, self.rgb(126, 96, 224), 0.30)
++
++        case .circuit:
++            self.fillVertical(self.rgb(14, 22, 26), self.rgb(20, 38, 40))
++            var random = LunagramRandom(seed: 0x43495243)
++            // Дорожки: отрезок вбок, поворот под углом, пятачок на конце.
++            for _ in 0 ..< 14 {
++                let y = random.between(self.h * 0.06, self.h * 0.94)
++                let x1 = random.between(-self.w * 0.05, self.w * 0.75)
++                let x2 = x1 + random.between(self.w * 0.12, self.w * 0.42)
++                let turn = random.between(-self.h * 0.16, self.h * 0.16)
++                let corner = CGPoint(x: x2 + abs(turn) * 0.6, y: y + turn)
++                self.context.setStrokeColor(self.rgb(72, 200, 160, random.between(0.10, 0.34)).cgColor)
++                self.context.setLineWidth(1.4)
++                self.context.setLineCap(.round)
++                self.context.move(to: CGPoint(x: x1, y: y))
++                self.context.addLine(to: CGPoint(x: x2, y: y))
++                self.context.addLine(to: corner)
++                self.context.strokePath()
++                self.context.setFillColor(self.rgb(72, 200, 160, random.between(0.25, 0.6)).cgColor)
++                self.context.fillEllipse(in: CGRect(x: corner.x - 2.2, y: corner.y - 2.2, width: 4.4, height: 4.4))
++            }
++
++        case .neon:
++            let colors = [self.rgb(38, 12, 62).cgColor, self.rgb(126, 26, 128).cgColor, self.rgb(24, 106, 160).cgColor] as CFArray
++            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 0.5, 1.0]) {
++                self.context.drawLinearGradient(gradient, start: CGPoint(), end: CGPoint(x: self.w, y: self.h), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
++            }
++            self.glow(CGPoint(x: self.w * 0.18, y: self.h * 0.22), self.h * 0.6, self.rgb(255, 86, 196), 0.45)
++            self.glow(CGPoint(x: self.w * 0.86, y: self.h * 0.78), self.h * 0.66, self.rgb(74, 226, 236), 0.42)
++
++        case .forest:
++            self.fillVertical(self.rgb(10, 34, 30), self.rgb(24, 72, 56))
++            // Три ряда ёлок: дальние мельче и бледнее — так читается глубина.
++            for layer in 0 ..< 3 {
++                let depth = CGFloat(layer)
++                let baseY = self.h * (0.62 + depth * 0.15)
++                let treeH = self.h * (0.20 + depth * 0.09)
++                let stepX = self.w / (9.0 - depth * 2.0)
++                self.context.setFillColor(self.rgb(8 + depth * 4, 34 - depth * 8, 30 - depth * 6, 0.55 + depth * 0.2).cgColor)
++                self.context.move(to: CGPoint(x: -stepX, y: self.h))
++                var x = -stepX
++                while x < self.w + stepX {
++                    self.context.addLine(to: CGPoint(x: x, y: baseY))
++                    self.context.addLine(to: CGPoint(x: x + stepX / 2.0, y: baseY - treeH))
++                    self.context.addLine(to: CGPoint(x: x + stepX, y: baseY))
++                    x += stepX
++                }
++                self.context.addLine(to: CGPoint(x: self.w + stepX, y: self.h))
++                self.context.closePath()
++                self.context.fillPath()
++            }
++
++        case .ember:
++            self.fillVertical(self.rgb(28, 10, 10), self.rgb(78, 24, 18))
++            self.glow(CGPoint(x: self.w * 0.5, y: self.h * 1.08), self.h * 1.0, self.rgb(238, 108, 42), 0.55)
++            // Искры: чем выше, тем бледнее — будто остывают на лету.
++            var random = LunagramRandom(seed: 0x454D4252)
++            for _ in 0 ..< 60 {
++                let x = random.between(0.0, self.w)
++                let y = random.between(0.0, self.h)
++                let heat = max(0.0, min(1.0, y / self.h))
++                let alpha = random.between(0.15, 0.85) * (0.35 + 0.65 * heat)
++                self.context.setFillColor(self.rgb(255, 168 - 70 * (1.0 - heat), 90, alpha).cgColor)
++                let radius = random.between(0.8, 2.0)
++                self.context.fillEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2.0, height: radius * 2.0))
++            }
++        }
++    }
++
++    /// Вертикальная заливка сверху вниз — основа почти каждого баннера.
++    private func fillVertical(_ top: UIColor, _ bottom: UIColor) {
++        let colors = [top.cgColor, bottom.cgColor] as CFArray
++        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0]) else {
++            return
++        }
++        self.context.drawLinearGradient(gradient, start: CGPoint(), end: CGPoint(x: 0.0, y: self.h), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
++    }
++
++    /// Мягкое пятно света: радиальный градиент с прозрачным краем выглядит
++    /// как размытие, а стоит копейки.
++    private func glow(_ center: CGPoint, _ radius: CGFloat, _ color: UIColor, _ opacity: CGFloat) {
++        let colors = [color.withAlphaComponent(opacity).cgColor, color.withAlphaComponent(0.0).cgColor] as CFArray
++        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0.0, 1.0]) else {
++            return
++        }
++        self.context.drawRadialGradient(gradient, startCenter: center, startRadius: 0.0, endCenter: center, endRadius: radius, options: [])
++    }
++
++    /// Россыпь точек-звёзд. Ярче — крупнее: так глаз читает глубину.
++    private func stars(seed: UInt32, count: Int, color: UIColor, maxRadius: CGFloat) {
++        var random = LunagramRandom(seed: seed)
++        for _ in 0 ..< count {
++            let x = random.between(0.0, self.w)
++            let y = random.between(0.0, self.h)
++            let alpha = random.between(0.2, 1.0)
++            let radius = maxRadius * (0.35 + 0.65 * alpha)
++            self.context.setFillColor(color.withAlphaComponent(alpha).cgColor)
++            self.context.fillEllipse(in: CGRect(x: x - radius, y: y - radius, width: radius * 2.0, height: radius * 2.0))
++        }
++    }
++
++    /// Полумесяц — знак Lunagram. Круг минус сдвинутый круг, плюс свечение.
++    private func crescent(_ center: CGPoint, _ radius: CGFloat, _ color: UIColor) {
++        self.glow(center, radius * 2.6, color, 0.16)
++        let disc = UIBezierPath(ovalIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2.0, height: radius * 2.0))
++        let biteCenter = CGPoint(x: center.x + radius * 0.46, y: center.y - radius * 0.26)
++        let biteRadius = radius * 0.92
++        let bite = UIBezierPath(ovalIn: CGRect(x: biteCenter.x - biteRadius, y: biteCenter.y - biteRadius, width: biteRadius * 2.0, height: biteRadius * 2.0))
++        // Вычитаем по правилу чёт-нечет: где круги перекрываются, выходит
++        // «дырка», а там, где надкус вылезает за луну, закрашивать нечего —
++        // обрезаем по самой луне.
++        self.context.saveGState()
++        self.context.addPath(disc.cgPath)
++        self.context.clip()
++        self.context.addPath(disc.cgPath)
++        self.context.addPath(bite.cgPath)
++        self.context.setFillColor(color.cgColor)
++        self.context.fillPath(using: .evenOdd)
++        self.context.restoreGState()
++    }
++
++    /// Лента северного сияния: одна дуга, обведённая несколько раз всё шире
++    /// и всё прозрачнее — мягкий светящийся край.
++    private func ribbon(shiftY: CGFloat, amplitude: CGFloat, color: UIColor) {
++        let baseY = self.h * shiftY
++        let path = UIBezierPath()
++        path.move(to: CGPoint(x: -self.w * 0.1, y: baseY))
++        path.addCurve(to: CGPoint(x: self.w * 0.7, y: baseY - self.h * amplitude * 0.6), controlPoint1: CGPoint(x: self.w * 0.2, y: baseY - self.h * amplitude), controlPoint2: CGPoint(x: self.w * 0.45, y: baseY + self.h * amplitude))
++        path.addCurve(to: CGPoint(x: self.w * 1.1, y: baseY - self.h * amplitude * 0.3), controlPoint1: CGPoint(x: self.w * 0.85, y: baseY - self.h * amplitude * 1.1), controlPoint2: CGPoint(x: self.w * 0.95, y: baseY + self.h * amplitude * 0.2))
++        self.context.setLineCap(.round)
++        for step in 0 ..< 5 {
++            let s = CGFloat(step)
++            self.context.setStrokeColor(color.withAlphaComponent(0.30 / (1.0 + s * 1.15)).cgColor)
++            self.context.setLineWidth(self.h * (0.05 + s * 0.055))
++            self.context.addPath(path.cgPath)
++            self.context.strokePath()
++        }
++    }
++
++    /// Одна волна: синусоида, залитая до низа картинки.
++    private func wave(baseY: CGFloat, amplitude: CGFloat, phase: CGFloat, color: UIColor) {
++        self.context.move(to: CGPoint(x: 0.0, y: self.h))
++        self.context.addLine(to: CGPoint(x: 0.0, y: baseY))
++        let steps = 48
++        for i in 0 ... steps {
++            let t = CGFloat(i) / CGFloat(steps)
++            self.context.addLine(to: CGPoint(x: self.w * t, y: baseY + sin(t * LunagramBannerPainter.tau * 1.4 + phase) * amplitude))
++        }
++        self.context.addLine(to: CGPoint(x: self.w, y: self.h))
++        self.context.closePath()
++        self.context.setFillColor(color.cgColor)
++        self.context.fillPath()
++    }
++
++    /// Сетка шестиугольников. Соседние ряды сдвинуты на половину шага — соты
++    /// складываются в сплошной узор без щелей.
++    private func hexGrid(side: CGFloat, color: UIColor) {
++        let stepX = side * 1.7320508
++        let stepY = side * 1.5
++        self.context.setLineWidth(1.2)
++        var row = 0
++        var y = -stepY
++        while y < self.h + stepY {
++            let offsetX = row % 2 == 1 ? stepX / 2.0 : 0.0
++            // Книзу узор растворяется: там сидят имя и статус.
++            let alpha = max(0.05, min(0.42, 0.42 * (1.0 - y / self.h)))
++            self.context.setStrokeColor(color.withAlphaComponent(alpha).cgColor)
++            var x = -stepX
++            while x < self.w + stepX {
++                for i in 0 ..< 6 {
++                    let angle = LunagramBannerPainter.tau * (CGFloat(i) / 6.0 + 0.25)
++                    let point = CGPoint(x: x + offsetX + side * cos(angle), y: y + side * sin(angle))
++                    if i == 0 {
++                        self.context.move(to: point)
++                    } else {
++                        self.context.addLine(to: point)
++                    }
++                }
++                self.context.closePath()
++                x += stepX
++            }
++            self.context.strokePath()
++            y += stepY
++            row += 1
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBanner.swift b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+index dfca0629..790e3651 100644
+--- a/submodules/Lunagram/Sources/LunagramProfileBanner.swift
++++ b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+@@ -14,7 +14,7 @@ public final class LunagramProfileBannerView: UIView {
+     /// Показывать ли баннер. Спрашивают на каждом кадре прокрутки шапки,
+     /// поэтому без похода на диск — только настройки.
+     public static var isActive: Bool {
+-        return LunagramSettings.profileBannerEnabled && LunagramSettings.hasProfileBanner
++        return LunagramSettings.profileBannerEnabled && (LunagramSettings.profileBannerPreset != 0 || LunagramSettings.hasProfileBanner)
+     }
+ 
+     /// Ставит, обновляет или убирает баннер внутри подложки шапки.
+@@ -54,6 +54,8 @@ public final class LunagramProfileBannerView: UIView {
+     private let dimView = UIView()
+     private var restHeight: CGFloat
+     private var shownURL: URL?
++    private var shownPreset: LunagramBannerPreset?
++    private var presetWidth: CGFloat = 0.0
+     private var isAttached = false
+     private var settingsObserver: NSObjectProtocol?
+ 
+@@ -118,11 +120,50 @@ public final class LunagramProfileBannerView: UIView {
+             self.playerView?.frame = bounds
+             self.dimView.frame = bounds
+         }
++        self.renderPresetIfNeeded()
++    }
++
++    /// Нарисованный баннер рисуем под высоту шапки в покое, а не под
++    /// текущую: когда шапку тянут вниз, картинка растягивается, как фото, и
++    /// перерисовывать звёзды на каждом кадре не приходится.
++    private func renderPresetIfNeeded() {
++        guard let preset = self.shownPreset else {
++            return
++        }
++        let width = self.bounds.width
++        if width < 1.0 || width == self.presetWidth {
++            return
++        }
++        self.presetWidth = width
++        self.imageView.image = preset.image(size: CGSize(width: width, height: max(self.restHeight, 1.0)))
+     }
+ 
+     private func reload() {
+-        let dim = max(0, min(LunagramProfileBannerView.dimAlphas.count - 1, LunagramSettings.profileBannerDim))
+-        self.dimView.alpha = LunagramProfileBannerView.dimAlphas[dim]
++        let preset = LunagramBannerPreset(rawValue: LunagramSettings.profileBannerPreset)
++        if let preset = preset {
++            self.dimView.alpha = preset.dim
++        } else {
++            let dim = max(0, min(LunagramProfileBannerView.dimAlphas.count - 1, LunagramSettings.profileBannerDim))
++            self.dimView.alpha = LunagramProfileBannerView.dimAlphas[dim]
++        }
++
++        if let preset = preset {
++            if preset != self.shownPreset {
++                self.shownPreset = preset
++                self.shownURL = nil
++                self.presetWidth = 0.0
++                self.playerView?.removeFromSuperview()
++                self.playerView = nil
++                self.imageView.image = nil
++                self.renderPresetIfNeeded()
++            }
++            self.updatePlayback()
++            return
++        }
++        if self.shownPreset != nil {
++            self.shownPreset = nil
++            self.imageView.image = nil
++        }
+ 
+         let url = LunagramSettings.profileBannerURL
+         if url != self.shownURL {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 8ceb5954..b7ef3d77 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -25,6 +25,7 @@ public final class LunagramSettings {
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerFile = "lunagram.banner.file"
++        static let profileBannerPreset = "lunagram.banner.preset"
+         static let avatarFrameEnabled = "lunagram.avatarFrame.enabled"
+         static let avatarFrameStyle = "lunagram.avatarFrame.style"
+         static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
+@@ -237,6 +238,23 @@ public final class LunagramSettings {
+         return (name as NSString).pathExtension.lowercased() != "jpg"
+     }
+ 
++    /// Нарисованный баннер — номер из LunagramBannerPreset, те же, что на ПК.
++    /// Ноль — показывать своё фото или видео.
++    ///
++    /// Что выбрано последним, то и показываем: взял нарисованный — он
++    /// перебивает своё фото, выбрал фото — оно перебивает нарисованный. Файл
++    /// при этом не удаляется: можно вернуться к нему одним касанием.
++    public static var profileBannerPreset: Int {
++        get {
++            let value = defaults.integer(forKey: Key.profileBannerPreset)
++            return (1 ... 10).contains(value) ? value : 0
++        }
++        set {
++            defaults.set(max(0, min(10, newValue)), forKey: Key.profileBannerPreset)
++            changed()
++        }
++    }
++
+     /// Забирает фото или ролик к себе, как и живые обои.
+     public static func importProfileBanner(from source: URL, isVideo: Bool) throws {
+         let folder = try lunagramFolder()
+@@ -248,6 +266,8 @@ public final class LunagramSettings {
+             name = "banner-\(UUID().uuidString).jpg"
+             try writeScaledImage(from: source, to: folder.appendingPathComponent(name))
+         }
++        // Выбрал своё — оно и показывается, нарисованный уступает.
++        defaults.set(0, forKey: Key.profileBannerPreset)
+         store(name, forKey: Key.profileBannerFile, in: folder)
+     }
+ 
+diff --git a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+index e071ec41..c46ef905 100644
+--- a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
++++ b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+@@ -22,7 +22,7 @@ public final class LunagramVideoWallpaper {
+     /// разные, и с одним на двоих каждый переход из переписки в профиль
+     /// открывал бы файл заново.
+     public static let banner = LunagramVideoWallpaper(source: {
+-        guard LunagramSettings.profileBannerEnabled, LunagramSettings.profileBannerIsVideo else {
++        guard LunagramSettings.profileBannerEnabled, LunagramSettings.profileBannerPreset == 0, LunagramSettings.profileBannerIsVideo else {
+             return nil
+         }
+         return LunagramSettings.profileBannerURL
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 8c426d85..d9472ce7 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -150,6 +150,7 @@ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case privacy
+     case banner
++    case bannerPhoto
+     case avatarFrame
+     case liveWallpaper
+     case dialogCards
+@@ -276,9 +277,10 @@ private struct LunagramMediaState: Equatable {
+     var particlesDensity: Int
+     var particlesSpeed: Int
+     var avatarFrameStyle: Int
++    var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -301,15 +303,25 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Пусто — настоящее имя. Начнёт действовать после перезапуска Lunagram."),
+ 
+         .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+-        .toggle(.banner, .profileBanner, value(.profileBanner)),
+-        .action(.banner, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
++        .toggle(.banner, .profileBanner, value(.profileBanner))
+     ]
++    // Нарисованные — с нуля до девяти, своё фото — десятое.
++    for preset in LunagramBannerPreset.allCases {
++        entries.append(.dim(.banner, Int32(preset.rawValue - 1), preset.title, preset.rawValue == media.bannerPreset))
++    }
++    entries.append(.dim(.banner, 10, "Своё фото или видео", media.bannerPreset == 0))
++    entries.append(.info(.banner, 0, "Картинка в шапке твоего профиля — видишь её только ты. Нарисованные — те же десять, что на ПК."))
++
++    entries.append(contentsOf: [
++        .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
++        .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
++    ])
+     for (index, title) in lunagramBannerDimTitles.enumerated() {
+-        entries.append(.dim(.banner, Int32(index), title, index == media.bannerDim))
++        entries.append(.dim(.bannerPhoto, Int32(index), title, index == media.bannerDim))
+     }
+-    entries.append(.info(.banner, 0, media.hasBanner
+-        ? "Картинка в шапке твоего профиля — видишь её только ты. Затемнение нужно, чтобы на светлом фото читались имя и статус."
+-        : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля. Видишь его только ты."))
++    entries.append(.info(.bannerPhoto, 0, media.hasBanner
++        ? "Затемнение нужно, чтобы на светлом фото читались имя и статус. Нарисованным баннерам оно не нужно — они и так тёмные."
++        : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля."))
+ 
+     entries.append(contentsOf: [
+         .header(.avatarFrame, 0, "РАМКА ВОКРУГ АВАТАРКИ"),
+@@ -440,7 +452,7 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+         guard #available(iOS 14.0, *) else {
+             return
+         }
+-        let isBanner = section == .banner
++        let isBanner = section == .bannerPhoto
+         var configuration = PHPickerConfiguration()
+         configuration.filter = isBanner ? PHPickerFilter.any(of: [.images, .videos]) : PHPickerFilter.videos
+         configuration.selectionLimit = 1
+@@ -470,6 +482,12 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     }, setDim: { section, dim in
+         switch section {
+         case .banner:
++            // Нарисованный или своё. Выбрал — значит хочет видеть: включаем.
++            LunagramSettings.profileBannerPreset = dim < 10 ? dim + 1 : 0
++            LunagramToggle.profileBanner.set(true)
++            values[.profileBanner] = true
++            valuesPromise.set(values)
++        case .bannerPhoto:
+             LunagramSettings.profileBannerDim = dim
+         case .dialogCards:
+             LunagramSettings.dialogCardsDim = dim

@@ -1,0 +1,137 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 5f509e79..1e5b4596 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -28,6 +28,7 @@ public final class LunagramSettings {
+         static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
+         static let dialogCardsDim = "lunagram.dialogCards.dim"
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
++        static let hideOwnPhone = "lunagram.privacy.hideOwnPhone"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -286,6 +287,26 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: Приватность
++
++    /// Прятать свой номер в шапке настроек и в своём профиле — для
++    /// скриншотов. Сам номер никуда не девается, меняется только показ.
++    public static var hideOwnPhone: Bool {
++        get {
++            return defaults.bool(forKey: Key.hideOwnPhone)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.hideOwnPhone)
++            changed()
++        }
++    }
++
++    /// Свой номер для показа: как есть или точками, если просили прятать.
++    /// Точки те же, что на ПК.
++    public static func displayedOwnPhone(_ formatted: String) -> String {
++        return hideOwnPhone ? "+•• ••• ••• ••" : formatted
++    }
++
+     // MARK: Файлы
+ 
+     private enum ImportError: Error {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 87b777f8..45bcdd2a 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -28,6 +28,7 @@ private enum LunagramToggle: Int32 {
+     case profileBanner
+     case dialogCards
+     case dialogCardsFadeMuted
++    case hideOwnPhone
+ 
+     var value: Bool {
+         switch self {
+@@ -49,6 +50,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.dialogCardsEnabled
+         case .dialogCardsFadeMuted:
+             return LunagramSettings.dialogCardsFadeMuted
++        case .hideOwnPhone:
++            return LunagramSettings.hideOwnPhone
+         }
+     }
+ 
+@@ -72,6 +75,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.dialogCardsEnabled = value
+         case .dialogCardsFadeMuted:
+             LunagramSettings.dialogCardsFadeMuted = value
++        case .hideOwnPhone:
++            LunagramSettings.hideOwnPhone = value
+         }
+     }
+ 
+@@ -95,6 +100,8 @@ private enum LunagramToggle: Int32 {
+             return "Плитки вместо строк"
+         case .dialogCardsFadeMuted:
+             return "Приглушённые бледнее"
++        case .hideOwnPhone:
++            return "Скрыть свой номер"
+         }
+     }
+ }
+@@ -132,6 +139,7 @@ private final class LunagramSettingsControllerArguments {
+ 
+ private enum LunagramSettingsSection: Int32 {
+     case ghost
++    case privacy
+     case banner
+     case liveWallpaper
+     case dialogCards
+@@ -262,6 +270,10 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
+         .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
+ 
++        .header(.privacy, 0, "ПРИВАТНОСТЬ"),
++        .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
++        .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ."),
++
+         .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+         .toggle(.banner, .profileBanner, value(.profileBanner)),
+         .action(.banner, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index a6054e8e..7556afad 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1262,7 +1262,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
+             
+             if self.isSettings, case let .user(user) = peer {
+-                var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
++                // Lunagram: свой номер можно спрятать — для скриншотов.
++                var subtitle = LunagramSettings.displayedOwnPhone(formatPhoneNumber(context: self.context, number: user.phone ?? ""))
+                 
+                 if let mainUsername = user.addressName, !mainUsername.isEmpty {
+                     subtitle = "\(subtitle) • @\(mainUsername)"
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index 80b7f204..c2df6fda 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -16,6 +16,7 @@ import WebUI
+ import AvatarNode
+ import PeerNameColorItem
+ import BoostLevelIconComponent
++import Lunagram
+ 
+ private let enabledPublicBioEntities: EnabledEntityTypes = [.allUrl, .mention, .hashtag]
+ private let enabledPrivateBioEntities: EnabledEntityTypes = [.internalUrl, .mention, .hashtag]
+@@ -156,7 +157,12 @@ func infoItems(
+         }
+         
+         if let phone = user.phone {
+-            let formattedPhone = formatPhoneNumber(context: context, number: phone)
++            var formattedPhone = formatPhoneNumber(context: context, number: phone)
++            // Lunagram: свой номер можно спрятать — для скриншотов. Чужие
++            // не трогаем: прятать их незачем.
++            if user.id == context.account.peerId {
++                formattedPhone = LunagramSettings.displayedOwnPhone(formattedPhone)
++            }
+             let label: String
+             if formattedPhone.hasPrefix("+888 ") {
+                 label = presentationData.strings.UserInfo_AnonymousNumberLabel

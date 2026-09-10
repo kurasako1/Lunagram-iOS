@@ -1,0 +1,405 @@
+diff --git a/submodules/Lunagram/Sources/LunagramAvatarFrame.swift b/submodules/Lunagram/Sources/LunagramAvatarFrame.swift
+new file mode 100644
+index 00000000..d5f0de4d
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramAvatarFrame.swift
+@@ -0,0 +1,251 @@
++import UIKit
++
++/// Рамки вокруг аватарки — те же девять, что на ПК, под теми же номерами.
++public enum LunagramAvatarFrameStyle: Int, CaseIterable {
++    case ring = 1
++    case gradient = 2
++    case glow = 3
++    case dashed = 4
++    case stars = 5
++    case beads = 6
++    case double = 7
++    case neon = 8
++    case petals = 9
++
++    public var title: String {
++        switch self {
++        case .ring:
++            return "Кольцо"
++        case .gradient:
++            return "Перелив"
++        case .glow:
++            return "Свечение"
++        case .dashed:
++            return "Пунктир"
++        case .stars:
++            return "Звёзды"
++        case .beads:
++            return "Бусины"
++        case .double:
++            return "Двойная"
++        case .neon:
++            return "Неон"
++        case .petals:
++            return "Венок"
++        }
++    }
++}
++
++/// Рамка вокруг своей аватарки в шапке профиля.
++///
++/// Слой кладётся внутрь того, что Telegram сжимает и двигает при прокрутке,
++/// поэтому рамка сжимается вместе с аватаркой сама. Нарисована один раз
++/// картинкой под размер аватарки — все размеры, как на ПК, считаются от её
++/// стороны.
++public final class LunagramAvatarFrameLayer: CALayer {
++    /// Показывать ли рамку. Спрашивают на каждом кадре прокрутки шапки,
++    /// поэтому только настройки.
++    public static var isActive: Bool {
++        return LunagramSettings.avatarFrameEnabled
++    }
++
++    /// Ставит, обновляет или убирает рамку.
++    ///
++    /// container — слой, внутри которого аватарка лежит по центру начала
++    /// координат, как у Telegram в шапке профиля. skip — насколько отойти
++    /// наружу: у кого есть истории, вокруг аватарки уже кольцо, и рамка
++    /// должна лечь за ним, а не поверх.
++    public static func update(in container: CALayer, avatarSize: CGFloat, skip: CGFloat, active: Bool) {
++        let current = container.sublayers?.compactMap({ $0 as? LunagramAvatarFrameLayer }).first
++        guard active, avatarSize > 0.0, let style = LunagramAvatarFrameStyle(rawValue: LunagramSettings.avatarFrameStyle) else {
++            current?.removeFromSuperlayer()
++            return
++        }
++        let layer: LunagramAvatarFrameLayer
++        if let current = current {
++            layer = current
++        } else {
++            layer = LunagramAvatarFrameLayer()
++            container.addSublayer(layer)
++        }
++        layer.apply(style: style, avatarSize: avatarSize, skip: skip)
++    }
++
++    private var renderedKey: String?
++
++    public override init() {
++        super.init()
++    }
++
++    // Нужен самой системе для копий слоя при анимациях.
++    public override init(layer: Any) {
++        super.init(layer: layer)
++    }
++
++    required public init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    private func apply(style: LunagramAvatarFrameStyle, avatarSize: CGFloat, skip: CGFloat) {
++        // Свечение и двойная рамка выходят далеко за аватарку — берём с
++        // запасом, чтобы ничего не обрезалось.
++        let margin = ceil(avatarSize * 0.36 + skip)
++        let side = avatarSize + margin * 2.0
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        self.frame = CGRect(x: -side / 2.0, y: -side / 2.0, width: side, height: side)
++        CATransaction.commit()
++
++        let key = "\(style.rawValue)-\(avatarSize)-\(skip)"
++        if key == self.renderedKey {
++            return
++        }
++        self.renderedKey = key
++        let format = UIGraphicsImageRendererFormat()
++        format.scale = 3.0
++        format.opaque = false
++        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
++        let image = renderer.image { rendererContext in
++            LunagramAvatarFrameLayer.draw(style: style, in: rendererContext.cgContext, center: CGPoint(x: side / 2.0, y: side / 2.0), avatarSize: avatarSize, skip: skip)
++        }
++        self.contentsScale = 3.0
++        self.contents = image.cgImage
++    }
++
++    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 255.0) -> UIColor {
++        return UIColor(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: alpha / 255.0)
++    }
++
++    /// Точка на окружности. Отсчёт от макушки, по часовой стрелке.
++    private static func point(center: CGPoint, radius: CGFloat, fraction: CGFloat) -> CGPoint {
++        let angle = fraction * CGFloat.pi * 2.0 - CGFloat.pi / 2.0
++        return CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
++    }
++
++    private static func strokeCircle(_ context: CGContext, center: CGPoint, radius: CGFloat, color: UIColor, width: CGFloat) {
++        context.setStrokeColor(color.cgColor)
++        context.setLineWidth(width)
++        context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2.0, height: radius * 2.0))
++    }
++
++    /// Обвести окружность несколько раз, всё шире и всё прозрачнее: мягкое
++    /// свечение без настоящего размытия. Тот же приём, что на ПК.
++    private static func strokeGlow(_ context: CGContext, center: CGPoint, radius: CGFloat, color: UIColor, width: CGFloat, layers: Int) {
++        for i in stride(from: layers - 1, through: 0, by: -1) {
++            let alpha = 0.5 / (1.0 + CGFloat(i) * 1.6)
++            strokeCircle(context, center: center, radius: radius, color: color.withAlphaComponent(alpha), width: width * (1.0 + CGFloat(i) * 1.5))
++        }
++    }
++
++    /// Четырёхлучевая искра с вогнутыми сторонами — звездой читается даже
++    /// размером в шесть точек.
++    private static func sparkle(center: CGPoint, radius: CGFloat) -> UIBezierPath {
++        let waist = radius * 0.2
++        let path = UIBezierPath()
++        path.move(to: CGPoint(x: center.x, y: center.y - radius))
++        path.addQuadCurve(to: CGPoint(x: center.x + radius, y: center.y), controlPoint: CGPoint(x: center.x + waist, y: center.y - waist))
++        path.addQuadCurve(to: CGPoint(x: center.x, y: center.y + radius), controlPoint: CGPoint(x: center.x + waist, y: center.y + waist))
++        path.addQuadCurve(to: CGPoint(x: center.x - radius, y: center.y), controlPoint: CGPoint(x: center.x - waist, y: center.y + waist))
++        path.addQuadCurve(to: CGPoint(x: center.x, y: center.y - radius), controlPoint: CGPoint(x: center.x - waist, y: center.y - waist))
++        path.close()
++        return path
++    }
++
++    private static func draw(style: LunagramAvatarFrameStyle, in context: CGContext, center: CGPoint, avatarSize: CGFloat, skip: CGFloat) {
++        // Всё от стороны аватарки, как на ПК: толщина — семь сотых, отступ от
++        // края — шесть сотых плюс половина толщины.
++        let side = avatarSize
++        let width = side * 0.07
++        let radius = side / 2.0 + side * 0.06 + skip + width / 2.0
++        context.setLineCap(.round)
++
++        switch style {
++        case .ring:
++            strokeCircle(context, center: center, radius: radius, color: rgb(240, 196, 96), width: width)
++
++        case .gradient:
++            // Перелив по кругу, замкнутый сам на себя: у линейного градиента
++            // на кольце был бы виден стык. Рисуем мелкими дугами — так
++            // выходит на любой iOS, а не только на новых.
++            let stops: [(CGFloat, UIColor)] = [(0.0, rgb(255, 96, 168)), (0.33, rgb(150, 108, 255)), (0.66, rgb(72, 200, 236)), (1.0, rgb(255, 96, 168))]
++            let segments = 120
++            context.setLineCap(.butt)
++            context.setLineWidth(width * 1.2)
++            for i in 0 ..< segments {
++                let from = CGFloat(i) / CGFloat(segments)
++                let till = CGFloat(i + 1) / CGFloat(segments)
++                context.setStrokeColor(mix(stops, at: (from + till) / 2.0).cgColor)
++                context.addArc(center: center, radius: radius, startAngle: from * CGFloat.pi * 2.0 - CGFloat.pi / 2.0, endAngle: till * CGFloat.pi * 2.0 - CGFloat.pi / 2.0 + 0.01, clockwise: false)
++                context.strokePath()
++            }
++
++        case .glow:
++            strokeGlow(context, center: center, radius: radius, color: rgb(120, 190, 255), width: width, layers: 4)
++            strokeCircle(context, center: center, radius: radius, color: rgb(214, 234, 255), width: width * 0.6)
++
++        case .dashed:
++            // Штрихи от толщины: при другом размере аватарки пунктир не
++            // слипается в сплошную линию.
++            context.setLineDash(phase: 0.0, lengths: [width * 1.6, width * 1.8])
++            strokeCircle(context, center: center, radius: radius, color: rgb(126, 220, 170), width: width)
++            context.setLineDash(phase: 0.0, lengths: [])
++
++        case .stars:
++            strokeCircle(context, center: center, radius: radius, color: rgb(232, 240, 255, 150), width: width * 0.5)
++            context.setFillColor(rgb(255, 236, 168).cgColor)
++            for i in 0 ..< 5 {
++                // Сдвиг на шесть сотых — чтобы звезда не садилась ровно на
++                // макушку: россыпь живее правильного пятиугольника.
++                let at = point(center: center, radius: radius, fraction: CGFloat(i) / 5.0 + 0.06)
++                context.addPath(sparkle(center: at, radius: side * 0.075).cgPath)
++                context.fillPath()
++            }
++
++        case .beads:
++            context.setFillColor(rgb(255, 168, 214).cgColor)
++            for i in 0 ..< 18 {
++                let at = point(center: center, radius: radius, fraction: CGFloat(i) / 18.0)
++                let bead = width * 0.7
++                context.fillEllipse(in: CGRect(x: at.x - bead, y: at.y - bead, width: bead * 2.0, height: bead * 2.0))
++            }
++
++        case .double:
++            let gap = width * 1.6
++            strokeCircle(context, center: center, radius: radius, color: rgb(196, 208, 232), width: width * 0.42)
++            strokeCircle(context, center: center, radius: radius + gap, color: rgb(196, 208, 232), width: width * 0.42)
++
++        case .neon:
++            strokeGlow(context, center: center, radius: radius, color: rgb(255, 64, 180), width: width * 0.9, layers: 3)
++            strokeGlow(context, center: center, radius: max(radius - width * 0.9, 0.0), color: rgb(64, 232, 255), width: width * 0.7, layers: 3)
++
++        case .petals:
++            // Лепесток разворачиваем носом от центра — иначе венок рассыпается
++            // на десяток одинаково лежащих овалов.
++            context.setFillColor(rgb(168, 220, 146).cgColor)
++            for i in 0 ..< 10 {
++                let fraction = CGFloat(i) / 10.0
++                let at = point(center: center, radius: radius, fraction: fraction)
++                context.saveGState()
++                context.translateBy(x: at.x, y: at.y)
++                context.rotate(by: fraction * CGFloat.pi * 2.0 - CGFloat.pi / 2.0)
++                context.fillEllipse(in: CGRect(x: -width * 1.5, y: -width * 0.7, width: width * 3.0, height: width * 1.4))
++                context.restoreGState()
++            }
++        }
++    }
++
++    /// Цвет перелива в точке кольца.
++    private static func mix(_ stops: [(CGFloat, UIColor)], at position: CGFloat) -> UIColor {
++        for index in 1 ..< stops.count where position <= stops[index].0 {
++            let (fromPosition, fromColor) = stops[index - 1]
++            let (tillPosition, tillColor) = stops[index]
++            let t = (position - fromPosition) / max(tillPosition - fromPosition, 0.0001)
++            var r0: CGFloat = 0.0, g0: CGFloat = 0.0, b0: CGFloat = 0.0, a0: CGFloat = 0.0
++            var r1: CGFloat = 0.0, g1: CGFloat = 0.0, b1: CGFloat = 0.0, a1: CGFloat = 0.0
++            fromColor.getRed(&r0, green: &g0, blue: &b0, alpha: &a0)
++            tillColor.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
++            return UIColor(red: r0 + (r1 - r0) * t, green: g0 + (g1 - g0) * t, blue: b0 + (b1 - b0) * t, alpha: a0 + (a1 - a0) * t)
++        }
++        return stops.last?.1 ?? .white
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b155eb83..8ceb5954 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -25,6 +25,8 @@ public final class LunagramSettings {
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerFile = "lunagram.banner.file"
++        static let avatarFrameEnabled = "lunagram.avatarFrame.enabled"
++        static let avatarFrameStyle = "lunagram.avatarFrame.style"
+         static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
+         static let dialogCardsDim = "lunagram.dialogCards.dim"
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
+@@ -249,6 +251,32 @@ public final class LunagramSettings {
+         store(name, forKey: Key.profileBannerFile, in: folder)
+     }
+ 
++    // MARK: Рамка вокруг аватарки
++
++    /// Рамка вокруг своей аватарки в шапке профиля.
++    public static var avatarFrameEnabled: Bool {
++        get {
++            return defaults.bool(forKey: Key.avatarFrameEnabled)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.avatarFrameEnabled)
++            changed()
++        }
++    }
++
++    /// Вид рамки — номер из LunagramAvatarFrameStyle, те же, что на ПК. По
++    /// умолчанию кольцо.
++    public static var avatarFrameStyle: Int {
++        get {
++            let value = defaults.integer(forKey: Key.avatarFrameStyle)
++            return (1 ... 9).contains(value) ? value : 1
++        }
++        set {
++            defaults.set(max(1, min(9, newValue)), forKey: Key.avatarFrameStyle)
++            changed()
++        }
++    }
++
+     // MARK: Плитки в списке переписок
+ 
+     /// Фон каждой строки списка — размытая аватарка.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index fd7809ac..8c426d85 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -29,6 +29,7 @@ private enum LunagramToggle: Int32 {
+     case dialogCards
+     case dialogCardsFadeMuted
+     case hideOwnPhone
++    case avatarFrame
+ 
+     var value: Bool {
+         switch self {
+@@ -52,6 +53,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.dialogCardsFadeMuted
+         case .hideOwnPhone:
+             return LunagramSettings.hideOwnPhone
++        case .avatarFrame:
++            return LunagramSettings.avatarFrameEnabled
+         }
+     }
+ 
+@@ -77,6 +80,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.dialogCardsFadeMuted = value
+         case .hideOwnPhone:
+             LunagramSettings.hideOwnPhone = value
++        case .avatarFrame:
++            LunagramSettings.avatarFrameEnabled = value
+         }
+     }
+ 
+@@ -102,6 +107,8 @@ private enum LunagramToggle: Int32 {
+             return "Приглушённые бледнее"
+         case .hideOwnPhone:
+             return "Скрыть свой номер"
++        case .avatarFrame:
++            return "Рамка вокруг аватарки"
+         }
+     }
+ }
+@@ -143,6 +150,7 @@ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case privacy
+     case banner
++    case avatarFrame
+     case liveWallpaper
+     case dialogCards
+     case appearance
+@@ -267,9 +275,10 @@ private struct LunagramMediaState: Equatable {
+     var particlesKind: Int
+     var particlesDensity: Int
+     var particlesSpeed: Int
++    var avatarFrameStyle: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle)
+     }
+ }
+ 
+@@ -302,6 +311,15 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         ? "Картинка в шапке твоего профиля — видишь её только ты. Затемнение нужно, чтобы на светлом фото читались имя и статус."
+         : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля. Видишь его только ты."))
+ 
++    entries.append(contentsOf: [
++        .header(.avatarFrame, 0, "РАМКА ВОКРУГ АВАТАРКИ"),
++        .toggle(.avatarFrame, .avatarFrame, value(.avatarFrame))
++    ])
++    for style in LunagramAvatarFrameStyle.allCases {
++        entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, style.rawValue == media.avatarFrameStyle))
++    }
++    entries.append(.info(.avatarFrame, 0, "Вокруг твоей аватарки в профиле — те же девять рамок, что на ПК. Видишь её только ты."))
++
+     entries.append(contentsOf: [
+         .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+         .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
+@@ -461,6 +479,12 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+             LunagramToggle.particles.set(true)
+             values[.particles] = true
+             valuesPromise.set(values)
++        case .avatarFrame:
++            // Выбрал рамку — значит хочет её видеть: включаем сразу.
++            LunagramSettings.avatarFrameStyle = dim + 1
++            LunagramToggle.avatarFrame.set(true)
++            values[.avatarFrame] = true
++            valuesPromise.set(values)
+         case .particlesDensity:
+             LunagramSettings.particlesDensity = lunagramParticlesDensityLevels[max(0, min(lunagramParticlesDensityLevels.count - 1, dim))].1
+         case .particlesSpeed:
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index 7556afad..03a19e38 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1866,6 +1866,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         }
+         
+         self.avatarListNode.update(size: CGSize(), avatarSize: avatarSize, isExpanded: self.isAvatarExpanded, peer: peer, isForum: isForum, threadId: self.forumTopicThreadId, threadInfo: threadData?.info, theme: presentationData.theme, transition: transition)
++        // Lunagram: рамка вокруг своей аватарки. У кого есть истории, вокруг
++        // уже кольцо — рамка ложится за ним.
++        LunagramAvatarFrameLayer.update(in: self.avatarListNode.avatarContainerNode.layer, avatarSize: avatarSize, skip: self.avatarListNode.avatarContainerNode.storyData != nil ? avatarSize * 0.06 : 0.0, active: (self.isSettings || self.isMyProfile) && LunagramAvatarFrameLayer.isActive && !self.isAvatarExpanded)
+         self.editingContentNode.avatarNode.update(peer: peer, threadData: threadData, chatLocation: self.chatLocation, item: self.avatarListNode.item, updatingAvatar: state.updatingAvatar, uploadProgress: state.avatarUploadProgress, theme: presentationData.theme, avatarSize: avatarSize, isEditing: state.isEditing)
+         self.avatarOverlayNode.update(peer: peer, threadData: threadData, chatLocation: self.chatLocation, item: self.avatarListNode.item, updatingAvatar: state.updatingAvatar, uploadProgress: state.avatarUploadProgress, theme: presentationData.theme, avatarSize: avatarSize, isEditing: state.isEditing)
+         if additive {
