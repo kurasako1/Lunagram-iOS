@@ -1,0 +1,587 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index ca17b570..1a80e402 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -19,6 +19,9 @@ public final class LunagramSettings {
+         static let ghostDontType = "lunagram.ghost.dontType"
+         static let ghostStayOffline = "lunagram.ghost.stayOffline"
+         static let ghostDontViewStories = "lunagram.ghost.dontViewStories"
++        static let liveWallpaperEnabled = "lunagram.liveWallpaper.enabled"
++        static let liveWallpaperDim = "lunagram.liveWallpaper.dim"
++        static let liveWallpaperFile = "lunagram.liveWallpaper.file"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -102,6 +105,73 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: Живые обои
++
++    /// Видео вместо обоев переписки.
++    public static var liveWallpaperEnabled: Bool {
++        get {
++            return defaults.bool(forKey: Key.liveWallpaperEnabled)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.liveWallpaperEnabled)
++            changed()
++        }
++    }
++
++    /// Затемнение поверх видео: 0 — нет, 1 — слегка, 2 — сильно.
++    /// Видео часто пёстрое и светлое, и без затемнения буквы на нём теряются.
++    public static var liveWallpaperDim: Int {
++        get {
++            // Незаданный ключ отдаёт нулём, а по умолчанию нам нужно «слегка».
++            guard defaults.object(forKey: Key.liveWallpaperDim) != nil else {
++                return 1
++            }
++            return max(0, min(2, defaults.integer(forKey: Key.liveWallpaperDim)))
++        }
++        set {
++            defaults.set(max(0, min(2, newValue)), forKey: Key.liveWallpaperDim)
++            changed()
++        }
++    }
++
++    /// Где лежит выбранный ролик. Пусто, если не выбран или файл пропал.
++    public static var liveWallpaperURL: URL? {
++        guard let name = defaults.string(forKey: Key.liveWallpaperFile), let folder = try? lunagramFolder() else {
++            return nil
++        }
++        let url = folder.appendingPathComponent(name)
++        return FileManager.default.fileExists(atPath: url.path) ? url : nil
++    }
++
++    /// Забирает ролик к себе: галерея отдаёт временный файл, который система
++    /// удалит сразу, как только мы его отпустим.
++    ///
++    /// Имя каждый раз новое. Проигрыватель может держать старый файл
++    /// открытым, и подменить файл прямо под ним — значит получить битую
++    /// картинку. Старый просто удаляем: открытый файл при этом дочитается.
++    public static func importLiveWallpaper(from source: URL) throws {
++        let folder = try lunagramFolder()
++        let suffix = source.pathExtension.isEmpty ? "mov" : source.pathExtension.lowercased()
++        let name = "wallpaper-\(UUID().uuidString).\(suffix)"
++        try FileManager.default.copyItem(at: source, to: folder.appendingPathComponent(name))
++
++        let previous = defaults.string(forKey: Key.liveWallpaperFile)
++        defaults.set(name, forKey: Key.liveWallpaperFile)
++        if let previous = previous, previous != name {
++            try? FileManager.default.removeItem(at: folder.appendingPathComponent(previous))
++        }
++        changed()
++    }
++
++    /// Своя папка внутри приложения. В «Application Support», а не в
++    /// «Документах»: это данные приложения, человеку в файлах их видеть незачем.
++    private static func lunagramFolder() throws -> URL {
++        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
++        let folder = base.appendingPathComponent("Lunagram", isDirectory: true)
++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
++        return folder
++    }
++
+     private static func changed() {
+         NotificationCenter.default.post(name: didChangeNotification, object: nil)
+     }
+diff --git a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+new file mode 100644
+index 00000000..8547d346
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+@@ -0,0 +1,170 @@
++import AVFoundation
++import QuartzCore
++import UIKit
++
++/// Живые обои: один проигрыватель на всё приложение.
++///
++/// Урок с ПК: там каждая часть окна открывала ролик сама, и видео
++/// раскодировалось по нескольку раз за кадр — всё тормозило. Здесь
++/// проигрыватель один, а каждый фон переписки лишь показывает его картинку
++/// своим слоем. Раскодирование одно, сколько бы фонов ни было.
++public final class LunagramVideoWallpaper {
++    public static let shared = LunagramVideoWallpaper()
++
++    let player: AVQueuePlayer
++    private var looper: AVPlayerLooper?
++    private var currentURL: URL?
++    // Сколько фонов сейчас показывают видео. Ни одного — нечего и
++    // раскодировать: ставим на паузу, батарея важнее.
++    private var attached = 0
++    private var foregroundObserver: NSObjectProtocol?
++
++    private init() {
++        let player = AVQueuePlayer()
++        player.isMuted = true
++        // Обои не должны мешать телефону засыпать.
++        player.preventsDisplaySleepDuringVideoPlayback = false
++        self.player = player
++
++        // Свёрнутое приложение система ставит на паузу, а обратно не
++        // запускает. Имя уведомления берём строкой, а не через UIApplication:
++        // наш модуль попадает и в расширения, где UIApplication запрещён.
++        self.foregroundObserver = NotificationCenter.default.addObserver(forName: Notification.Name("UIApplicationWillEnterForegroundNotification"), object: nil, queue: .main, using: { [weak self] _ in
++            self?.sync()
++        })
++    }
++
++    deinit {
++        if let foregroundObserver = self.foregroundObserver {
++            NotificationCenter.default.removeObserver(foregroundObserver)
++        }
++    }
++
++    func attach() {
++        self.attached += 1
++        self.sync()
++    }
++
++    func detach() {
++        self.attached = max(0, self.attached - 1)
++        if self.attached == 0 {
++            self.player.pause()
++        }
++    }
++
++    /// Подгоняет проигрыватель под настройки: открывает ролик, если его
++    /// сменили; останавливает, если обои выключили.
++    public func sync() {
++        guard LunagramSettings.liveWallpaperEnabled, let url = LunagramSettings.liveWallpaperURL else {
++            self.stop()
++            return
++        }
++        if url != self.currentURL {
++            self.open(url)
++        }
++        if self.attached > 0 {
++            self.player.play()
++        }
++    }
++
++    private func open(_ url: URL) {
++        self.looper?.disableLooping()
++        self.looper = nil
++        self.player.removeAllItems()
++        let item = AVPlayerItem(asset: LunagramVideoWallpaper.silentAsset(url))
++        self.looper = AVPlayerLooper(player: self.player, templateItem: item)
++        self.currentURL = url
++    }
++
++    private func stop() {
++        self.player.pause()
++        self.looper?.disableLooping()
++        self.looper = nil
++        self.player.removeAllItems()
++        self.currentURL = nil
++    }
++
++    /// Ролик без звуковой дорожки.
++    ///
++    /// Приглушить мало: даже беззвучный проигрыватель с дорожкой может
++    /// оборвать музыку в другом приложении. Нет дорожки — нечем обрывать.
++    private static func silentAsset(_ url: URL) -> AVAsset {
++        let asset = AVURLAsset(url: url)
++        let composition = AVMutableComposition()
++        guard let source = asset.tracks(withMediaType: .video).first, let target = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
++            return asset
++        }
++        do {
++            try target.insertTimeRange(CMTimeRange(start: .zero, duration: asset.duration), of: source, at: .zero)
++        } catch {
++            return asset
++        }
++        // Поворот: ролики с телефона часто сняты боком и лишь помечены как
++        // повёрнутые. Без этой пометки видео легло бы на бок.
++        target.preferredTransform = source.preferredTransform
++        return composition
++    }
++}
++
++/// Слой, который показывает общий проигрыватель, и затемнение поверх.
++public final class LunagramVideoWallpaperLayer: CALayer {
++    private var playerLayer: AVPlayerLayer?
++    private var dimLayer: CALayer?
++
++    public override init() {
++        super.init()
++        let playerLayer = AVPlayerLayer(player: LunagramVideoWallpaper.shared.player)
++        // Заполняем целиком, обрезая лишнее по краям: ролик и экран разной
++        // вытянутости, иначе остались бы пустые поля.
++        playerLayer.videoGravity = .resizeAspectFill
++        self.addSublayer(playerLayer)
++        self.playerLayer = playerLayer
++
++        let dimLayer = CALayer()
++        dimLayer.backgroundColor = UIColor.black.cgColor
++        self.addSublayer(dimLayer)
++        self.dimLayer = dimLayer
++
++        self.applyDim()
++        LunagramVideoWallpaper.shared.attach()
++    }
++
++    // Нужен самой системе для копий слоя при анимациях. Проигрыватель такой
++    // копии не нужен, поэтому и к общему мы её не подключаем.
++    public override init(layer: Any) {
++        super.init(layer: layer)
++    }
++
++    required public init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    deinit {
++        if self.playerLayer != nil {
++            LunagramVideoWallpaper.shared.detach()
++        }
++    }
++
++    public func updateSize(_ size: CGSize) {
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        let bounds = CGRect(origin: CGPoint(), size: size)
++        self.frame = bounds
++        self.playerLayer?.frame = bounds
++        self.dimLayer?.frame = bounds
++        CATransaction.commit()
++    }
++
++    public func applyDim() {
++        let opacity: Float
++        switch LunagramSettings.liveWallpaperDim {
++        case 0:
++            opacity = 0.0
++        case 2:
++            opacity = 0.5
++        default:
++            opacity = 0.25
++        }
++        self.dimLayer?.opacity = opacity
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index e9244f17..56c6ec8b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import UIKit
++import PhotosUI
+ import Display
+ import SwiftSignalKit
+ import TelegramPresentationData
+@@ -22,6 +23,7 @@ private enum LunagramToggle: Int32 {
+     case ghostDontType
+     case ghostStayOffline
+     case ghostDontViewStories
++    case liveWallpaper
+     case particles
+ 
+     var value: Bool {
+@@ -34,6 +36,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.ghostStayOffline
+         case .ghostDontViewStories:
+             return LunagramSettings.ghostDontViewStories
++        case .liveWallpaper:
++            return LunagramSettings.liveWallpaperEnabled
+         case .particles:
+             return LunagramSettings.particlesEnabled
+         }
+@@ -49,6 +53,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.ghostStayOffline = value
+         case .ghostDontViewStories:
+             LunagramSettings.ghostDontViewStories = value
++        case .liveWallpaper:
++            LunagramSettings.liveWallpaperEnabled = value
+         case .particles:
+             LunagramSettings.particlesEnabled = value
+         }
+@@ -64,33 +70,45 @@ private enum LunagramToggle: Int32 {
+             return "Не выходить в сеть"
+         case .ghostDontViewStories:
+             return "Не отмечать истории"
++        case .liveWallpaper:
++            return "Видео вместо обоев"
+         case .particles:
+             return "Частицы в переписке"
+         }
+     }
+ }
+ 
++/// Варианты затемнения поверх видео — по номеру, как их хранят настройки.
++private let lunagramDimTitles = ["Без затемнения", "Слегка затемнить", "Сильно затемнить"]
++
+ private final class LunagramSettingsControllerArguments {
+     let toggle: (LunagramToggle, Bool) -> Void
++    let pickVideo: () -> Void
++    let setDim: (Int) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pickVideo: @escaping () -> Void, setDim: @escaping (Int) -> Void) {
+         self.toggle = toggle
++        self.pickVideo = pickVideo
++        self.setDim = setDim
+     }
+ }
+ 
+ private enum LunagramSettingsSection: Int32 {
+     case ghost
++    case liveWallpaper
+     case appearance
+ }
+ 
+ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case header(LunagramSettingsSection, Int32, String)
+     case toggle(LunagramSettingsSection, LunagramToggle, Bool)
++    case action(LunagramSettingsSection, Int32, String)
++    case dim(LunagramSettingsSection, Int32, String, Bool)
+     case info(LunagramSettingsSection, Int32, String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case let .header(section, _, _), let .toggle(section, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -102,6 +120,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + index
+         case let .toggle(section, toggle, _):
+             return section.rawValue * 100 + 10 + toggle.rawValue
++        case let .action(section, index, _):
++            return section.rawValue * 100 + 40 + index
++        case let .dim(section, index, _, _):
++            return section.rawValue * 100 + 60 + index
+         case let .info(section, index, _):
+             return section.rawValue * 100 + 90 + index
+         }
+@@ -121,6 +143,18 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .action(lhsSection, lhsIndex, lhsText):
++            if case let .action(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
++                return true
++            } else {
++                return false
++            }
++        case let .dim(lhsSection, lhsIndex, lhsText, lhsChecked):
++            if case let .dim(rhsSection, rhsIndex, rhsText, rhsChecked) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText, lhsChecked == rhsChecked {
++                return true
++            } else {
++                return false
++            }
+         case let .info(lhsSection, lhsIndex, lhsText):
+             if case let .info(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+@@ -143,18 +177,26 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             })
++        case let .action(_, _, text):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
++                arguments.pickVideo()
++            })
++        case let .dim(_, index, text, checked):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                arguments.setDim(Int(index))
++            })
+         case let .info(_, _, text):
+             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+         }
+     }
+ }
+ 
+-private func lunagramSettingsEntries(values: [LunagramToggle: Bool]) -> [LunagramSettingsEntry] {
++private func lunagramSettingsEntries(values: [LunagramToggle: Bool], dim: Int, hasVideo: Bool) -> [LunagramSettingsEntry] {
+     func value(_ toggle: LunagramToggle) -> Bool {
+         return values[toggle] ?? toggle.value
+     }
+ 
+-    return [
++    var entries: [LunagramSettingsEntry] = [
+         .header(.ghost, 0, "GHOST"),
+         .toggle(.ghost, .ghostDontRead, value(.ghostDontRead)),
+         .toggle(.ghost, .ghostDontType, value(.ghostDontType)),
+@@ -162,30 +204,109 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool]) -> [Lunagra
+         .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
+         .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
+ 
++        .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
++        .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
++        .action(.liveWallpaper, 0, hasVideo ? "Заменить видео" : "Выбрать видео")
++    ]
++    for (index, title) in lunagramDimTitles.enumerated() {
++        entries.append(.dim(.liveWallpaper, Int32(index), title, index == dim))
++    }
++    entries.append(.info(.liveWallpaper, 0, hasVideo
++        ? "Видео играет по кругу вместо обоев, без звука — твою музыку оно не прервёт. Затемнение нужно, чтобы на пёстром ролике читались сообщения."
++        : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
++
++    entries.append(contentsOf: [
+         .header(.appearance, 0, "ОФОРМЛЕНИЕ"),
+         .toggle(.appearance, .particles, value(.particles)),
+         .info(.appearance, 0, "Снежинки медленно падают поверх фона переписки. Рисует их сама система, поэтому батарею они почти не тратят.")
+-    ]
++    ])
++    return entries
++}
++
++/// Держит делегата галереи, пока она открыта: сама галерея держит его
++/// слабо, и без нас он исчез бы раньше, чем человек выберет ролик.
++private final class LunagramPickerHolder {
++    var delegate: AnyObject?
++}
++
++@available(iOS 14.0, *)
++private final class LunagramVideoPickerDelegate: NSObject, PHPickerViewControllerDelegate {
++    private let completion: (Bool) -> Void
++
++    init(completion: @escaping (Bool) -> Void) {
++        self.completion = completion
++    }
++
++    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
++        picker.dismiss(animated: true)
++        let movieType = "public.movie"
++        guard let provider = results.first?.itemProvider, provider.hasItemConformingToTypeIdentifier(movieType) else {
++            return
++        }
++        let completion = self.completion
++        provider.loadFileRepresentation(forTypeIdentifier: movieType) { url, _ in
++            // Файл временный: система удалит его, как только это замыкание
++            // закончится. Поэтому копируем здесь же, не откладывая.
++            var imported = false
++            if let url = url {
++                imported = (try? LunagramSettings.importLiveWallpaper(from: url)) != nil
++            }
++            DispatchQueue.main.async {
++                completion(imported)
++            }
++        }
++    }
+ }
+ 
+ func lunagramSettingsController(context: AccountContext) -> ViewController {
+-    // Значения держим в обещании, а не читаем из настроек при каждой
+-    // перерисовке: так экран обновляется сразу, как только щёлкнули
+-    // выключатель, и не ждёт никаких уведомлений.
++    // Значения держим в обещаниях, а не читаем из настроек при каждой
++    // перерисовке: так экран обновляется сразу, как только что-то
++    // поменяли, и не ждёт никаких уведомлений.
+     let valuesPromise = ValuePromise<[LunagramToggle: Bool]>([:], ignoreRepeated: true)
+     var values: [LunagramToggle: Bool] = [:]
++    let dimPromise = ValuePromise<Int>(LunagramSettings.liveWallpaperDim, ignoreRepeated: true)
++    let hasVideoPromise = ValuePromise<Bool>(LunagramSettings.liveWallpaperURL != nil, ignoreRepeated: true)
++    let pickerHolder = LunagramPickerHolder()
+ 
+     let arguments = LunagramSettingsControllerArguments(toggle: { toggle, value in
+         toggle.set(value)
+         values[toggle] = value
+         valuesPromise.set(values)
++    }, pickVideo: {
++        // Галерея без запроса доступа к фото есть только с iOS 14, а
++        // Telegram поддерживает и 13-ю.
++        guard #available(iOS 14.0, *) else {
++            return
++        }
++        var configuration = PHPickerConfiguration()
++        configuration.filter = .videos
++        configuration.selectionLimit = 1
++        let picker = PHPickerViewController(configuration: configuration)
++        let delegate = LunagramVideoPickerDelegate(completion: { imported in
++            pickerHolder.delegate = nil
++            guard imported else {
++                return
++            }
++            // Выбрал ролик — значит хочет его видеть: включаем обои сразу.
++            LunagramToggle.liveWallpaper.set(true)
++            values[.liveWallpaper] = true
++            valuesPromise.set(values)
++            hasVideoPromise.set(true)
++        })
++        pickerHolder.delegate = delegate
++        picker.delegate = delegate
++        // Так же открывает галерею сам Telegram — в MediaPickerScreen.
++        (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++    }, setDim: { dim in
++        LunagramSettings.liveWallpaperDim = dim
++        dimPromise.set(dim)
+     })
+ 
+-    let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get())
++    let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get(), dimPromise.get(), hasVideoPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData, currentValues -> (ItemListControllerState, (ItemListNodeState, Any)) in
++    |> map { presentationData, currentValues, dim, hasVideo -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Lunagram"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramSettingsEntries(values: currentValues), style: .blocks, animateChanges: false)
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramSettingsEntries(values: currentValues, dim: dim, hasVideo: hasVideo), style: .blocks, animateChanges: false)
+ 
+         return (controllerState, (listState, arguments))
+     }
+diff --git a/submodules/WallpaperBackgroundNode/Sources/WallpaperBackgroundNode.swift b/submodules/WallpaperBackgroundNode/Sources/WallpaperBackgroundNode.swift
+index dcb9554e..5fe3ae5f 100644
+--- a/submodules/WallpaperBackgroundNode/Sources/WallpaperBackgroundNode.swift
++++ b/submodules/WallpaperBackgroundNode/Sources/WallpaperBackgroundNode.swift
+@@ -1001,6 +1001,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
+ 
+     // Lunagram: частицы поверх фона и подписка на смену настроек.
+     private var lunagramParticles: LunagramParticlesLayer?
++    private var lunagramVideo: LunagramVideoWallpaperLayer?
+     private var lunagramSettingsObserver: NSObjectProtocol?
+     private var wallpaper: TelegramWallpaper?
+     private var starGift: StarGift?
+@@ -1196,8 +1197,10 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
+ 
+         // Lunagram: частицы кладём поверх затемнения, но под сообщения —
+         // сообщения рисуются отдельно и выше всего фона.
++        self.lunagramUpdateVideo()
+         self.lunagramUpdateParticles()
+         self.lunagramSettingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++            self?.lunagramUpdateVideo()
+             self?.lunagramUpdateParticles()
+         })
+     }
+@@ -1211,6 +1214,30 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
+         }
+     }
+ 
++    // Lunagram: живые обои. Видео кладём под затемнение Telegram, но над
++    // самими обоями: затемнение у Telegram для тёмной темы, и видео под ним
++    // темнеет вместе с остальным фоном. Частицы остаются выше всего.
++    private func lunagramUpdateVideo() {
++        LunagramVideoWallpaper.shared.sync()
++        if LunagramSettings.liveWallpaperEnabled && LunagramSettings.liveWallpaperURL != nil {
++            let video: LunagramVideoWallpaperLayer
++            if let current = self.lunagramVideo {
++                video = current
++            } else {
++                video = LunagramVideoWallpaperLayer()
++                self.lunagramVideo = video
++                self.layer.insertSublayer(video, below: self.dimLayer)
++            }
++            video.applyDim()
++            if let validLayout = self.validLayout {
++                video.updateSize(validLayout.0)
++            }
++        } else if let video = self.lunagramVideo {
++            video.removeFromSuperlayer()
++            self.lunagramVideo = nil
++        }
++    }
++
+     // Lunagram: заводит, обновляет или убирает частицы по настройкам.
+     private func lunagramUpdateParticles() {
+         if LunagramSettings.particlesEnabled {
+@@ -1770,6 +1797,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
+     public func updateLayout(size: CGSize, displayMode: WallpaperDisplayMode, transition: ContainedViewLayoutTransition) {
+         let isFirstLayout = self.validLayout == nil
+         self.validLayout = (size, displayMode)
++        self.lunagramVideo?.updateSize(size)
+         self.lunagramParticles?.updateSize(size)
+         
+         if let freeBackgroundPortalSourceView = self.freeBackgroundPortalSourceView {
