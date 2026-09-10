@@ -1,0 +1,466 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 99385b66..ca17b570 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -15,6 +15,10 @@ public final class LunagramSettings {
+     private enum Key {
+         static let particlesEnabled = "lunagram.particles.enabled"
+         static let particlesDensity = "lunagram.particles.density"
++        static let ghostDontRead = "lunagram.ghost.dontRead"
++        static let ghostDontType = "lunagram.ghost.dontType"
++        static let ghostStayOffline = "lunagram.ghost.stayOffline"
++        static let ghostDontViewStories = "lunagram.ghost.dontViewStories"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -48,6 +52,56 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: Ghost
++    //
++    // Эти четыре читает сетевая часть Telegram — из своих очередей, не с
++    // главной. UserDefaults к этому готов: читать его можно из любого потока.
++
++    /// Не отправлять отметку о прочтении. Собеседник видит одну галочку, пока
++    /// ты не ответишь. Сюда же — прослушивание голосовых и кружков.
++    public static var ghostDontRead: Bool {
++        get {
++            return defaults.bool(forKey: Key.ghostDontRead)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.ghostDontRead)
++            changed()
++        }
++    }
++
++    /// Не отправлять «печатает…», «записывает голосовое» и прочее.
++    public static var ghostDontType: Bool {
++        get {
++            return defaults.bool(forKey: Key.ghostDontType)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.ghostDontType)
++            changed()
++        }
++    }
++
++    /// Не выходить в сеть: для всех ты «был(а) недавно».
++    public static var ghostStayOffline: Bool {
++        get {
++            return defaults.bool(forKey: Key.ghostStayOffline)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.ghostStayOffline)
++            changed()
++        }
++    }
++
++    /// Не отмечать истории просмотренными: тебя не будет в списке зрителей.
++    public static var ghostDontViewStories: Bool {
++        get {
++            return defaults.bool(forKey: Key.ghostDontViewStories)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.ghostDontViewStories)
++            changed()
++        }
++    }
++
+     private static func changed() {
+         NotificationCenter.default.post(name: didChangeNotification, object: nil)
+     }
+diff --git a/submodules/TelegramCore/BUILD b/submodules/TelegramCore/BUILD
+index 53c9a721..0db2996b 100644
+--- a/submodules/TelegramCore/BUILD
++++ b/submodules/TelegramCore/BUILD
+@@ -14,6 +14,7 @@ swift_library(
+         "//submodules/MtProtoKit:MtProtoKit",
+         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+         "//submodules/Postbox:Postbox",
++        "//submodules/Lunagram",
+         "//submodules/CloudData:CloudData",
+         "//submodules/EncryptionProvider:EncryptionProvider",
+         "//submodules/CryptoUtils:CryptoUtils",
+diff --git a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+index 8c8a4fa3..6acd7895 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+@@ -3,6 +3,7 @@ import TelegramApi
+ import Postbox
+ import SwiftSignalKit
+ import MtProtoKit
++import Lunagram
+ 
+ private typealias SignalKitTimer = SwiftSignalKit.Timer
+ 
+@@ -43,8 +44,12 @@ private final class AccountPresenceManagerImpl {
+     }
+     
+     private func updatePresence(_ isOnline: Bool) {
++        // Lunagram Ghost: в сеть не выходим. Вместо «я здесь» говорим серверу
++        // «меня нет», будто приложение свёрнуто, — и таймер повторения тоже
++        // не заводится.
++        let goOnline = isOnline && !LunagramSettings.ghostStayOffline
+         let request: Signal<Api.Bool, MTRpcError>
+-        if isOnline {
++        if goOnline {
+             let timer = SignalKitTimer(timeout: 30.0, repeat: false, completion: { [weak self] in
+                 guard let strongSelf = self else {
+                     return
+diff --git a/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift b/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
+index b5326767..a8daa4f1 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
+@@ -4,6 +4,7 @@ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
+ import CryptoUtils
++import Lunagram
+ 
+ private struct Md5Hash: Hashable {
+     public let data: Data
+@@ -252,6 +253,11 @@ func managedReadReactionOrPollVoteActions(postbox: Postbox, network: Network, st
+ }
+ 
+ private func synchronizeConsumeMessageContents(transaction: Transaction, postbox: Postbox, network: Network, stateManager: AccountStateManager, id: MessageId) -> Signal<Void, NoError> {
++    // Lunagram Ghost: голосовые и кружки прослушанными не отмечаем —
++    // отправитель видит это по пропавшей синей точке.
++    if LunagramSettings.ghostDontRead {
++        return .complete()
++    }
+     if id.peerId.namespace == Namespaces.Peer.CloudUser || id.peerId.namespace == Namespaces.Peer.CloudGroup {
+         return network.request(Api.functions.messages.readMessageContents(id: [id.id]))
+             |> map(Optional.init)
+diff --git a/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift b/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
+index 7acc37a1..0404eb7c 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
+@@ -3,6 +3,7 @@ import Postbox
+ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
++import Lunagram
+ 
+ 
+ public struct PeerActivitySpace: Hashable {
+@@ -175,6 +176,12 @@ private func requestActivity(postbox: Postbox, network: Network, accountPeerId:
+                 }
+             }
+             
++            // Lunagram Ghost: «печатает…», «записывает голосовое» и прочее
++            // не отправляем никому, в том числе в секретные чаты.
++            if LunagramSettings.ghostDontType {
++                return .complete()
++            }
++
+             if let inputPeer = apiInputPeer(peer) {
+                 var flags: Int32 = 0
+                 let topMessageId = threadId.flatMap { Int32(clamping: $0) }
+diff --git a/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift b/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
+index bebd6915..6a487365 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
+@@ -3,6 +3,7 @@ import Postbox
+ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
++import Lunagram
+ 
+ private final class ManagedSynchronizeViewStoriesOperationsHelper {
+     var operationDisposables: [PeerId: (Int32, Disposable)] = [:]
+@@ -119,6 +120,10 @@ func managedSynchronizeViewStoriesOperations(postbox: Postbox, network: Network,
+ }
+ 
+ private func pushStoriesAreSeen(postbox: Postbox, network: Network, stateManager: AccountStateManager, peer: Peer, operation: SynchronizeViewStoriesOperation) -> Signal<Void, NoError> {
++    // Lunagram Ghost: истории просмотренными не отмечаем.
++    if LunagramSettings.ghostDontViewStories {
++        return .complete()
++    }
+     guard let inputPeer = apiInputPeer(peer) else {
+         return .complete()
+     }
+diff --git a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+index 66242579..59807cfb 100644
+--- a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
++++ b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+@@ -2,6 +2,7 @@ import Foundation
+ import Postbox
+ import TelegramApi
+ import SwiftSignalKit
++import Lunagram
+ 
+ 
+ private enum PeerReadStateMarker: Equatable {
+@@ -186,6 +187,17 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
+                             if case let .idBased(updatedMaxIncomingReadId, _, _, updatedCount, updatedMarkedUnread) = readState {
+                                 if updatedCount != 0 || updatedMarkedUnread {
+                                     if localMaxIncomingReadId > updatedMaxIncomingReadId {
++                                        // Lunagram Ghost: сервер отстаёт от
++                                        // нас нарочно — прочтение мы ему не
++                                        // отправляли. Это не ошибка. Иначе
++                                        // здесь либо гоняли бы запросы по
++                                        // кругу, либо откатили бы своё к
++                                        // серверному, и сообщения снова
++                                        // стали бы непрочитанными у тебя.
++                                        if LunagramSettings.ghostDontRead {
++                                            transaction.confirmSynchronizedIncomingReadState(peerId)
++                                            return nil
++                                        }
+                                         return .retry
+                                     }
+                                 }
+@@ -227,6 +239,12 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
+ }
+ 
+ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager: AccountStateManager, peerId: PeerId, readState: PeerReadState) -> Signal<PeerReadState, PeerReadStateValidationError> {
++    // Lunagram Ghost: отметку о прочтении не отправляем. Возвращаем состояние
++    // как есть — для приложения это «отправлено успешно», и повторять оно
++    // не станет. Сюда сходятся личка, группы, каналы и секретные чаты.
++    if LunagramSettings.ghostDontRead {
++        return .single(readState)
++    }
+     if peerId.namespace == Namespaces.Peer.SecretChat {
+         return inputSecretChat(postbox: postbox, peerId: peerId)
+         |> mapToSignal { inputPeer -> Signal<PeerReadState, PeerReadStateValidationError> in
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift b/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
+index fc104f5f..130d358f 100644
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
+@@ -2,6 +2,7 @@ import Foundation
+ import SwiftSignalKit
+ import Postbox
+ import TelegramApi
++import Lunagram
+ 
+ public enum EngineStoryInputMedia {
+     case image(dimensions: PixelDimensions, data: Data, stickers: [TelegramMediaFile])
+@@ -2086,6 +2087,12 @@ func _internal_markStoryAsSeen(account: Account, peerId: PeerId, id: Int32, asPi
+             }
+             #endif
+             
++            // Lunagram Ghost: и счётчик просмотров не трогаем — иначе автор
++            // увидел бы тебя в списке зрителей.
++            if LunagramSettings.ghostDontViewStories {
++                return .complete()
++            }
++
+             return account.network.request(Api.functions.stories.incrementStoryViews(peer: inputPeer, id: [id]))
+             |> `catch` { _ -> Signal<Api.Bool, NoError> in
+                 return .single(.boolFalse)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 9d7e60b9..e9244f17 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -12,59 +12,117 @@ import Lunagram
+ //
+ // Сделан по образцу экрана Apple Watch из SettingsUI — самого маленького
+ // экрана-списка у Telegram. Тексты пока прямо здесь, по-русски: переводить
+-// на другие языки будем, когда разделов станет больше одного.
++// на другие языки будем, когда разделов станет больше.
++
++/// Все выключатели раздела. Один перечень вместо пачки отдельных замыканий:
++/// так новый выключатель добавляется одной строчкой в трёх местах, а не
++/// размазывается по всему файлу.
++private enum LunagramToggle: Int32 {
++    case ghostDontRead
++    case ghostDontType
++    case ghostStayOffline
++    case ghostDontViewStories
++    case particles
++
++    var value: Bool {
++        switch self {
++        case .ghostDontRead:
++            return LunagramSettings.ghostDontRead
++        case .ghostDontType:
++            return LunagramSettings.ghostDontType
++        case .ghostStayOffline:
++            return LunagramSettings.ghostStayOffline
++        case .ghostDontViewStories:
++            return LunagramSettings.ghostDontViewStories
++        case .particles:
++            return LunagramSettings.particlesEnabled
++        }
++    }
++
++    func set(_ value: Bool) {
++        switch self {
++        case .ghostDontRead:
++            LunagramSettings.ghostDontRead = value
++        case .ghostDontType:
++            LunagramSettings.ghostDontType = value
++        case .ghostStayOffline:
++            LunagramSettings.ghostStayOffline = value
++        case .ghostDontViewStories:
++            LunagramSettings.ghostDontViewStories = value
++        case .particles:
++            LunagramSettings.particlesEnabled = value
++        }
++    }
++
++    var title: String {
++        switch self {
++        case .ghostDontRead:
++            return "Не отмечать прочитанным"
++        case .ghostDontType:
++            return "Не показывать «печатает…»"
++        case .ghostStayOffline:
++            return "Не выходить в сеть"
++        case .ghostDontViewStories:
++            return "Не отмечать истории"
++        case .particles:
++            return "Частицы в переписке"
++        }
++    }
++}
+ 
+ private final class LunagramSettingsControllerArguments {
+-    let toggleParticles: (Bool) -> Void
++    let toggle: (LunagramToggle, Bool) -> Void
+ 
+-    init(toggleParticles: @escaping (Bool) -> Void) {
+-        self.toggleParticles = toggleParticles
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void) {
++        self.toggle = toggle
+     }
+ }
+ 
+ private enum LunagramSettingsSection: Int32 {
++    case ghost
+     case appearance
+ }
+ 
+ private enum LunagramSettingsEntry: ItemListNodeEntry {
+-    case appearanceHeader(String)
+-    case particles(String, Bool)
+-    case particlesInfo(String)
++    case header(LunagramSettingsSection, Int32, String)
++    case toggle(LunagramSettingsSection, LunagramToggle, Bool)
++    case info(LunagramSettingsSection, Int32, String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case .appearanceHeader, .particles, .particlesInfo:
+-            return LunagramSettingsSection.appearance.rawValue
++        case let .header(section, _, _), let .toggle(section, _, _), let .info(section, _, _):
++            return section.rawValue
+         }
+     }
+ 
++    // Порядок строк: по сотне на раздел, внутри — по порядку появления.
+     var stableId: Int32 {
+         switch self {
+-        case .appearanceHeader:
+-            return 0
+-        case .particles:
+-            return 1
+-        case .particlesInfo:
+-            return 2
++        case let .header(section, index, _):
++            return section.rawValue * 100 + index
++        case let .toggle(section, toggle, _):
++            return section.rawValue * 100 + 10 + toggle.rawValue
++        case let .info(section, index, _):
++            return section.rawValue * 100 + 90 + index
+         }
+     }
+ 
+     static func ==(lhs: LunagramSettingsEntry, rhs: LunagramSettingsEntry) -> Bool {
+         switch lhs {
+-        case let .appearanceHeader(lhsText):
+-            if case let .appearanceHeader(rhsText) = rhs, lhsText == rhsText {
++        case let .header(lhsSection, lhsIndex, lhsText):
++            if case let .header(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+             } else {
+                 return false
+             }
+-        case let .particles(lhsText, lhsValue):
+-            if case let .particles(rhsText, rhsValue) = rhs, lhsText == rhsText, lhsValue == rhsValue {
++        case let .toggle(lhsSection, lhsToggle, lhsValue):
++            if case let .toggle(rhsSection, rhsToggle, rhsValue) = rhs, lhsSection == rhsSection, lhsToggle == rhsToggle, lhsValue == rhsValue {
+                 return true
+             } else {
+                 return false
+             }
+-        case let .particlesInfo(lhsText):
+-            if case let .particlesInfo(rhsText) = rhs, lhsText == rhsText {
++        case let .info(lhsSection, lhsIndex, lhsText):
++            if case let .info(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+             } else {
+                 return false
+@@ -79,42 +137,55 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+         let arguments = arguments as! LunagramSettingsControllerArguments
+         switch self {
+-        case let .appearanceHeader(text):
++        case let .header(_, _, text):
+             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+-        case let .particles(text, value):
+-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, sectionId: self.section, style: .blocks, updated: { value in
+-                arguments.toggleParticles(value)
++        case let .toggle(_, toggle, value):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.toggle(toggle, value)
+             })
+-        case let .particlesInfo(text):
++        case let .info(_, _, text):
+             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+         }
+     }
+ }
+ 
+-private func lunagramSettingsEntries(particles: Bool) -> [LunagramSettingsEntry] {
++private func lunagramSettingsEntries(values: [LunagramToggle: Bool]) -> [LunagramSettingsEntry] {
++    func value(_ toggle: LunagramToggle) -> Bool {
++        return values[toggle] ?? toggle.value
++    }
++
+     return [
+-        .appearanceHeader("ОФОРМЛЕНИЕ"),
+-        .particles("Частицы в переписке", particles),
+-        .particlesInfo("Снежинки медленно падают поверх фона переписки. Рисует их сама система, поэтому батарею они почти не тратят.")
++        .header(.ghost, 0, "GHOST"),
++        .toggle(.ghost, .ghostDontRead, value(.ghostDontRead)),
++        .toggle(.ghost, .ghostDontType, value(.ghostDontType)),
++        .toggle(.ghost, .ghostStayOffline, value(.ghostStayOffline)),
++        .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
++        .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
++
++        .header(.appearance, 0, "ОФОРМЛЕНИЕ"),
++        .toggle(.appearance, .particles, value(.particles)),
++        .info(.appearance, 0, "Снежинки медленно падают поверх фона переписки. Рисует их сама система, поэтому батарею они почти не тратят.")
+     ]
+ }
+ 
+ func lunagramSettingsController(context: AccountContext) -> ViewController {
+-    // Значение держим в обещании, а не читаем из настроек при каждой
++    // Значения держим в обещании, а не читаем из настроек при каждой
+     // перерисовке: так экран обновляется сразу, как только щёлкнули
+     // выключатель, и не ждёт никаких уведомлений.
+-    let particlesPromise = ValuePromise<Bool>(LunagramSettings.particlesEnabled, ignoreRepeated: true)
++    let valuesPromise = ValuePromise<[LunagramToggle: Bool]>([:], ignoreRepeated: true)
++    var values: [LunagramToggle: Bool] = [:]
+ 
+-    let arguments = LunagramSettingsControllerArguments(toggleParticles: { value in
+-        LunagramSettings.particlesEnabled = value
+-        particlesPromise.set(value)
++    let arguments = LunagramSettingsControllerArguments(toggle: { toggle, value in
++        toggle.set(value)
++        values[toggle] = value
++        valuesPromise.set(values)
+     })
+ 
+-    let signal = combineLatest(context.sharedContext.presentationData, particlesPromise.get())
++    let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData, particles -> (ItemListControllerState, (ItemListNodeState, Any)) in
++    |> map { presentationData, currentValues -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Lunagram"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramSettingsEntries(particles: particles), style: .blocks, animateChanges: false)
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramSettingsEntries(values: currentValues), style: .blocks, animateChanges: false)
+ 
+         return (controllerState, (listState, arguments))
+     }
