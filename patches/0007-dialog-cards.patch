@@ -1,0 +1,586 @@
+diff --git a/submodules/ChatListUI/BUILD b/submodules/ChatListUI/BUILD
+index 1eececec..c37e0e68 100644
+--- a/submodules/ChatListUI/BUILD
++++ b/submodules/ChatListUI/BUILD
+@@ -87,6 +87,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/ChatListHeaderComponent",
+         "//submodules/TelegramUI/Components/ChatListTitleView",
+         "//submodules/AvatarNode:AvatarNode",
++        "//submodules/Lunagram",
+         "//submodules/AvatarVideoNode:AvatarVideoNode",
+         "//submodules/InviteLinksUI",
+         "//submodules/TelegramUI/Components/ChatFolderLinkPreviewScreen",
+diff --git a/submodules/ChatListUI/Sources/Node/ChatListItem.swift b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+index 9da6217d..2b366922 100644
+--- a/submodules/ChatListUI/Sources/Node/ChatListItem.swift
++++ b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+@@ -1378,6 +1378,9 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+     
+     public private(set) var item: ChatListItem?
+     
++    // Lunagram: плитка — размытая аватарка фоном строки.
++    let lunagramCardState = LunagramChatListCardState()
++
+     private let backgroundNode: ASDisplayNode
+     private let highlightedBackgroundNode: ASDisplayNode
+     
+@@ -2135,6 +2138,9 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+             }
+         }
+         
++        // Lunagram: плитка — размытая аватарка фоном строки.
++        self.lunagramSetupCard(item: item, peer: peer)
++
+         self.contextContainer.isGestureEnabled = enablePreview && !item.editing
+     }
+     
+@@ -2241,6 +2247,9 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+                 transition.updateTintColor(view: avatarLiveBadge.outline, color: outlineColor)
+             }
+         }
++
++        // Lunagram: выделение под плиткой — пусть проступает сквозь неё.
++        self.lunagramHighlightCard(self.reallyHighlighted, animated: transition.isAnimated)
+     }
+ 
+     private func updateSeparatorAlpha(transition: ContainedViewLayoutTransition, inlineNavigationProgress: CGFloat? = nil) {
+@@ -5395,6 +5404,8 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+                     }
+                     
+                     transition.updateFrame(node: strongSelf.backgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.contentSize.width, height: itemHeight)))
++                    // Lunagram: плитка по размеру строки.
++                    strongSelf.lunagramLayoutCard(size: CGSize(width: layout.contentSize.width, height: itemHeight), theme: item.presentationData.theme, isMuted: currentMutedIconImage != nil, isCollapsed: item.interaction.inlineNavigationLocation != nil)
+                     let backgroundColor: UIColor
+                     let highlightedBackgroundColor: UIColor
+                     if item.selected {
+diff --git a/submodules/ChatListUI/Sources/Node/LunagramChatListCard.swift b/submodules/ChatListUI/Sources/Node/LunagramChatListCard.swift
+new file mode 100644
+index 00000000..a53ca848
+--- /dev/null
++++ b/submodules/ChatListUI/Sources/Node/LunagramChatListCard.swift
+@@ -0,0 +1,126 @@
++import Foundation
++import UIKit
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import TelegramPresentationData
++import AvatarNode
++import Lunagram
++
++// Lunagram: плитки в списке переписок.
++//
++// Вся логика здесь, а в ChatListItem — только вызовы в трёх местах: где
++// строке дают переписку, где её раскладывают и где подсвечивают нажатие.
++// Так при обновлении Telegram править придётся вызовы, а не наш код.
++
++/// Всё, что строке нужно для плитки. Одним предметом — чтобы в самой
++/// строке было одно новое поле, а не четыре.
++final class LunagramChatListCardState {
++    var card: LunagramDialogCardView?
++    /// Переписка строки — даже когда плитки выключены. Включат — плитку
++    /// будет из чего собрать, не дожидаясь, пока строку обновит Telegram.
++    var peer: EnginePeer?
++    let disposable = MetaDisposable()
++    var settingsObserver: NSObjectProtocol?
++
++    deinit {
++        self.disposable.dispose()
++        if let settingsObserver = self.settingsObserver {
++            NotificationCenter.default.removeObserver(settingsObserver)
++        }
++    }
++}
++
++extension ChatListItemNode {
++    /// Заводит, обновляет или убирает плитку: чья аватарка на фоне.
++    func lunagramSetupCard(item: ChatListItem, peer: EnginePeer?) {
++        let state = self.lunagramCardState
++        state.peer = peer
++        if state.settingsObserver == nil {
++            state.settingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++                self?.lunagramCardSettingsChanged()
++            })
++        }
++
++        guard LunagramDialogCardView.isEnabled, let peer = peer else {
++            state.disposable.set(nil)
++            state.card?.removeFromSuperview()
++            state.card = nil
++            return
++        }
++
++        let card: LunagramDialogCardView
++        if let current = state.card {
++            card = current
++        } else {
++            card = LunagramDialogCardView()
++            // Под аватарку и текст, внутрь того, что уезжает при свайпе, —
++            // плитка двигается вместе со строкой.
++            self.contextContainer.view.insertSubview(card, at: 0)
++            state.card = card
++        }
++
++        // Строки со значком вместо аватарки: «Избранное», «Ответы»,
++        // удалённые. Размывать там нечего — плитка цвета темы.
++        if peer.id.isReplies || peer.id.isAnonymousSavedMessages || peer.id == item.context.account.peerId || peer.isDeleted {
++            state.disposable.set(nil)
++            card.setColor(item.presentationData.theme.list.itemAccentColor)
++            return
++        }
++
++        // Та же аватарка, что показывает сама строка.
++        var avatarPeer = peer
++        if case let .peer(peerData) = item.content, let avatarMainPeer = peerData.avatarPeer?.chatOrMonoforumMainPeer {
++            avatarPeer = avatarMainPeer
++        }
++        let photoKey = avatarPeer.smallProfileImage?.resource.id.stringRepresentation ?? "none"
++        let key = "\(avatarPeer.id.toInt64())-\(photoKey)"
++        if card.prepare(key: key) {
++            return
++        }
++        // Без фото Telegram рисует круг цвета имени — его и размываем, без
++        // букв: на плитке они всё равно расплылись бы в пятно.
++        state.disposable.set((peerAvatarCompleteImage(account: item.context.account, peer: avatarPeer, size: CGSize(width: 32.0, height: 32.0), round: false, drawLetters: false)
++        |> deliverOnMainQueue).startStrict(next: { [weak card] image in
++            card?.setAvatar(image, key: key)
++        }))
++    }
++
++    /// Размер строки и цвета темы — при каждой раскладке строки.
++    ///
++    /// isCollapsed — список сжат до столбика аватарок (открыт форум или
++    /// переписка сбоку). Текста там нет, и плитка на всю ширину была бы
++    /// лишней.
++    func lunagramLayoutCard(size: CGSize, theme: PresentationTheme, isMuted: Bool, isCollapsed: Bool) {
++        guard let card = self.lunagramCardState.card else {
++            return
++        }
++        card.isHidden = isCollapsed
++        card.update(rowSize: size, themeBackgroundColor: theme.chatList.backgroundColor, isMuted: isMuted)
++        // Между плитками и так есть просвет — линия-разделитель в нём
++        // лишняя.
++        if !isCollapsed {
++            self.separatorNode.isHidden = true
++        }
++    }
++
++    /// Нажатие на строку.
++    func lunagramHighlightCard(_ highlighted: Bool, animated: Bool) {
++        self.lunagramCardState.card?.setHighlighted(highlighted, animated: animated)
++    }
++
++    /// Плитки включили или выключили — собрать или убрать плитку и заново
++    /// разложить строку, чтобы вернулся или спрятался разделитель.
++    private func lunagramCardSettingsChanged() {
++        let state = self.lunagramCardState
++        state.card?.applySettings()
++        guard LunagramDialogCardView.isEnabled != (state.card != nil), let item = self.item else {
++            return
++        }
++        self.lunagramSetupCard(item: item, peer: state.peer)
++        if let layoutParams = self.layoutParams {
++            let (_, apply) = self.asyncLayout()(layoutParams.0, layoutParams.6, layoutParams.1, layoutParams.2, layoutParams.3, layoutParams.4, layoutParams.5)
++            let _ = apply(false, false)
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramDialogCard.swift b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+new file mode 100644
+index 00000000..a28ac3a7
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+@@ -0,0 +1,227 @@
++import Accelerate
++import UIKit
++
++/// Плитка в списке переписок: фон строки — размытая аватарка.
++///
++/// Как на ПК: скруглённая плитка с отступом от краёв, аватарка растянута по
++/// большей стороне и размыта, поверх — подложка и тонкая обводка, которая
++/// тает книзу. Отличие одно: подложка не чёрная, а цвета фона темы. В
++/// тёмной теме это то же затемнение, что на ПК, а в светлой — высветление:
++/// чёрный текст на затемнённой плитке не читался бы.
++public final class LunagramDialogCardView: UIView {
++    /// Включены ли плитки. Спрашивают на каждой строке, поэтому только
++    /// настройки, без диска.
++    public static var isEnabled: Bool {
++        return LunagramSettings.dialogCardsEnabled
++    }
++
++    /// Плотность подложки по номеру из настроек.
++    private static let dimAlphas: [CGFloat] = [0.4, 0.55, 0.7]
++
++    /// Готовые размытые аватарки. Размывать дорого, а список при прокрутке
++    /// показывает одни и те же переписки снова и снова.
++    private static let cache: NSCache<NSString, UIImage> = {
++        let cache = NSCache<NSString, UIImage>()
++        cache.countLimit = 256
++        return cache
++    }()
++
++    private static let blurQueue = DispatchQueue(label: "lunagram.dialogCards.blur", qos: .userInitiated)
++
++    private let imageView = UIImageView()
++    private let dimView = UIView()
++    private let strokeGradient = CAGradientLayer()
++    private let strokeMask = CAShapeLayer()
++    private var avatarKey: String?
++    private var rowSize = CGSize()
++    private var themeBackgroundColor = UIColor.black
++    private var isMuted = false
++    private var isHighlightedState = false
++
++    public override init(frame: CGRect) {
++        super.init(frame: frame)
++        self.isUserInteractionEnabled = false
++        self.clipsToBounds = true
++        self.layer.cornerCurve = .continuous
++
++        self.imageView.contentMode = .scaleAspectFill
++        self.addSubview(self.imageView)
++        self.addSubview(self.dimView)
++
++        // Обводка ярче вверху и тает книзу — так плитка выглядит выпуклой,
++        // а не наклеенной.
++        self.strokeGradient.colors = [UIColor(white: 1.0, alpha: 0.24).cgColor, UIColor(white: 1.0, alpha: 0.0).cgColor]
++        self.strokeGradient.startPoint = CGPoint(x: 0.5, y: 0.0)
++        self.strokeGradient.endPoint = CGPoint(x: 0.5, y: 1.0)
++        self.strokeMask.fillColor = UIColor.clear.cgColor
++        self.strokeMask.strokeColor = UIColor.white.cgColor
++        self.strokeGradient.mask = self.strokeMask
++        self.layer.addSublayer(self.strokeGradient)
++    }
++
++    required public init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    /// Готовит плитку под аватарку с этим ключом. Ключ различает картинки:
++    /// переписка и её текущее фото.
++    ///
++    /// true — делать больше ничего не нужно: эта аватарка уже на плитке или
++    /// нашлась готовой. false — плитка очищена и ждёт картинку в setAvatar.
++    public func prepare(key: String) -> Bool {
++        if key == self.avatarKey {
++            return true
++        }
++        self.avatarKey = key
++        self.imageView.backgroundColor = nil
++        if let cached = LunagramDialogCardView.cache.object(forKey: key as NSString) {
++            self.imageView.image = cached
++            return true
++        }
++        self.imageView.image = nil
++        return false
++    }
++
++    /// Картинка для ключа из prepare. Устаревшая — если строку успели отдать
++    /// другой переписке — молча отбрасывается.
++    public func setAvatar(_ image: UIImage?, key: String) {
++        guard key == self.avatarKey, let image = image else {
++            return
++        }
++        LunagramDialogCardView.blurQueue.async { [weak self] in
++            let blurred = LunagramDialogCardView.blurred(image)
++            DispatchQueue.main.async {
++                if let blurred = blurred {
++                    LunagramDialogCardView.cache.setObject(blurred, forKey: key as NSString)
++                }
++                guard let self = self, self.avatarKey == key else {
++                    return
++                }
++                self.imageView.image = blurred
++            }
++        }
++    }
++
++    /// Плитка одного цвета — для строк, где вместо аватарки значок:
++    /// «Избранное», «Ответы», удалённый аккаунт.
++    public func setColor(_ color: UIColor) {
++        let key = "color-\(color.hashValue)"
++        if key == self.avatarKey {
++            return
++        }
++        self.avatarKey = key
++        self.imageView.image = nil
++        self.imageView.backgroundColor = color
++    }
++
++    /// Размер строки, цвет фона темы и приглушена ли переписка.
++    public func update(rowSize: CGSize, themeBackgroundColor: UIColor, isMuted: Bool) {
++        self.rowSize = rowSize
++        self.themeBackgroundColor = themeBackgroundColor
++        self.isMuted = isMuted
++        self.applyLayout()
++        self.applyDim()
++    }
++
++    /// Нажатие на строку. Выделение у Telegram рисуется под плиткой, и
++    /// непрозрачная плитка его закрыла бы. Делаем её полупрозрачной — цвет
++    /// выделения проступает сквозь аватарку, и нажатие видно.
++    public func setHighlighted(_ highlighted: Bool, animated: Bool) {
++        if self.isHighlightedState == highlighted {
++            return
++        }
++        self.isHighlightedState = highlighted
++        let alpha: CGFloat = highlighted ? 0.55 : 1.0
++        if animated {
++            UIView.animate(withDuration: 0.3, animations: {
++                self.alpha = alpha
++            })
++        } else {
++            self.alpha = alpha
++        }
++    }
++
++    /// Настройки поменялись: подложку перекрашиваем на месте.
++    public func applySettings() {
++        self.applyDim()
++    }
++
++    private func applyLayout() {
++        // Отступы от высоты строки, как на ПК: при крупном шрифте строка
++        // выше, и жёстко заданный отступ смотрелся бы прижатым.
++        let skipY = max(floor(self.rowSize.height / 12.0), 1.0)
++        let skipX = skipY + floor(skipY / 2.0)
++        let frame = CGRect(x: skipX, y: skipY, width: max(0.0, self.rowSize.width - skipX * 2.0), height: max(0.0, self.rowSize.height - skipY * 2.0))
++        if self.frame == frame {
++            return
++        }
++        self.frame = frame
++        let bounds = CGRect(origin: CGPoint(), size: frame.size)
++        let radius = min(18.0, floor(frame.height / 2.0))
++        self.layer.cornerRadius = radius
++
++        // Аватарка квадратная, а плитка вытянута — растягиваем по большей
++        // стороне и берём середину, иначе по краям останутся пустые поля.
++        let side = max(bounds.width, bounds.height)
++        self.imageView.frame = CGRect(x: (bounds.width - side) / 2.0, y: (bounds.height - side) / 2.0, width: side, height: side)
++        self.dimView.frame = bounds
++
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        let lineWidth: CGFloat = 1.0
++        self.strokeGradient.frame = bounds
++        self.strokeMask.frame = bounds
++        self.strokeMask.lineWidth = lineWidth
++        self.strokeMask.path = UIBezierPath(roundedRect: bounds.insetBy(dx: lineWidth / 2.0, dy: lineWidth / 2.0), cornerRadius: max(0.0, radius - lineWidth / 2.0)).cgPath
++        CATransaction.commit()
++    }
++
++    private func applyDim() {
++        let index = max(0, min(LunagramDialogCardView.dimAlphas.count - 1, LunagramSettings.dialogCardsDim))
++        var alpha = LunagramDialogCardView.dimAlphas[index]
++        if self.isMuted && LunagramSettings.dialogCardsFadeMuted {
++            // Приглушённые гасим сильнее: подложка закрывает аватарку почти
++            // целиком, и такие переписки отступают на второй план.
++            alpha += (1.0 - alpha) * 0.6
++        }
++        self.dimView.backgroundColor = self.themeBackgroundColor.withAlphaComponent(alpha)
++    }
++
++    /// Размывает аватарку: уменьшаем до 32 точек, потом трижды проходим
++    /// коробчатым размытием — выходит почти гауссово. Маленькую картинку
++    /// всё равно растягивать на всю строку, а разница на размытом не видна.
++    private static func blurred(_ image: UIImage) -> UIImage? {
++        guard let cgImage = image.cgImage else {
++            return nil
++        }
++        let side = 32
++        let bytesPerRow = side * 4
++        guard let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else {
++            return nil
++        }
++        context.interpolationQuality = .medium
++        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
++        guard let data = context.data else {
++            return nil
++        }
++        guard let scratch = malloc(bytesPerRow * side) else {
++            return nil
++        }
++        defer {
++            free(scratch)
++        }
++        var source = vImage_Buffer(data: data, height: vImagePixelCount(side), width: vImagePixelCount(side), rowBytes: bytesPerRow)
++        var target = vImage_Buffer(data: scratch, height: vImagePixelCount(side), width: vImagePixelCount(side), rowBytes: bytesPerRow)
++        let kernel: UInt32 = 7
++        let flags = vImage_Flags(kvImageEdgeExtend)
++        // Три прохода туда и обратно: результат снова в памяти контекста.
++        for _ in 0 ..< 3 {
++            _ = vImageBoxConvolve_ARGB8888(&source, &target, nil, 0, 0, kernel, kernel, nil, flags)
++            _ = vImageBoxConvolve_ARGB8888(&target, &source, nil, 0, 0, kernel, kernel, nil, flags)
++        }
++        guard let result = context.makeImage() else {
++            return nil
++        }
++        return UIImage(cgImage: result)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index d61fadcd..24a19954 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -23,6 +23,9 @@ public final class LunagramSettings {
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerFile = "lunagram.banner.file"
++        static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
++        static let dialogCardsDim = "lunagram.dialogCards.dim"
++        static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -214,6 +217,45 @@ public final class LunagramSettings {
+         store(name, forKey: Key.profileBannerFile, in: folder)
+     }
+ 
++    // MARK: Плитки в списке переписок
++
++    /// Фон каждой строки списка — размытая аватарка.
++    public static var dialogCardsEnabled: Bool {
++        get {
++            return defaults.bool(forKey: Key.dialogCardsEnabled)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.dialogCardsEnabled)
++            changed()
++        }
++    }
++
++    /// Плотность подложки поверх аватарки: 0 — слабая, 1 — средняя, 2 —
++    /// плотная. По умолчанию средняя — как на ПК.
++    public static var dialogCardsDim: Int {
++        get {
++            guard defaults.object(forKey: Key.dialogCardsDim) != nil else {
++                return 1
++            }
++            return max(0, min(2, defaults.integer(forKey: Key.dialogCardsDim)))
++        }
++        set {
++            defaults.set(max(0, min(2, newValue)), forKey: Key.dialogCardsDim)
++            changed()
++        }
++    }
++
++    /// Приглушённые переписки бледнее остальных.
++    public static var dialogCardsFadeMuted: Bool {
++        get {
++            return defaults.bool(forKey: Key.dialogCardsFadeMuted)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.dialogCardsFadeMuted)
++            changed()
++        }
++    }
++
+     // MARK: Файлы
+ 
+     private enum ImportError: Error {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 5acd28ec..1b382bc4 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -26,6 +26,8 @@ private enum LunagramToggle: Int32 {
+     case liveWallpaper
+     case particles
+     case profileBanner
++    case dialogCards
++    case dialogCardsFadeMuted
+ 
+     var value: Bool {
+         switch self {
+@@ -43,6 +45,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.particlesEnabled
+         case .profileBanner:
+             return LunagramSettings.profileBannerEnabled
++        case .dialogCards:
++            return LunagramSettings.dialogCardsEnabled
++        case .dialogCardsFadeMuted:
++            return LunagramSettings.dialogCardsFadeMuted
+         }
+     }
+ 
+@@ -62,6 +68,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.particlesEnabled = value
+         case .profileBanner:
+             LunagramSettings.profileBannerEnabled = value
++        case .dialogCards:
++            LunagramSettings.dialogCardsEnabled = value
++        case .dialogCardsFadeMuted:
++            LunagramSettings.dialogCardsFadeMuted = value
+         }
+     }
+ 
+@@ -81,6 +91,10 @@ private enum LunagramToggle: Int32 {
+             return "Частицы в переписке"
+         case .profileBanner:
+             return "Баннер в профиле"
++        case .dialogCards:
++            return "Плитки вместо строк"
++        case .dialogCardsFadeMuted:
++            return "Приглушённые бледнее"
+         }
+     }
+ }
+@@ -88,6 +102,7 @@ private enum LunagramToggle: Int32 {
+ /// Варианты затемнения — по номеру, как их хранят настройки.
+ private let lunagramWallpaperDimTitles = ["Без затемнения", "Слегка затемнить", "Сильно затемнить"]
+ private let lunagramBannerDimTitles = ["Без затемнения", "Слегка затемнить", "Затемнить", "Сильно затемнить"]
++private let lunagramCardsDimTitles = ["Аватарка ярче", "Средне", "Аватарка тише"]
+ 
+ private final class LunagramSettingsControllerArguments {
+     let toggle: (LunagramToggle, Bool) -> Void
+@@ -105,6 +120,7 @@ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case banner
+     case liveWallpaper
++    case dialogCards
+     case appearance
+ }
+ 
+@@ -207,9 +223,10 @@ private struct LunagramMediaState: Equatable {
+     var hasWallpaper: Bool
+     var bannerDim: Int
+     var hasBanner: Bool
++    var cardsDim: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim)
+     }
+ }
+ 
+@@ -249,6 +266,16 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         ? "Видео играет по кругу вместо обоев, без звука — твою музыку оно не прервёт. Затемнение нужно, чтобы на пёстром ролике читались сообщения."
+         : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
+ 
++    entries.append(contentsOf: [
++        .header(.dialogCards, 0, "ПЛИТКИ В СПИСКЕ ПЕРЕПИСОК"),
++        .toggle(.dialogCards, .dialogCards, value(.dialogCards)),
++        .toggle(.dialogCards, .dialogCardsFadeMuted, value(.dialogCardsFadeMuted))
++    ])
++    for (index, title) in lunagramCardsDimTitles.enumerated() {
++        entries.append(.dim(.dialogCards, Int32(index), title, index == media.cardsDim))
++    }
++    entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
++
+     entries.append(contentsOf: [
+         .header(.appearance, 0, "ОФОРМЛЕНИЕ"),
+         .toggle(.appearance, .particles, value(.particles)),
+@@ -362,9 +389,12 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+         // Так же открывает галерею сам Telegram — в MediaPickerScreen.
+         (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
+     }, setDim: { section, dim in
+-        if section == .banner {
++        switch section {
++        case .banner:
+             LunagramSettings.profileBannerDim = dim
+-        } else {
++        case .dialogCards:
++            LunagramSettings.dialogCardsDim = dim
++        default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+         mediaPromise.set(LunagramMediaState.current())
