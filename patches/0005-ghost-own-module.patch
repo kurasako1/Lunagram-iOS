@@ -1,0 +1,357 @@
+diff --git a/submodules/Lunagram/BUILD b/submodules/Lunagram/BUILD
+index 8c2b11f7..50c1724e 100644
+--- a/submodules/Lunagram/BUILD
++++ b/submodules/Lunagram/BUILD
+@@ -4,6 +4,9 @@ load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+ # телеграмовского не зависит — только от системных библиотек, — чтобы его
+ # могла подключить любая часть приложения, даже самая низкоуровневая,
+ # вроде фона переписки.
++#
++# Кроме Ghost: его выключатели лежат в LunagramGhost, потому что их читает
++# TelegramCore. Подробности — в BUILD того модуля.
+ swift_library(
+     name = "Lunagram",
+     module_name = "Lunagram",
+@@ -13,6 +16,9 @@ swift_library(
+     copts = [
+         "-warnings-as-errors",
+     ],
++    deps = [
++        "//submodules/LunagramGhost",
++    ],
+     visibility = [
+         "//visibility:public",
+     ],
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1a80e402..7cef0582 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -1,4 +1,5 @@
+ import Foundation
++import LunagramGhost
+ 
+ /// Настройки Lunagram.
+ ///
+@@ -15,10 +16,6 @@ public final class LunagramSettings {
+     private enum Key {
+         static let particlesEnabled = "lunagram.particles.enabled"
+         static let particlesDensity = "lunagram.particles.density"
+-        static let ghostDontRead = "lunagram.ghost.dontRead"
+-        static let ghostDontType = "lunagram.ghost.dontType"
+-        static let ghostStayOffline = "lunagram.ghost.stayOffline"
+-        static let ghostDontViewStories = "lunagram.ghost.dontViewStories"
+         static let liveWallpaperEnabled = "lunagram.liveWallpaper.enabled"
+         static let liveWallpaperDim = "lunagram.liveWallpaper.dim"
+         static let liveWallpaperFile = "lunagram.liveWallpaper.file"
+@@ -57,17 +54,18 @@ public final class LunagramSettings {
+ 
+     // MARK: Ghost
+     //
+-    // Эти четыре читает сетевая часть Telegram — из своих очередей, не с
+-    // главной. UserDefaults к этому готов: читать его можно из любого потока.
++    // Сами значения живут в модуле LunagramGhost: их читает сетевая часть
++    // Telegram, и держать её зависимой от всего Lunagram накладно. Здесь —
++    // только пересылка туда и рассылка о смене для экрана настроек.
+ 
+     /// Не отправлять отметку о прочтении. Собеседник видит одну галочку, пока
+     /// ты не ответишь. Сюда же — прослушивание голосовых и кружков.
+     public static var ghostDontRead: Bool {
+         get {
+-            return defaults.bool(forKey: Key.ghostDontRead)
++            return LunagramGhostSettings.dontRead
+         }
+         set {
+-            defaults.set(newValue, forKey: Key.ghostDontRead)
++            LunagramGhostSettings.dontRead = newValue
+             changed()
+         }
+     }
+@@ -75,10 +73,10 @@ public final class LunagramSettings {
+     /// Не отправлять «печатает…», «записывает голосовое» и прочее.
+     public static var ghostDontType: Bool {
+         get {
+-            return defaults.bool(forKey: Key.ghostDontType)
++            return LunagramGhostSettings.dontType
+         }
+         set {
+-            defaults.set(newValue, forKey: Key.ghostDontType)
++            LunagramGhostSettings.dontType = newValue
+             changed()
+         }
+     }
+@@ -86,10 +84,10 @@ public final class LunagramSettings {
+     /// Не выходить в сеть: для всех ты «был(а) недавно».
+     public static var ghostStayOffline: Bool {
+         get {
+-            return defaults.bool(forKey: Key.ghostStayOffline)
++            return LunagramGhostSettings.stayOffline
+         }
+         set {
+-            defaults.set(newValue, forKey: Key.ghostStayOffline)
++            LunagramGhostSettings.stayOffline = newValue
+             changed()
+         }
+     }
+@@ -97,10 +95,10 @@ public final class LunagramSettings {
+     /// Не отмечать истории просмотренными: тебя не будет в списке зрителей.
+     public static var ghostDontViewStories: Bool {
+         get {
+-            return defaults.bool(forKey: Key.ghostDontViewStories)
++            return LunagramGhostSettings.dontViewStories
+         }
+         set {
+-            defaults.set(newValue, forKey: Key.ghostDontViewStories)
++            LunagramGhostSettings.dontViewStories = newValue
+             changed()
+         }
+     }
+diff --git a/submodules/LunagramGhost/BUILD b/submodules/LunagramGhost/BUILD
+new file mode 100644
+index 00000000..98c07c7b
+--- /dev/null
++++ b/submodules/LunagramGhost/BUILD
+@@ -0,0 +1,21 @@
++load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
++
++# Выключатели Ghost — отдельно от остального Lunagram.
++#
++# Их читает TelegramCore, сетевое сердце Telegram. Любая правка в том, от
++# чего он зависит, пересобирает его, а за ним почти всё приложение. Пока
++# Ghost жил в общем модуле Lunagram, каждая новая функция стоила лишних
++# полчаса сборки. Здесь только Ghost: меняется он редко.
++swift_library(
++    name = "LunagramGhost",
++    module_name = "LunagramGhost",
++    srcs = glob([
++        "Sources/**/*.swift",
++    ]),
++    copts = [
++        "-warnings-as-errors",
++    ],
++    visibility = [
++        "//visibility:public",
++    ],
++)
+diff --git a/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+new file mode 100644
+index 00000000..bc7e7367
+--- /dev/null
++++ b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+@@ -0,0 +1,63 @@
++import Foundation
++
++/// Выключатели Ghost.
++///
++/// Здесь только чтение и запись. Рассылку «настройки поменялись» делает
++/// LunagramSettings из основного модуля: экрану настроек она нужна, а
++/// сетевой части нет.
++///
++/// Читать можно из любого потока: сетевая часть Telegram читает из своих
++/// очередей, а UserDefaults к этому готов.
++public enum LunagramGhostSettings {
++    private static let defaults = UserDefaults.standard
++
++    // Ключи те же, что были в LunagramSettings, — переезд ничего не
++    // сбрасывает.
++    private enum Key {
++        static let dontRead = "lunagram.ghost.dontRead"
++        static let dontType = "lunagram.ghost.dontType"
++        static let stayOffline = "lunagram.ghost.stayOffline"
++        static let dontViewStories = "lunagram.ghost.dontViewStories"
++    }
++
++    /// Не отправлять отметку о прочтении. Собеседник видит одну галочку, пока
++    /// ты не ответишь. Сюда же — прослушивание голосовых и кружков.
++    public static var dontRead: Bool {
++        get {
++            return defaults.bool(forKey: Key.dontRead)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.dontRead)
++        }
++    }
++
++    /// Не отправлять «печатает…», «записывает голосовое» и прочее.
++    public static var dontType: Bool {
++        get {
++            return defaults.bool(forKey: Key.dontType)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.dontType)
++        }
++    }
++
++    /// Не выходить в сеть: для всех ты «был(а) недавно».
++    public static var stayOffline: Bool {
++        get {
++            return defaults.bool(forKey: Key.stayOffline)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.stayOffline)
++        }
++    }
++
++    /// Не отмечать истории просмотренными: тебя не будет в списке зрителей.
++    public static var dontViewStories: Bool {
++        get {
++            return defaults.bool(forKey: Key.dontViewStories)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.dontViewStories)
++        }
++    }
++}
+diff --git a/submodules/TelegramCore/BUILD b/submodules/TelegramCore/BUILD
+index 0db2996b..21c44080 100644
+--- a/submodules/TelegramCore/BUILD
++++ b/submodules/TelegramCore/BUILD
+@@ -14,7 +14,7 @@ swift_library(
+         "//submodules/MtProtoKit:MtProtoKit",
+         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+         "//submodules/Postbox:Postbox",
+-        "//submodules/Lunagram",
++        "//submodules/LunagramGhost",
+         "//submodules/CloudData:CloudData",
+         "//submodules/EncryptionProvider:EncryptionProvider",
+         "//submodules/CryptoUtils:CryptoUtils",
+diff --git a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+index 6acd7895..af5beea3 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+@@ -3,7 +3,7 @@ import TelegramApi
+ import Postbox
+ import SwiftSignalKit
+ import MtProtoKit
+-import Lunagram
++import LunagramGhost
+ 
+ private typealias SignalKitTimer = SwiftSignalKit.Timer
+ 
+@@ -47,7 +47,7 @@ private final class AccountPresenceManagerImpl {
+         // Lunagram Ghost: в сеть не выходим. Вместо «я здесь» говорим серверу
+         // «меня нет», будто приложение свёрнуто, — и таймер повторения тоже
+         // не заводится.
+-        let goOnline = isOnline && !LunagramSettings.ghostStayOffline
++        let goOnline = isOnline && !LunagramGhostSettings.stayOffline
+         let request: Signal<Api.Bool, MTRpcError>
+         if goOnline {
+             let timer = SignalKitTimer(timeout: 30.0, repeat: false, completion: { [weak self] in
+diff --git a/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift b/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
+index a8daa4f1..046dafb2 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedConsumePersonalMessagesActions.swift
+@@ -4,7 +4,7 @@ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
+ import CryptoUtils
+-import Lunagram
++import LunagramGhost
+ 
+ private struct Md5Hash: Hashable {
+     public let data: Data
+@@ -255,7 +255,7 @@ func managedReadReactionOrPollVoteActions(postbox: Postbox, network: Network, st
+ private func synchronizeConsumeMessageContents(transaction: Transaction, postbox: Postbox, network: Network, stateManager: AccountStateManager, id: MessageId) -> Signal<Void, NoError> {
+     // Lunagram Ghost: голосовые и кружки прослушанными не отмечаем —
+     // отправитель видит это по пропавшей синей точке.
+-    if LunagramSettings.ghostDontRead {
++    if LunagramGhostSettings.dontRead {
+         return .complete()
+     }
+     if id.peerId.namespace == Namespaces.Peer.CloudUser || id.peerId.namespace == Namespaces.Peer.CloudGroup {
+diff --git a/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift b/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
+index 0404eb7c..8f41a5bb 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedLocalInputActivities.swift
+@@ -3,7 +3,7 @@ import Postbox
+ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
+-import Lunagram
++import LunagramGhost
+ 
+ 
+ public struct PeerActivitySpace: Hashable {
+@@ -178,7 +178,7 @@ private func requestActivity(postbox: Postbox, network: Network, accountPeerId:
+             
+             // Lunagram Ghost: «печатает…», «записывает голосовое» и прочее
+             // не отправляем никому, в том числе в секретные чаты.
+-            if LunagramSettings.ghostDontType {
++            if LunagramGhostSettings.dontType {
+                 return .complete()
+             }
+ 
+diff --git a/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift b/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
+index 6a487365..70b473a3 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedSynchronizeViewStoriesOperations.swift
+@@ -3,7 +3,7 @@ import Postbox
+ import SwiftSignalKit
+ import TelegramApi
+ import MtProtoKit
+-import Lunagram
++import LunagramGhost
+ 
+ private final class ManagedSynchronizeViewStoriesOperationsHelper {
+     var operationDisposables: [PeerId: (Int32, Disposable)] = [:]
+@@ -121,7 +121,7 @@ func managedSynchronizeViewStoriesOperations(postbox: Postbox, network: Network,
+ 
+ private func pushStoriesAreSeen(postbox: Postbox, network: Network, stateManager: AccountStateManager, peer: Peer, operation: SynchronizeViewStoriesOperation) -> Signal<Void, NoError> {
+     // Lunagram Ghost: истории просмотренными не отмечаем.
+-    if LunagramSettings.ghostDontViewStories {
++    if LunagramGhostSettings.dontViewStories {
+         return .complete()
+     }
+     guard let inputPeer = apiInputPeer(peer) else {
+diff --git a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+index 59807cfb..7999ecbb 100644
+--- a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
++++ b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+@@ -2,7 +2,7 @@ import Foundation
+ import Postbox
+ import TelegramApi
+ import SwiftSignalKit
+-import Lunagram
++import LunagramGhost
+ 
+ 
+ private enum PeerReadStateMarker: Equatable {
+@@ -194,7 +194,7 @@ private func validatePeerReadState(network: Network, postbox: Postbox, stateMana
+                                         // кругу, либо откатили бы своё к
+                                         // серверному, и сообщения снова
+                                         // стали бы непрочитанными у тебя.
+-                                        if LunagramSettings.ghostDontRead {
++                                        if LunagramGhostSettings.dontRead {
+                                             transaction.confirmSynchronizedIncomingReadState(peerId)
+                                             return nil
+                                         }
+@@ -242,7 +242,7 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
+     // Lunagram Ghost: отметку о прочтении не отправляем. Возвращаем состояние
+     // как есть — для приложения это «отправлено успешно», и повторять оно
+     // не станет. Сюда сходятся личка, группы, каналы и секретные чаты.
+-    if LunagramSettings.ghostDontRead {
++    if LunagramGhostSettings.dontRead {
+         return .single(readState)
+     }
+     if peerId.namespace == Namespaces.Peer.SecretChat {
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift b/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
+index 130d358f..8c0d6197 100644
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Messages/Stories.swift
+@@ -2,7 +2,7 @@ import Foundation
+ import SwiftSignalKit
+ import Postbox
+ import TelegramApi
+-import Lunagram
++import LunagramGhost
+ 
+ public enum EngineStoryInputMedia {
+     case image(dimensions: PixelDimensions, data: Data, stickers: [TelegramMediaFile])
+@@ -2089,7 +2089,7 @@ func _internal_markStoryAsSeen(account: Account, peerId: PeerId, id: Int32, asPi
+             
+             // Lunagram Ghost: и счётчик просмотров не трогаем — иначе автор
+             // увидел бы тебя в списке зрителей.
+-            if LunagramSettings.ghostDontViewStories {
++            if LunagramGhostSettings.dontViewStories {
+                 return .complete()
+             }
+ 
