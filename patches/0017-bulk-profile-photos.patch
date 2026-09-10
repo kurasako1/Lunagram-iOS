@@ -1,0 +1,170 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotos.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotos.swift
+new file mode 100644
+index 00000000..48460e37
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotos.swift
+@@ -0,0 +1,54 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import PresentationDataUtils
++import AccountContext
++
++// Lunagram: удаление фото профиля пачкой, как на ПК. У Telegram их удаляют
++// по одному из галереи — с десятком старых аватарок это долго.
++
++/// Удалить свои фото профиля — все или все, кроме главного.
++///
++/// Сначала спрашиваем, сколько их, и просим подтвердить: вернуть удалённые
++/// нельзя. Сервер отдаёт за раз до сотни — больше у людей почти не бывает.
++func lunagramDeleteProfilePhotos(context: AccountContext, keepMain: Bool, present: @escaping (ViewController) -> Void) {
++    let _ = (context.engine.peers.requestPeerPhotos(peerId: context.account.peerId)
++    |> take(1)
++    |> deliverOnMainQueue).startStandalone(next: { photos in
++        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        // Главное — первое в списке, так его отдаёт сервер.
++        let targets = (keepMain ? Array(photos.dropFirst()) : photos).filter { $0.reference != nil }
++        let ok = TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++        guard !targets.isEmpty else {
++            present(textAlertController(context: context, title: nil, text: keepMain ? "Кроме главного, других фото профиля нет." : "Фото профиля нет.", actions: [ok]))
++            return
++        }
++        let question = keepMain
++            ? "Удалить \(targets.count) фото профиля, кроме главного? Вернуть их будет нельзя."
++            : "Удалить все фото профиля — \(targets.count)? Вернуть их будет нельзя."
++        present(textAlertController(context: context, title: "Фото профиля", text: question, actions: [
++            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
++            TextAlertAction(type: .destructiveAction, title: "Удалить", action: {
++                // По одному, друг за другом: разом сервер может не принять.
++                var signal: Signal<Void, NoError> = .complete()
++                for photo in targets {
++                    signal = signal |> then(context.engine.accountData.removeAccountPhoto(reference: photo.reference))
++                }
++                // Своё фото в приложении обновится, когда подтянем данные
++                // профиля заново.
++                let refresh = context.engine.peers.fetchAndUpdateCachedPeerData(peerId: context.account.peerId)
++                |> map { _ -> Void in
++                    return Void()
++                }
++                let _ = (signal
++                |> then(refresh)
++                |> deliverOnMainQueue).startStandalone(completed: {
++                    present(textAlertController(context: context, title: nil, text: "Готово: удалено \(targets.count) фото.", actions: [ok]))
++                })
++            })
++        ]))
++    })
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 423839a1..8b683d1b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -151,12 +151,14 @@ private final class LunagramSettingsControllerArguments {
+     let pick: (LunagramSettingsSection) -> Void
+     let setDim: (LunagramSettingsSection, Int) -> Void
+     let updateText: (LunagramSettingsSection, String) -> Void
++    let photoAction: (Int) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+         self.updateText = updateText
++        self.photoAction = photoAction
+     }
+ }
+ 
+@@ -182,11 +184,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+     case input(LunagramSettingsSection, String, String, String)
+     case disclosure(LunagramSettingsSection, String)
++    case photoAction(LunagramSettingsSection, Int32, String)
+     case info(LunagramSettingsSection, Int32, String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -206,6 +209,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + 50
+         case let .disclosure(section, _):
+             return section.rawValue * 100 + 5
++        case let .photoAction(section, index, _):
++            return section.rawValue * 100 + 20 + index
+         case let .info(section, index, _):
+             return section.rawValue * 100 + 90 + index
+         }
+@@ -243,6 +248,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .photoAction(lhsSection, lhsIndex, lhsTitle):
++            if case let .photoAction(rhsSection, rhsIndex, rhsTitle) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsTitle == rhsTitle {
++                return true
++            } else {
++                return false
++            }
+         case let .input(lhsSection, lhsTitle, lhsPlaceholder, lhsText):
+             if case let .input(rhsSection, rhsTitle, rhsPlaceholder, rhsText) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle, lhsPlaceholder == rhsPlaceholder, lhsText == rhsText {
+                 return true
+@@ -283,6 +294,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.pick(section)
+             })
++        case let .photoAction(_, index, title):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: {
++                arguments.photoAction(Int(index))
++            })
+         case let .input(section, title, placeholder, text):
+             return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: title, textColor: presentationData.theme.list.itemPrimaryTextColor), text: text, placeholder: placeholder, type: .regular(capitalization: false, autocorrection: false), spacing: 10.0, clearType: .onFocus, maxLength: 64, sectionId: self.section, textUpdated: { value in
+                 arguments.updateText(section, value)
+@@ -333,7 +348,9 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+ 
+         .header(.profileStatus, 0, "ПРОФИЛЬ"),
+         .disclosure(.profileStatus, "Статус в имени"),
+-        .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются."),
++        .photoAction(.profileStatus, 0, "Удалить все фото профиля"),
++        .photoAction(.profileStatus, 1, "Оставить только главное фото"),
++        .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя."),
+ 
+         .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+         .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+@@ -479,8 +496,10 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     var values: [LunagramToggle: Bool] = [:]
+     let mediaPromise = ValuePromise<LunagramMediaState>(LunagramMediaState.current(), ignoreRepeated: true)
+     let pickerHolder = LunagramPickerHolder()
+-    // Вложенные экраны раздела открываем через сам экран — он появится ниже.
++    // Вложенные экраны и окна раздела открываем через сам экран — он
++    // появится ниже.
+     var pushImpl: ((ViewController) -> Void)?
++    var presentImpl: ((ViewController) -> Void)?
+ 
+     let arguments = LunagramSettingsControllerArguments(toggle: { toggle, value in
+         toggle.set(value)
+@@ -559,6 +578,10 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+         // Поле пока одно — имя устройства. Экран не перестраиваем: поле само
+         // держит набранное, а на лету это имя никому не нужно.
+         LunagramSettings.deviceModelName = text
++    }, photoAction: { index in
++        lunagramDeleteProfilePhotos(context: context, keepMain: index == 1, present: { c in
++            presentImpl?(c)
++        })
+     })
+ 
+     let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get(), mediaPromise.get())
+@@ -574,5 +597,8 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     pushImpl = { [weak controller] c in
+         controller?.push(c)
+     }
++    presentImpl = { [weak controller] c in
++        controller?.present(c, in: .window(.root))
++    }
+     return controller
+ }
