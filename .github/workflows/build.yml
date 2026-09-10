@@ -139,14 +139,10 @@ jobs:
           echo "Что теперь умеет подписывать:"
           security find-identity -v
 
-      - name: Кэш сборки Bazel
-        uses: actions/cache@v4
+      - name: Достать кэш сборки Bazel
+        uses: actions/cache/restore@v4
         with:
           path: ~/telegram-bazel-cache
-          # Ключ уникален для каждой попытки, поэтому кэш сохраняется
-          # каждый раз; берётся же последний подходящий по началу имени.
-          # Без этого каждая новая попытка тратила бы полчаса на повторную
-          # компиляцию того же самого.
           key: bazel-${{ env.TELEGRAM_TAG }}-${{ github.run_id }}
           restore-keys: |
             bazel-${{ env.TELEGRAM_TAG }}-
@@ -161,23 +157,31 @@ jobs:
             --configurationPath=lunagram-configuration.json \
             --codesigningInformationPath=build-system/fake-codesigning \
             --buildNumber="${{ inputs.buildNumber }}" \
-            --configuration=release_arm64
+            --configuration=release_arm64 \
+            --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
+
+      - name: Сохранить кэш сборки
+        # Сохраняем даже когда падает шаг ниже: иначе час компиляции
+        # выбрасывается впустую, а упасть может любой следующий шаг.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/telegram-bazel-cache
+          key: bazel-${{ env.TELEGRAM_TAG }}-${{ github.run_id }}
 
       - name: Переименовать в Lunagram
         run: |
           set -eu
-          cd telegram-ios
-          ipa=$(find . -name "Telegram.ipa" -not -path "*/external/*" | head -1)
-          if [ -z "$ipa" ]; then
-            echo "::error::Сборка прошла, но .ipa не найден."
-            find . -name "*.ipa" -not -path "*/external/*" | head -20
+          ipa="$GITHUB_WORKSPACE/artifacts/Telegram.ipa"
+          if [ ! -f "$ipa" ]; then
+            echo "::error::Сборка прошла, но готового файла нет."
+            ls -la "$GITHUB_WORKSPACE/artifacts" || true
             exit 1
           fi
-          echo "Нашёл: $ipa"
-          ipa_full=$(cd "$(dirname "$ipa")" && pwd)/$(basename "$ipa")
+          ls -lh "$ipa"
           mkdir -p "$GITHUB_WORKSPACE/out"
           cd "$GITHUB_WORKSPACE/out"
-          unzip -q "$ipa_full"
+          unzip -q "$ipa"
           plist=Payload/Telegram.app/Info.plist
           # Имя меняем в готовом файле, а не в исходниках: так правка не
           # ломает сборочный граф Bazel и переживает обновление Telegram.
