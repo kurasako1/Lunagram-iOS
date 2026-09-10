@@ -4,10 +4,15 @@ name: Собрать Lunagram
 #
 # Исходники Telegram сюда не кладём — их полтора гигабайта. Вместо этого
 # качаем их в самой сборке на нужной версии и накладываем свои заплатки
-# из папки ios/patches. Так наш репозиторий остаётся лёгким, а обновиться
+# из папки patches. Так наш репозиторий остаётся лёгким, а обновиться
 # на новую версию Telegram — это поменять одну строчку TELEGRAM_TAG.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "patches/**"
+      - ".github/workflows/**"
   workflow_dispatch:
     inputs:
       buildNumber:
@@ -149,16 +154,33 @@ jobs:
 
       - name: Собрать
         run: |
-          set -eu
+          set -eu -o pipefail
           cd telegram-ios
           python3 build-system/Make/Make.py \
             --cacheDir="$HOME/telegram-bazel-cache" \
             build \
             --configurationPath=lunagram-configuration.json \
             --codesigningInformationPath=build-system/fake-codesigning \
-            --buildNumber="${{ inputs.buildNumber }}" \
+            --buildNumber="${{ inputs.buildNumber || github.run_number }}" \
             --configuration=release_arm64 \
-            --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
+            --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Выписать ошибки компилятора
+        # Журнал GitHub без входа не отдаёт, а пометки об ошибках на открытом
+        # репозитории читаются кем угодно. Поэтому при падении выписываем
+        # ошибки компилятора пометками — так их видно, не скачивая журнал.
+        if: failure()
+        run: |
+          set -u
+          log="$GITHUB_WORKSPACE/build.log"
+          [ -f "$log" ] || exit 0
+          # Порядок сохраняем: первой идёт корневая ошибка, остальные часто
+          # лишь её последствия. GitHub показывает не больше десяти пометок.
+          grep -E ": error: |^ERROR: " "$log" | awk '!seen[$0]++' | head -10 \
+            | while IFS= read -r line; do
+                echo "::error::${line}"
+              done
 
       - name: Сохранить кэш сборки
         # Сохраняем даже когда падает шаг ниже: иначе час компиляции
