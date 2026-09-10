@@ -1,0 +1,279 @@
+diff --git a/submodules/Lunagram/Sources/LunagramEditHistoryText.swift b/submodules/Lunagram/Sources/LunagramEditHistoryText.swift
+new file mode 100644
+index 00000000..0d01954d
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramEditHistoryText.swift
+@@ -0,0 +1,39 @@
++import Foundation
++
++/// Текст окна «История изменений»: каждая прежняя версия со временем, в
++/// конце — нынешняя.
++public enum LunagramEditHistoryText {
++    /// Сколько версий показывать. Окно не прокручивается, и длинная история
++    /// ушла бы за край экрана; самые старые отбрасываем.
++    private static let shownVersions = 8
++    /// Сколько знаков от каждой версии. Остальное — многоточием.
++    private static let shownCharacters = 300
++
++    public static func make(versions: [(date: Int32, text: String)], current: String) -> String {
++        let formatter = DateFormatter()
++        formatter.dateFormat = "d MMM, HH:mm"
++        formatter.locale = Locale(identifier: "ru_RU")
++
++        var lines: [String] = []
++        let shown = versions.suffix(shownVersions)
++        if versions.count > shown.count {
++            lines.append("…и ещё \(versions.count - shown.count) раньше")
++        }
++        for version in shown {
++            let date = formatter.string(from: Date(timeIntervalSince1970: TimeInterval(version.date)))
++            lines.append("\(date)\n\(trimmed(version.text))")
++        }
++        lines.append("Сейчас\n\(trimmed(current))")
++        return lines.joined(separator: "\n\n")
++    }
++
++    private static func trimmed(_ text: String) -> String {
++        if text.isEmpty {
++            return "(без текста)"
++        }
++        if text.count <= shownCharacters {
++            return text
++        }
++        return String(text.prefix(shownCharacters)) + "…"
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 36c0e837..2dca8645 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -159,6 +159,17 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Хранить прежний текст сообщения, когда его правят.
++    public static var keepEditHistory: Bool {
++        get {
++            return LunagramSpySettings.keepEditHistory
++        }
++        set {
++            LunagramSpySettings.keepEditHistory = newValue
++            changed()
++        }
++    }
++
+     // MARK: Живые обои
+ 
+     /// Видео вместо обоев переписки.
+diff --git a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+index a797998b..bdb428c9 100644
+--- a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+@@ -9,6 +9,7 @@ public enum LunagramSpySettings {
+ 
+     private enum Key {
+         static let keepDeleted = "lunagram.spy.keepDeleted"
++        static let keepEditHistory = "lunagram.spy.keepEditHistory"
+     }
+ 
+     /// Удалённое собеседником не стирать, а оставлять с пометкой.
+@@ -20,4 +21,14 @@ public enum LunagramSpySettings {
+             defaults.set(newValue, forKey: Key.keepDeleted)
+         }
+     }
++
++    /// Хранить прежний текст сообщения, когда его правят.
++    public static var keepEditHistory: Bool {
++        get {
++            return defaults.bool(forKey: Key.keepEditHistory)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.keepEditHistory)
++        }
++    }
+ }
+diff --git a/submodules/TelegramCore/Sources/Account/AccountManager.swift b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+index 8ffdb771..7509055b 100644
+--- a/submodules/TelegramCore/Sources/Account/AccountManager.swift
++++ b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+@@ -140,6 +140,8 @@ private var declaredEncodables: Void = {
+     declareEncodable(EditedMessageAttribute.self, f: { EditedMessageAttribute(decoder: $0) })
+     // Lunagram: пометка «удалено у собеседника».
+     declareEncodable(LunagramDeletedMessageAttribute.self, f: { LunagramDeletedMessageAttribute(decoder: $0) })
++    // Lunagram: история изменений.
++    declareEncodable(LunagramEditHistoryAttribute.self, f: { LunagramEditHistoryAttribute(decoder: $0) })
+     declareEncodable(ReplyMarkupMessageAttribute.self, f: { ReplyMarkupMessageAttribute(decoder: $0) })
+     declareEncodable(OutgoingChatContextResultMessageAttribute.self, f: { OutgoingChatContextResultMessageAttribute(decoder: $0) })
+     declareEncodable(HttpReferenceMediaResource.self, f: { HttpReferenceMediaResource(decoder: $0) })
+diff --git a/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift b/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
+index 31de6fa7..44441457 100644
+--- a/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
++++ b/submodules/TelegramCore/Sources/State/AccountStateManagementUtils.swift
+@@ -4529,6 +4529,9 @@ func replayFinalState(
+                         }
+                     }
+                     
++                    // Lunagram: прежний текст — в историю изменений.
++                    lunagramKeepEditHistory(previousMessage: previousMessage, updatedText: message.text, attributes: &updatedAttributes)
++
+                     if let message = locallyRenderedMessage(message: message, peers: peers) {
+                         generatedEvent = reactionGeneratedEvent(previousMessage.reactionsAttribute, message.reactionsAttribute, message: message, transaction: transaction)
+                     }
+diff --git a/submodules/TelegramCore/Sources/State/LunagramEditHistory.swift b/submodules/TelegramCore/Sources/State/LunagramEditHistory.swift
+new file mode 100644
+index 00000000..c1247430
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/State/LunagramEditHistory.swift
+@@ -0,0 +1,26 @@
++import Foundation
++import Postbox
++import LunagramGhost
++
++/// Lunagram: история изменений.
++///
++/// Зовётся, когда сервер прислал новую версию сообщения, прямо перед тем, как
++/// Telegram заменит ею старую. Новая версия приходит без нашей пометки,
++/// поэтому историю переносим всегда — даже если сохранение потом выключили,
++/// уже собранное не теряется.
++func lunagramKeepEditHistory(previousMessage: Message, updatedText: String, attributes: inout [MessageAttribute]) {
++    var versions = (previousMessage.attributes.first(where: { $0 is LunagramEditHistoryAttribute }) as? LunagramEditHistoryAttribute)?.versions ?? []
++    // Правкой приходит не только новый текст: число просмотров, кнопки,
++    // реакции. Храним, только если поменялся сам текст.
++    if LunagramSpySettings.keepEditHistory && previousMessage.text != updatedText {
++        let date = previousMessage.editedTime ?? previousMessage.timestamp
++        versions.append(LunagramEditHistoryAttribute.Version(date: date, text: previousMessage.text))
++        if versions.count > LunagramEditHistoryAttribute.limit {
++            versions.removeFirst(versions.count - LunagramEditHistoryAttribute.limit)
++        }
++    }
++    attributes.removeAll(where: { $0 is LunagramEditHistoryAttribute })
++    if !versions.isEmpty {
++        attributes.append(LunagramEditHistoryAttribute(versions: versions))
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramEditHistoryAttribute.swift b/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramEditHistoryAttribute.swift
+new file mode 100644
+index 00000000..1eca4949
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/SyncCore/SyncCore_LunagramEditHistoryAttribute.swift
+@@ -0,0 +1,34 @@
++import Foundation
++import Postbox
++
++/// Lunagram: история изменений сообщения — каким оно было до правок.
++///
++/// Версии по порядку, старые первыми. date — с какого момента текст был
++/// таким: время отправки или прошлой правки.
++public final class LunagramEditHistoryAttribute: MessageAttribute {
++    public struct Version {
++        public let date: Int32
++        public let text: String
++    }
++
++    /// Больше не храним: сообщение, которое правят каждую минуту, иначе
++    /// разрослось бы в базе без меры.
++    public static let limit = 20
++
++    public let versions: [Version]
++
++    public init(versions: [Version]) {
++        self.versions = versions
++    }
++
++    required public init(decoder: PostboxDecoder) {
++        let dates = decoder.decodeInt32ArrayForKey("d")
++        let texts = decoder.decodeStringArrayForKey("t")
++        self.versions = zip(dates, texts).map { Version(date: $0.0, text: $0.1) }
++    }
++
++    public func encode(_ encoder: PostboxEncoder) {
++        encoder.encodeInt32Array(self.versions.map { $0.date }, forKey: "d")
++        encoder.encodeStringArray(self.versions.map { $0.text }, forKey: "t")
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 45865d3d..ba6de563 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -31,6 +31,7 @@ private enum LunagramToggle: Int32 {
+     case hideOwnPhone
+     case avatarFrame
+     case keepDeleted
++    case keepEditHistory
+ 
+     var value: Bool {
+         switch self {
+@@ -58,6 +59,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.avatarFrameEnabled
+         case .keepDeleted:
+             return LunagramSettings.keepDeletedMessages
++        case .keepEditHistory:
++            return LunagramSettings.keepEditHistory
+         }
+     }
+ 
+@@ -87,6 +90,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.avatarFrameEnabled = value
+         case .keepDeleted:
+             LunagramSettings.keepDeletedMessages = value
++        case .keepEditHistory:
++            LunagramSettings.keepEditHistory = value
+         }
+     }
+ 
+@@ -116,6 +121,8 @@ private enum LunagramToggle: Int32 {
+             return "Рамка вокруг аватарки"
+         case .keepDeleted:
+             return "Сохранять удалённые"
++        case .keepEditHistory:
++            return "Сохранять историю изменений"
+         }
+     }
+ }
+@@ -305,9 +312,10 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
+         .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
+ 
+-        .header(.spy, 0, "УДАЛЁННЫЕ СООБЩЕНИЯ"),
++        .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
+         .toggle(.spy, .keepDeleted, value(.keepDeleted)),
+-        .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются."),
++        .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
++        .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений»."),
+ 
+         .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+         .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index 07cef5bb..95e93d15 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -38,6 +38,7 @@ import ChatMessageItemView
+ import ChatMessageBubbleItemNode
+ import AdsInfoScreen
+ import AdsReportScreen
++import Lunagram
+  
+ private struct MessageContextMenuData {
+     let starStatus: Bool?
+@@ -1262,7 +1263,20 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+                 f(.dismissWithoutContent)
+             })))
+         }
+-        
++
++        // Lunagram: история изменений — каким сообщение было до правок.
++        if let history = message.attributes.first(where: { $0 is LunagramEditHistoryAttribute }) as? LunagramEditHistoryAttribute, !history.versions.isEmpty {
++            actions.append(.action(ContextMenuActionItem(text: "История изменений", icon: { theme in
++                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Edit"), color: theme.actionSheet.primaryTextColor)
++            }, action: { c, _ in
++                c?.dismiss(completion: {
++                    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++                    let text = LunagramEditHistoryText.make(versions: history.versions.map { (date: $0.date, text: $0.text) }, current: message.text)
++                    controllerInteraction.presentController(textAlertController(context: context, title: "История изменений", text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
++                })
++            })))
++        }
++
+         var messageText: String = ""
+         for message in messages {
+             if !message.text.isEmpty {
