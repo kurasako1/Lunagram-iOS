@@ -1,0 +1,297 @@
+diff --git a/submodules/Lunagram/Sources/LunagramRoundVideoMaker.swift b/submodules/Lunagram/Sources/LunagramRoundVideoMaker.swift
+new file mode 100644
+index 00000000..597ea194
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramRoundVideoMaker.swift
+@@ -0,0 +1,108 @@
++import AVFoundation
++import UIKit
++
++/// Кружок из любого видео — как на ПК: ролик обрезается до квадрата по
++/// центру, ужимается до размера кружка и укорачивается до минуты. Звук
++/// остаётся.
++///
++/// Здесь только сама обработка ролика. Отправляет готовый файл Telegram —
++/// тем же путём, что и записанный с камеры кружок.
++public enum LunagramRoundVideoMaker {
++    /// Сторона кружка в точках видео. Столько же пишет камера Telegram.
++    public static let side: Int = 400
++    /// Кружок у Telegram не длиннее минуты.
++    public static let maxDuration: Double = 60.0
++
++    public struct Result {
++        public let url: URL
++        public let duration: Double
++        public let thumbnail: UIImage?
++    }
++
++    public enum MakeError: Error {
++        case noVideo
++        case exportFailed
++    }
++
++    /// Делает кружок из ролика. Завершение приходит не на главной очереди.
++    public static func make(from source: URL, completion: @escaping (Swift.Result<Result, MakeError>) -> Void) {
++        // Без расширения система не узнаёт в файле видео, а Telegram хранит
++        // скачанное как раз без него — работаем с копией.
++        let workDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("lunagram-round-\(UUID().uuidString)", isDirectory: true)
++        let input = workDirectory.appendingPathComponent("input.mp4")
++        let output = workDirectory.appendingPathComponent("video.mp4")
++        do {
++            try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true, attributes: nil)
++            try FileManager.default.copyItem(at: source, to: input)
++        } catch {
++            completion(.failure(.noVideo))
++            return
++        }
++
++        let asset = AVURLAsset(url: input)
++        guard let track = asset.tracks(withMediaType: .video).first else {
++            completion(.failure(.noVideo))
++            return
++        }
++        let duration = min(CMTimeGetSeconds(asset.duration), maxDuration)
++        guard duration > 0.0 else {
++            completion(.failure(.noVideo))
++            return
++        }
++        let timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: duration, preferredTimescale: 600))
++
++        // Ролики с телефона часто сняты боком и лишь помечены поворотом.
++        // Сначала поворачиваем, потом режем квадрат по центру и ужимаем.
++        let rotated = CGRect(origin: .zero, size: track.naturalSize).applying(track.preferredTransform)
++        let width = abs(rotated.width)
++        let height = abs(rotated.height)
++        let crop = min(width, height)
++        guard crop > 0.0 else {
++            completion(.failure(.noVideo))
++            return
++        }
++        let scale = CGFloat(side) / crop
++        let transform = track.preferredTransform
++            .concatenating(CGAffineTransform(translationX: -rotated.minX, y: -rotated.minY))
++            .concatenating(CGAffineTransform(translationX: -(width - crop) / 2.0, y: -(height - crop) / 2.0))
++            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
++
++        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
++        layerInstruction.setTransform(transform, at: .zero)
++        let instruction = AVMutableVideoCompositionInstruction()
++        instruction.timeRange = timeRange
++        instruction.layerInstructions = [layerInstruction]
++        let videoComposition = AVMutableVideoComposition()
++        videoComposition.renderSize = CGSize(width: side, height: side)
++        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
++        videoComposition.instructions = [instruction]
++
++        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
++            completion(.failure(.exportFailed))
++            return
++        }
++        export.outputURL = output
++        export.outputFileType = .mp4
++        export.videoComposition = videoComposition
++        export.timeRange = timeRange
++        export.shouldOptimizeForNetworkUse = true
++        export.exportAsynchronously {
++            try? FileManager.default.removeItem(at: input)
++            guard export.status == .completed else {
++                completion(.failure(.exportFailed))
++                return
++            }
++            completion(.success(Result(url: output, duration: duration, thumbnail: firstFrame(of: output))))
++        }
++    }
++
++    /// Первый кадр — превью, пока кружок грузится.
++    private static func firstFrame(of url: URL) -> UIImage? {
++        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
++        generator.appliesPreferredTrackTransform = true
++        guard let image = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
++            return nil
++        }
++        return UIImage(cgImage: image)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 21b5f66f..51c138fb 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -37,6 +37,7 @@ public final class LunagramSettings {
+         static let statusTemplates = "lunagram.status.templates"
+         static let personalReactions = "lunagram.reactions.personal"
+         static let showRoundSource = "lunagram.messages.showRoundSource"
++        static let roundFromVideo = "lunagram.messages.roundFromVideo"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -449,6 +450,21 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// «Отправить кружком» у любого видео в чате. Включено по умолчанию:
++    /// это лишь пункт в меню видео, мешать ему нечем.
++    public static var roundFromVideo: Bool {
++        get {
++            guard defaults.object(forKey: Key.roundFromVideo) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.roundFromVideo)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.roundFromVideo)
++            changed()
++        }
++    }
++
+     // MARK: Своя быстрая реакция для переписки
+ 
+     /// Реакция, которую двойное касание ставит в этой переписке. Пусто —
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 32d0e402..3cabbda3 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -33,6 +33,7 @@ private enum LunagramToggle: Int32 {
+     case keepDeleted
+     case keepEditHistory
+     case showRoundSource
++    case roundFromVideo
+ 
+     var value: Bool {
+         switch self {
+@@ -64,6 +65,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.keepEditHistory
+         case .showRoundSource:
+             return LunagramSettings.showRoundSource
++        case .roundFromVideo:
++            return LunagramSettings.roundFromVideo
+         }
+     }
+ 
+@@ -97,6 +100,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.keepEditHistory = value
+         case .showRoundSource:
+             LunagramSettings.showRoundSource = value
++        case .roundFromVideo:
++            LunagramSettings.roundFromVideo = value
+         }
+     }
+ 
+@@ -130,6 +135,8 @@ private enum LunagramToggle: Int32 {
+             return "Сохранять историю изменений"
+         case .showRoundSource:
+             return "Откуда записан кружок"
++        case .roundFromVideo:
++            return "Кружок из любого видео"
+         }
+     }
+ }
+@@ -358,7 +365,8 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+ 
+         .header(.messages, 0, "СООБЩЕНИЯ"),
+         .toggle(.messages, .showRoundSource, value(.showRoundSource)),
+-        .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка."),
++        .toggle(.messages, .roundFromVideo, value(.roundFromVideo)),
++        .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат."),
+ 
+         .header(.profileStatus, 0, "ПРОФИЛЬ"),
+         .disclosure(.profileStatus, "Статус в имени"),
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index c67c2dd1..56dcb315 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1289,6 +1289,24 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             })))
+         }
+ 
++        // Lunagram: кружок из любого видео — у видео в меню.
++        if LunagramSettings.roundFromVideo, message.id.namespace == Namespaces.Message.Cloud, let videoFile = message.media.first(where: { media in
++            guard let file = media as? TelegramMediaFile else {
++                return false
++            }
++            return file.isVideo && !file.isInstantVideo && !file.isAnimated
++        }) as? TelegramMediaFile {
++            actions.append(.action(ContextMenuActionItem(text: "Отправить кружком", icon: { theme in
++                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Forward"), color: theme.actionSheet.primaryTextColor)
++            }, action: { c, _ in
++                c?.dismiss(completion: {
++                    lunagramSendVideoAsRound(context: context, message: message, file: videoFile, present: { controller in
++                        controllerInteraction.presentController(controller, nil)
++                    })
++                })
++            })))
++        }
++
+         // Lunagram: своя быстрая реакция для этой переписки.
+         if message.id.namespace == Namespaces.Message.Cloud {
+             let reactionPeerId = message.id.peerId
+diff --git a/submodules/TelegramUI/Sources/LunagramRoundFromVideo.swift b/submodules/TelegramUI/Sources/LunagramRoundFromVideo.swift
+new file mode 100644
+index 00000000..4711ff8a
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramRoundFromVideo.swift
+@@ -0,0 +1,65 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import TelegramPresentationData
++import PresentationDataUtils
++import AccountContext
++import SaveToCameraRoll
++import OverlayStatusController
++import Lunagram
++
++// Lunagram: кружок из любого видео, как на ПК. У любого видео в чате в
++// меню есть «Отправить кружком»: ролик обрезается до квадрата по центру,
++// ужимается, укорачивается до минуты и уходит в тот же чат кружком — тем же
++// путём, что и записанный с камеры.
++
++func lunagramSendVideoAsRound(context: AccountContext, message: Message, file: TelegramMediaFile, present: @escaping (ViewController) -> Void) {
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let progress = OverlayStatusController(theme: presentationData.theme, type: .loading(cancelled: nil))
++    present(progress)
++
++    let fail = {
++        progress.dismiss()
++        present(textAlertController(context: context, title: nil, text: "Не получилось сделать кружок из этого видео.", actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]))
++    }
++
++    // Видео может быть ещё не скачано — докачиваем, как «Сохранить в галерею».
++    let _ = (fetchMediaData(context: context, userLocation: .peer(message.id.peerId), mediaReference: .message(message: MessageReference(message), media: file))
++    |> mapToSignal { state, _ -> Signal<String, NoError> in
++        if case let .data(data) = state, data.isComplete {
++            return .single(data.path)
++        }
++        return .complete()
++    }
++    |> take(1)
++    |> deliverOnMainQueue).startStandalone(next: { path in
++        LunagramRoundVideoMaker.make(from: URL(fileURLWithPath: path), completion: { result in
++            Queue.mainQueue().async {
++                guard case let .success(round) = result, let data = try? Data(contentsOf: round.url) else {
++                    fail()
++                    return
++                }
++                try? FileManager.default.removeItem(at: round.url.deletingLastPathComponent())
++
++                let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
++                context.engine.resources.storeResourceData(id: EngineMediaResource.Id(resource.id), data: data, synchronous: true)
++
++                var previewRepresentations: [TelegramMediaImageRepresentation] = []
++                if let thumbnail = round.thumbnail, let thumbnailData = thumbnail.jpegData(compressionQuality: 0.6) {
++                    let thumbnailResource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
++                    context.engine.resources.storeResourceData(id: EngineMediaResource.Id(thumbnailResource.id), data: thumbnailData)
++                    previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnail.size), resource: thumbnailResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
++                }
++
++                let side = Int32(LunagramRoundVideoMaker.side)
++                let media = TelegramMediaFile(fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: Int64(data.count), attributes: [.FileName(fileName: "video.mp4"), .Video(duration: round.duration, size: PixelDimensions(width: side, height: side), flags: [.instantRoundVideo], preloadSize: nil, coverTime: nil, videoCodec: nil)], alternativeRepresentations: [])
++
++                let _ = enqueueMessages(account: context.account, peerId: message.id.peerId, messages: [.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), threadId: message.threadId, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])]).startStandalone()
++                progress.dismiss()
++            }
++        })
++    })
++}
