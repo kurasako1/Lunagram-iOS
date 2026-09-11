@@ -1,0 +1,107 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 068205fd..9f861dcb 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -50,6 +50,7 @@ public final class LunagramSettings {
+         static let personalReactions = "lunagram.reactions.personal"
+         static let showRoundSource = "lunagram.messages.showRoundSource"
+         static let roundFromVideo = "lunagram.messages.roundFromVideo"
++        static let showPeerId = "lunagram.messages.showPeerId"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -477,6 +478,17 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Показывать числовой ID в профиле, с копированием по нажатию.
++    public static var showPeerId: Bool {
++        get {
++            return defaults.bool(forKey: Key.showPeerId)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.showPeerId)
++            changed()
++        }
++    }
++
+     // MARK: Своя быстрая реакция для переписки
+ 
+     /// Реакция, которую двойное касание ставит в этой переписке. Пусто —
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 37ef7500..4c43a70c 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -34,6 +34,7 @@ private enum LunagramToggle: Int32 {
+     case keepEditHistory
+     case showRoundSource
+     case roundFromVideo
++    case showPeerId
+     case avatarFrameSparkle
+ 
+     var value: Bool {
+@@ -68,6 +69,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showRoundSource
+         case .roundFromVideo:
+             return LunagramSettings.roundFromVideo
++        case .showPeerId:
++            return LunagramSettings.showPeerId
+         case .avatarFrameSparkle:
+             return LunagramSettings.avatarFrameSparkle
+         }
+@@ -105,6 +108,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showRoundSource = value
+         case .roundFromVideo:
+             LunagramSettings.roundFromVideo = value
++        case .showPeerId:
++            LunagramSettings.showPeerId = value
+         case .avatarFrameSparkle:
+             LunagramSettings.avatarFrameSparkle = value
+         }
+@@ -142,6 +147,8 @@ private enum LunagramToggle: Int32 {
+             return "Откуда записан кружок"
+         case .roundFromVideo:
+             return "Кружок из любого видео"
++        case .showPeerId:
++            return "Показывать ID в профиле"
+         case .avatarFrameSparkle:
+             return "Искры вокруг рамки"
+         }
+@@ -522,7 +529,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .header(.messages, 0, "СООБЩЕНИЯ"),
+             .toggle(.messages, .showRoundSource, value(.showRoundSource)),
+             .toggle(.messages, .roundFromVideo, value(.roundFromVideo)),
+-            .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат.")
++            .toggle(.messages, .showPeerId, value(.showPeerId)),
++            .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат.\n\nID в профиле — числовой номер человека или канала, копируется по нажатию.")
+         ]
+     case .profileStatus:
+         return [
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index c2df6fda..4b72ee2e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -84,6 +84,7 @@ func infoItems(
+         let ItemPersonalChannelHeader = 2000
+         let ItemPersonalChannel = 2001
+         let ItemPhoneNumber = 3000
++        let ItemLunagramId = 3050
+         let ItemUsername = 3001
+         let ItemBirthdate = 3002
+         let ItemAbout = 3003
+@@ -177,6 +178,15 @@ func infoItems(
+                 interaction.requestLayout(animated)
+             }))
+         }
++        // Lunagram: числовой ID, копируется по нажатию — как на ПК.
++        if LunagramSettings.showPeerId {
++            let idValue = "\(user.id.id._internalGetInt64Value())"
++            items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(id: ItemLunagramId, label: "ID", text: idValue, textColor: .primary, action: { _, _ in
++                UIPasteboard.general.string = idValue
++            }, requestLayout: { animated in
++                interaction.requestLayout(animated)
++            }))
++        }
+         if let mainUsername = user.addressName {
+             var additionalUsernames: String?
+             let usernames = user.usernames.filter { $0.isActive && $0.username != mainUsername }
