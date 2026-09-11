@@ -1,0 +1,613 @@
+diff --git a/submodules/Display/BUILD b/submodules/Display/BUILD
+index 8e56c1d1..358835c0 100644
+--- a/submodules/Display/BUILD
++++ b/submodules/Display/BUILD
+@@ -16,6 +16,7 @@ swift_library(
+     	"//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+         "//submodules/Markdown:Markdown",
+         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
++        "//submodules/LunagramFont",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/Display/Source/Font.swift b/submodules/Display/Source/Font.swift
+index 4f1a4c0c..8856c76a 100644
+--- a/submodules/Display/Source/Font.swift
++++ b/submodules/Display/Source/Font.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import UIKit
++import LunagramFont
+ 
+ public struct Font {
+     public enum Design {
+@@ -158,9 +159,25 @@ public struct Font {
+ 
+     private static let cache = Cache()
+     
++    /// Lunagram: свой шрифт вместо системного, если он выбран.
++    ///
++    /// Моноширинный и «камеру» не трогаем: в первом лежит код и ссылки, где
++    /// важна ровная ширина, второй — служебный шрифт съёмки.
++    private static func lunagramFont(size: CGFloat, design: Design, weight: Weight, traits: Traits) -> UIFont? {
++        switch design {
++        case .monospace, .camera:
++            return nil
++        default:
++            return LunagramFontSettings.font(size: size, weight: weight.weight, italic: traits.contains(.italic))
++        }
++    }
++
+     public static func with(size: CGFloat, design: Design = .regular, weight: Weight = .regular, width: Width = .standard, traits: Traits = []) -> UIFont {
++        if let font = lunagramFont(size: size, design: design, weight: weight, traits: traits) {
++            return font
++        }
+         let key = "\(size)_\(design.key)_\(weight.key)_\(width.key)_\(traits.rawValue)"
+-        
++
+         if let cachedFont = self.cache.get(key) {
+             return cachedFont
+         }
+@@ -279,18 +296,30 @@ public struct Font {
+     }
+     
+     public static func regular(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .regular, italic: false) {
++            return font
++        }
+         return UIFont.systemFont(ofSize: size)
+     }
+-    
++
+     public static func medium(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .medium, italic: false) {
++            return font
++        }
+         return UIFont.systemFont(ofSize: size, weight: UIFont.Weight.medium)
+     }
+-    
++
+     public static func semibold(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .semibold, italic: false) {
++            return font
++        }
+         return UIFont.systemFont(ofSize: size, weight: UIFont.Weight.semibold)
+     }
+-    
++
+     public static func bold(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .bold, italic: false) {
++            return font
++        }
+         if #available(iOS 8.2, *) {
+             return UIFont.boldSystemFont(ofSize: size)
+         } else {
+@@ -303,10 +332,16 @@ public struct Font {
+     }
+     
+     public static func light(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .light, italic: false) {
++            return font
++        }
+         return UIFont.systemFont(ofSize: size, weight: UIFont.Weight.light)
+     }
+-    
++
+     public static func semiboldItalic(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .semibold, italic: true) {
++            return font
++        }
+         if let descriptor = UIFont.systemFont(ofSize: size).fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) {
+             return UIFont(descriptor: descriptor, size: size)
+         } else {
+@@ -331,6 +366,9 @@ public struct Font {
+     }
+     
+     public static func italic(_ size: CGFloat) -> UIFont {
++        if let font = LunagramFontSettings.font(size: size, weight: .regular, italic: true) {
++            return font
++        }
+         return UIFont.italicSystemFont(ofSize: size)
+     }
+ }
+diff --git a/submodules/Lunagram/BUILD b/submodules/Lunagram/BUILD
+index 50c1724e..88e53eeb 100644
+--- a/submodules/Lunagram/BUILD
++++ b/submodules/Lunagram/BUILD
+@@ -5,8 +5,8 @@ load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
+ # могла подключить любая часть приложения, даже самая низкоуровневая,
+ # вроде фона переписки.
+ #
+-# Кроме Ghost: его выключатели лежат в LunagramGhost, потому что их читает
+-# TelegramCore. Подробности — в BUILD того модуля.
++# Кроме Ghost и шрифта: их читают TelegramCore и Display, поэтому они живут
++# в LunagramGhost и LunagramFont. Подробности — в BUILD тех модулей.
+ swift_library(
+     name = "Lunagram",
+     module_name = "Lunagram",
+@@ -18,6 +18,7 @@ swift_library(
+     ],
+     deps = [
+         "//submodules/LunagramGhost",
++        "//submodules/LunagramFont",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1f59eede..98627ee1 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -1,6 +1,7 @@
+ import Foundation
+ import CoreGraphics
+ import ImageIO
++import LunagramFont
+ import LunagramGhost
+ 
+ /// Настройки Lunagram.
+@@ -200,6 +201,41 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    // MARK: Свой шрифт интерфейса
++    //
++    // Само значение — в LunagramFont, его читает Display. Здесь переходники,
++    // чтобы экран настроек ходил в одно место.
++
++    /// Включён ли свой шрифт.
++    public static var customFontEnabled: Bool {
++        get { return LunagramFontSettings.isEnabled }
++        set {
++            LunagramFontSettings.isEnabled = newValue
++            changed()
++        }
++    }
++
++    /// Название выбранного шрифта, или `nil`, если файла нет.
++    public static var customFontTitle: String? {
++        return LunagramFontSettings.title
++    }
++
++    public static var hasCustomFont: Bool {
++        return LunagramFontSettings.hasFont
++    }
++
++    /// Забирает файл шрифта себе.
++    public static func importFont(from source: URL) throws {
++        try LunagramFontSettings.importFont(from: source)
++        changed()
++    }
++
++    /// Убирает свой шрифт — вернётся системный.
++    public static func clearCustomFont() {
++        LunagramFontSettings.clearFont()
++        changed()
++    }
++
+     // MARK: Живые обои
+ 
+     /// Видео вместо обоев переписки.
+diff --git a/submodules/LunagramFont/BUILD b/submodules/LunagramFont/BUILD
+new file mode 100644
+index 00000000..97d98a8f
+--- /dev/null
++++ b/submodules/LunagramFont/BUILD
+@@ -0,0 +1,21 @@
++load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
++
++# Свой шрифт интерфейса — отдельно от остального Lunagram.
++#
++# Его читает Display, самый низ приложения: через него идёт весь текст.
++# Всё, от чего Display зависит, при правке пересобирает приложение целиком.
++# Поэтому здесь только шрифт, и меняется это редко. Та же причина, по
++# которой Ghost живёт в LunagramGhost.
++swift_library(
++    name = "LunagramFont",
++    module_name = "LunagramFont",
++    srcs = glob([
++        "Sources/**/*.swift",
++    ]),
++    copts = [
++        "-warnings-as-errors",
++    ],
++    visibility = [
++        "//visibility:public",
++    ],
++)
+diff --git a/submodules/LunagramFont/Sources/LunagramFontSettings.swift b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+new file mode 100644
+index 00000000..c3c42282
+--- /dev/null
++++ b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+@@ -0,0 +1,199 @@
++import CoreText
++import Foundation
++import UIKit
++
++/// Свой шрифт на весь интерфейс.
++///
++/// Живёт отдельным крошечным модулем по той же причине, что и Ghost: его
++/// читает `Display` — самый низ приложения, через него идёт вообще весь
++/// текст. Если бы шрифт лежал в общем модуле Lunagram, каждая мелкая
++/// правка любой нашей функции пересобирала бы всё приложение. Здесь только
++/// то, что нужно `Display`, и меняется это редко.
++public enum LunagramFontSettings {
++    private static let defaults = UserDefaults.standard
++
++    private enum Key {
++        static let enabled = "lunagram.font.enabled"
++        static let file = "lunagram.font.file"
++        static let title = "lunagram.font.title"
++    }
++
++    /// Сообщается, когда шрифт сменили: экраны по ней перерисовываются.
++    public static let didChangeNotification = Notification.Name("LunagramFontSettings.didChange")
++
++    // Всё ниже — под замком: `Font.regular(...)` зовут и с главной очереди,
++    // и с фоновых, где Telegram считает разметку.
++    private static let lock = NSLock()
++    private static var cache: [String: UIFont] = [:]
++    private static var registeredFile: String?
++    private static var familyName: String?
++    private static var enabledCache: Bool?
++
++    /// Включён ли свой шрифт. Значение держим в памяти: его спрашивают на
++    /// каждую строчку текста, а не раз в экран.
++    public static var isEnabled: Bool {
++        get {
++            lock.lock()
++            defer { lock.unlock() }
++            if let enabledCache = self.enabledCache {
++                return enabledCache
++            }
++            let value = defaults.bool(forKey: Key.enabled)
++            self.enabledCache = value
++            return value
++        }
++        set {
++            defaults.set(newValue, forKey: Key.enabled)
++            invalidate()
++        }
++    }
++
++    /// Как называется выбранный шрифт — показываем в настройках.
++    public static var title: String? {
++        return defaults.string(forKey: Key.title)
++    }
++
++    /// Есть ли вообще выбранный файл шрифта.
++    public static var hasFont: Bool {
++        return defaults.string(forKey: Key.file) != nil
++    }
++
++    /// Забирает файл шрифта себе. Имя семейства читаем из самого файла:
++    /// у шрифта оно своё и с именем файла обычно не совпадает.
++    public static func importFont(from source: URL) throws {
++        let folder = try lunagramFolder()
++        let ext = source.pathExtension.isEmpty ? "ttf" : source.pathExtension
++        let name = "font-\(UUID().uuidString).\(ext)"
++        let target = folder.appendingPathComponent(name)
++        // Файл из «Файлов» лежит в песочнице чужого приложения — читаем
++        // содержимое, а не переносим ссылку.
++        let data = try Data(contentsOf: source)
++        try data.write(to: target)
++
++        guard let family = readFamilyName(of: target) else {
++            try? FileManager.default.removeItem(at: target)
++            throw ImportError.notAFont
++        }
++
++        clearStoredFile()
++        defaults.set(name, forKey: Key.file)
++        defaults.set(family, forKey: Key.title)
++        defaults.set(true, forKey: Key.enabled)
++        invalidate()
++    }
++
++    /// Убирает свой шрифт — вернётся родной системный.
++    public static func clearFont() {
++        clearStoredFile()
++        defaults.removeObject(forKey: Key.title)
++        defaults.set(false, forKey: Key.enabled)
++        invalidate()
++    }
++
++    /// Шрифт под запрошенный размер и насыщенность, или `nil` — тогда
++    /// `Display` возьмёт родной системный.
++    ///
++    /// Насыщенность и наклон подмешиваем поверх: у взятого со стороны
++    /// шрифта обычно одно начертание, а Telegram просит и жирное, и
++    /// курсив. Где их нет, останется обычное — это лучше, чем потерять
++    /// свой шрифт на половине надписей.
++    public static func font(size: CGFloat, weight: UIFont.Weight, italic: Bool) -> UIFont? {
++        guard isEnabled else {
++            return nil
++        }
++        let key = "\(size)_\(weight.rawValue)_\(italic ? 1 : 0)"
++
++        lock.lock()
++        if let cached = cache[key] {
++            lock.unlock()
++            return cached
++        }
++        let family = self.resolvedFamily()
++        lock.unlock()
++
++        guard let family = family, let base = UIFont(name: family, size: size) else {
++            return nil
++        }
++
++        var traits: UIFontDescriptor.SymbolicTraits = []
++        // UIFont.Weight сравнивать напрямую нельзя — сравниваем числа.
++        if weight.rawValue >= UIFont.Weight.semibold.rawValue {
++            traits.insert(.traitBold)
++        }
++        if italic {
++            traits.insert(.traitItalic)
++        }
++        var font = base
++        if !traits.isEmpty, let descriptor = base.fontDescriptor.withSymbolicTraits(traits) {
++            font = UIFont(descriptor: descriptor, size: size)
++        }
++
++        lock.lock()
++        cache[key] = font
++        lock.unlock()
++        return font
++    }
++
++    // MARK: Внутреннее
++
++    private enum ImportError: Error {
++        case notAFont
++    }
++
++    /// Подключает файл шрифта к системе, если ещё не подключён, и
++    /// возвращает имя семейства. Звать только под замком.
++    private static func resolvedFamily() -> String? {
++        guard let fileName = defaults.string(forKey: Key.file) else {
++            return nil
++        }
++        if fileName == registeredFile, let familyName = self.familyName {
++            return familyName
++        }
++        guard let folder = try? lunagramFolder() else {
++            return nil
++        }
++        let url = folder.appendingPathComponent(fileName)
++        // Подключаем в своё приложение; если уже подключён — это не ошибка.
++        CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
++        let family = readFamilyName(of: url)
++        registeredFile = fileName
++        self.familyName = family
++        return family
++    }
++
++    /// Имя, по которому шрифт потом можно попросить у системы.
++    private static func readFamilyName(of url: URL) -> String? {
++        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor], let first = descriptors.first else {
++            return nil
++        }
++        let font = CTFontCreateWithFontDescriptor(first, 0.0, nil)
++        return CTFontCopyPostScriptName(font) as String
++    }
++
++    private static func clearStoredFile() {
++        if let folder = try? lunagramFolder(), let name = defaults.string(forKey: Key.file) {
++            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
++        }
++        defaults.removeObject(forKey: Key.file)
++    }
++
++    private static func invalidate() {
++        lock.lock()
++        cache.removeAll()
++        registeredFile = nil
++        familyName = nil
++        enabledCache = nil
++        lock.unlock()
++        NotificationCenter.default.post(name: didChangeNotification, object: nil)
++    }
++
++    /// Та же папка, что у остального Lunagram. Повторена здесь нарочно:
++    /// этот модуль не должен зависеть от общего, иначе вернётся долгая
++    /// пересборка, ради ухода от которой он и заведён.
++    private static func lunagramFolder() throws -> URL {
++        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
++        let folder = base.appendingPathComponent("Lunagram", isDirectory: true)
++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
++        return folder
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 1e13346b..a631c6fb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1,6 +1,7 @@
+ import Foundation
+ import UIKit
+ import PhotosUI
++import UniformTypeIdentifiers
+ import Display
+ import SwiftSignalKit
+ import TelegramPresentationData
+@@ -36,6 +37,7 @@ private enum LunagramToggle: Int32 {
+     case roundFromVideo
+     case showPeerId
+     case avatarFrameSparkle
++    case customFont
+ 
+     var value: Bool {
+         switch self {
+@@ -73,6 +75,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showPeerId
+         case .avatarFrameSparkle:
+             return LunagramSettings.avatarFrameSparkle
++        case .customFont:
++            return LunagramSettings.customFontEnabled
+         }
+     }
+ 
+@@ -112,6 +116,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showPeerId = value
+         case .avatarFrameSparkle:
+             LunagramSettings.avatarFrameSparkle = value
++        case .customFont:
++            LunagramSettings.customFontEnabled = value
+         }
+     }
+ 
+@@ -151,6 +157,8 @@ private enum LunagramToggle: Int32 {
+             return "Показывать ID в профиле"
+         case .avatarFrameSparkle:
+             return "Искры вокруг рамки"
++        case .customFont:
++            return "Свой шрифт"
+         }
+     }
+ }
+@@ -220,6 +228,7 @@ private enum LunagramSettingsSection: Int32 {
+     case avatarFrameSize
+     case avatarFrameBright
+     case avatarFrameGlow
++    case font
+     case liveWallpaper
+     case dialogCards
+     case appearance
+@@ -239,6 +248,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+     case liveWallpaper
+     case dialogCards
+     case particles
++    case font
+ 
+     var title: String {
+         switch self {
+@@ -262,6 +272,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return "Плитки в списке"
+         case .particles:
+             return "Частицы в переписке"
++        case .font:
++            return "Шрифт интерфейса"
+         }
+     }
+ 
+@@ -288,6 +300,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return [.dialogCards]
+         case .particles:
+             return [.appearance, .particlesDensity, .particlesSpeed]
++        case .font:
++            return [.font]
+         }
+     }
+ }
+@@ -489,13 +503,14 @@ private struct LunagramMediaState: Equatable {
+     var particlesSpeed: Int
+     var avatarFrameStyle: Int
+     var hasAvatarFrameImage: Bool
++    var fontTitle: String?
+     var frameSize: Int
+     var frameBright: Int
+     var frameGlow: Int
+     var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -590,6 +605,21 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             ? "Своя рамка вместо нарисованной. Ниже — размер, осветление, свечение и искры, как на ПК. Нужна прозрачная картинка с дыркой посередине."
+             : "Девять нарисованных рамок, как на ПК, или своя картинка (PNG с прозрачной серединой). Видишь рамку только ты."))
+         return entries
++    case .font:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.font, 0, "ШРИФТ ИНТЕРФЕЙСА")
++        ]
++        if let fontTitle = media.fontTitle {
++            entries.append(.toggle(.font, .customFont, value(.customFont)))
++            entries.append(.action(.font, 0, "Заменить файл шрифта"))
++            entries.append(.photoAction(.font, 3, "Убрать шрифт «\(fontTitle)»"))
++        } else {
++            entries.append(.action(.font, 0, "Выбрать файл шрифта"))
++        }
++        entries.append(.info(.font, 0, media.fontTitle == nil
++            ? "Свой шрифт на весь клиент — списки, переписки, настройки. Возьми файл .ttf или .otf из «Файлов» — например, майнкрафтовский или готический. Кириллица в шрифте должна быть, иначе русские буквы останутся системными.\n\nКод и ссылки останутся ровным шрифтом — там важна одинаковая ширина букв."
++            : "Шрифт «\(media.fontTitle ?? "")» стоит на всём клиенте. Выключатель возвращает системный, файл при этом остаётся.\n\nЧасть надписей перерисуется не сразу — перезапусти Lunagram, чтобы шрифт встал везде."))
++        return entries
+     case .avatarFrameSize:
+         guard media.hasAvatarFrameImage else {
+             return []
+@@ -681,6 +711,36 @@ private final class LunagramPickerHolder {
+     var delegate: AnyObject?
+ }
+ 
++/// Выбор файла шрифта в «Файлах».
++private final class LunagramFontPickerDelegate: NSObject, UIDocumentPickerDelegate {
++    private let completion: (Bool) -> Void
++
++    init(completion: @escaping (Bool) -> Void) {
++        self.completion = completion
++    }
++
++    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
++        guard let url = urls.first else {
++            self.completion(false)
++            return
++        }
++        // Файл лежит в чужой папке: система пускает к нему только на время
++        // и только по явному запросу.
++        let opened = url.startAccessingSecurityScopedResource()
++        defer {
++            if opened {
++                url.stopAccessingSecurityScopedResource()
++            }
++        }
++        let imported = (try? LunagramSettings.importFont(from: url)) != nil
++        self.completion(imported)
++    }
++
++    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
++        self.completion(false)
++    }
++}
++
+ @available(iOS 14.0, *)
+ private final class LunagramMediaPickerDelegate: NSObject, PHPickerViewControllerDelegate {
+     private let allowsImages: Bool
+@@ -761,6 +821,23 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.push?(lunagramStatusController(context: context))
+             return
+         }
++        if section == .font {
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            // Шрифты лежат в «Файлах», а не в галерее — и берём их оттуда.
++            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.font], asCopy: true)
++            let delegate = LunagramFontPickerDelegate(completion: { imported in
++                shared.pickerHolder.delegate = nil
++                if imported {
++                    refreshMedia()
++                }
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++            return
++        }
+         guard #available(iOS 14.0, *) else {
+             return
+         }
+@@ -832,6 +909,11 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, updateText: { _, text in
+         LunagramSettings.deviceModelName = text
+     }, photoAction: { index in
++        if index == 3 {
++            LunagramSettings.clearCustomFont()
++            refreshMedia()
++            return
++        }
+         if index == 2 {
+             // Убрать свою картинку-рамку — вернётся нарисованная.
+             LunagramSettings.clearAvatarFrameImage()
