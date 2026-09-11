@@ -1,0 +1,175 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 6af154fe..b9de10ec 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -52,6 +52,8 @@ public final class LunagramSettings {
+         static let showRoundSource = "lunagram.messages.showRoundSource"
+         static let roundFromVideo = "lunagram.messages.roundFromVideo"
+         static let showPeerId = "lunagram.messages.showPeerId"
++        static let profileNameColor = "lunagram.profile.nameColor"
++        static let profileNameGlow = "lunagram.profile.nameGlow"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -252,6 +254,66 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    // MARK: Вид имени в профиле
++
++    /// Цвета имени в шапке профиля — как на ПК. Ноль оставлен под обычный
++    /// белый, поэтому здесь только цветные.
++    public static let profileNameColors: [(title: String, rgb: UInt32)] = [
++        ("Золотой", 0xF0C460),
++        ("Розовый", 0xFF8FC4),
++        ("Голубой", 0x7FD4FF),
++        ("Мятный", 0x8FE3B8),
++        ("Сиреневый", 0xC2A0FF),
++        ("Алый", 0xFF7A6E)
++    ]
++
++    /// Какой цвет у имени: 0 — обычный белый, дальше по списку.
++    public static var profileNameColor: Int {
++        get { return defaults.integer(forKey: Key.profileNameColor) }
++        set {
++            defaults.set(newValue, forKey: Key.profileNameColor)
++            changed()
++        }
++    }
++
++    /// Свечение вокруг имени: 0 — нет, 1 — мягкое, 2 — сильное.
++    public static var profileNameGlow: Int {
++        get { return defaults.integer(forKey: Key.profileNameGlow) }
++        set {
++            defaults.set(max(0, min(2, newValue)), forKey: Key.profileNameGlow)
++            changed()
++        }
++    }
++
++    /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
++    public static func profileNameTint() -> CGColor? {
++        let index = profileNameColor
++        guard index > 0, index <= profileNameColors.count else {
++            return nil
++        }
++        return color(from: profileNameColors[index - 1].rgb, alpha: 1.0)
++    }
++
++    /// Цвет свечения под именем, или `nil` — если свечение выключено.
++    /// Светится самим цветом имени: так оно выглядит своим, а не обведённым.
++    public static func profileNameGlowColor() -> CGColor? {
++        let glow = profileNameGlow
++        guard glow > 0 else {
++            return nil
++        }
++        let index = profileNameColor
++        let rgb = index > 0 && index <= profileNameColors.count ? profileNameColors[index - 1].rgb : 0xFFFFFF
++        return color(from: rgb, alpha: glow == 1 ? 0.5 : 0.9)
++    }
++
++    private static func color(from rgb: UInt32, alpha: CGFloat) -> CGColor {
++        let red = CGFloat((rgb >> 16) & 0xFF) / 255.0
++        let green = CGFloat((rgb >> 8) & 0xFF) / 255.0
++        let blue = CGFloat(rgb & 0xFF) / 255.0
++        let space = CGColorSpaceCreateDeviceRGB()
++        return CGColor(colorSpace: space, components: [red, green, blue, alpha]) ?? CGColor(gray: 1.0, alpha: alpha)
++    }
++
+     // MARK: Надписи интерфейса
+     //
+     // Ключ читает не Swift, а сам генератор строк Telegram — тот кусок, через
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index c9446278..7af2d468 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -217,6 +217,8 @@ private enum LunagramSettingsSection: Int32 {
+     case spy
+     case messages
+     case profileStatus
++    case profileNameColor
++    case profileNameGlow
+     case privacy
+     case banner
+     case bannerPhoto
+@@ -284,7 +286,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .messages:
+             return [.messages]
+         case .profile:
+-            return [.profileStatus]
++            return [.profileStatus, .profileNameColor, .profileNameGlow]
+         case .privacy:
+             return [.privacy]
+         case .banner:
+@@ -504,13 +506,15 @@ private struct LunagramMediaState: Equatable {
+     var fontStyle: Int
+     var fontHasCyrillic: Bool
+     var wordingPack: Int
++    var nameColor: Int
++    var nameGlow: Int
+     var frameSize: Int
+     var frameBright: Int
+     var frameGlow: Int
+     var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -555,6 +559,22 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .photoAction(.profileStatus, 1, "Оставить только главное фото"),
+             .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя.")
+         ]
++    case .profileNameColor:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.profileNameColor, 0, "ЦВЕТ ИМЕНИ"),
++            .dim(.profileNameColor, 0, "Обычный", media.nameColor == 0)
++        ]
++        for (index, item) in LunagramSettings.profileNameColors.enumerated() {
++            entries.append(.dim(.profileNameColor, Int32(index + 1), item.title, media.nameColor == index + 1))
++        }
++        return entries
++    case .profileNameGlow:
++        var entries: [LunagramSettingsEntry] = [.header(.profileNameGlow, 0, "СВЕЧЕНИЕ ИМЕНИ")]
++        for (index, title) in ["Без свечения", "Мягкое", "Сильное"].enumerated() {
++            entries.append(.dim(.profileNameGlow, Int32(index), title, media.nameGlow == index))
++        }
++        entries.append(.info(.profileNameGlow, 0, "Имя в шапке твоего профиля — цвет и свечение, как на ПК. Светится тем же цветом, каким написано имя.\n\nМеняется только твой профиль: чужие остаются телеграмовскими, и видишь это только ты."))
++        return entries
+     case .privacy:
+         return [
+             .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+@@ -922,6 +942,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.wordingPack = dim
+         case .font:
+             LunagramSettings.fontStyle = dim == lunagramOwnFontRow ? LunagramSettings.ownFontStyle : dim
++        case .profileNameColor:
++            LunagramSettings.profileNameColor = dim
++        case .profileNameGlow:
++            LunagramSettings.profileNameGlow = dim
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index 03a19e38..d1f9f76e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1258,8 +1258,15 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             }
+ 
+             titleStringText = title
+-            titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
+-            smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
++            // Lunagram: своё имя в профиле можно покрасить и подсветить.
++            // Только своё — как баннер и рамка: чужие профили остаются
++            // телеграмовскими. Свечение подменяет тень лишь когда включено:
++            // без него тень нужна, чтобы имя читалось на светлой аватарке.
++            let lunagramIsOwnProfile = self.isSettings || peer.id == self.context.account.peerId
++            let lunagramNameColor = (lunagramIsOwnProfile ? LunagramSettings.profileNameTint() : nil).flatMap { UIColor(cgColor: $0) } ?? .white
++            let lunagramNameGlow = (lunagramIsOwnProfile ? LunagramSettings.profileNameGlowColor() : nil).flatMap { UIColor(cgColor: $0) }
++            titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: lunagramNameColor, shadowColor: lunagramNameGlow)
++            smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: lunagramNameColor, shadowColor: lunagramNameGlow ?? titleShadowColor)
+             
+             if self.isSettings, case let .user(user) = peer {
+                 // Lunagram: свой номер можно спрятать — для скриншотов.
