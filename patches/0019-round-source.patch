@@ -1,0 +1,233 @@
+diff --git a/submodules/Lunagram/Sources/LunagramRoundSource.swift b/submodules/Lunagram/Sources/LunagramRoundSource.swift
+new file mode 100644
+index 00000000..45b1d1e1
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramRoundSource.swift
+@@ -0,0 +1,68 @@
++import Foundation
++
++/// Откуда записан кружок — как на ПК. Определяется по имени файла: разные
++/// клиенты называют свои записи по-разному, и это единственное, что о
++/// записи вообще приходит. Никаких запросов на сервер.
++///
++/// Правила сняты с плагина round_client_detector (@netconfiger) — это
++/// наблюдение за тем, как клиенты называют файл, а не чей-то код:
++/// - iPhone всегда шлёт ровно «video.mp4»;
++/// - Telegram Desktop — имя вида round_2026-08-28_01-30-00.mp4;
++/// - официальный Android имени не задаёт вовсе;
++/// - всё прочее — сторонний клиент или бот.
++public enum LunagramRoundSource {
++    case iOS
++    case android
++    case desktop
++    case other
++
++    public static func detect(fileName: String?) -> LunagramRoundSource {
++        let name = (fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
++        if name.isEmpty {
++            return .android
++        }
++        let lower = name.lowercased()
++        if lower == "video.mp4" {
++            return .iOS
++        }
++        if lower.range(of: "^round_\\d{4}-\\d{2}-\\d{2}[_ ]\\d{2}-\\d{2}-\\d{2}", options: .regularExpression) != nil || lower.contains("desktop") {
++            return .desktop
++        }
++        return .other
++    }
++
++    /// Короткая метка рядом со временем. Пусто, если показ выключен или
++    /// источник неясен: неверная метка хуже отсутствующей.
++    public static func badge(fileName: String?) -> String? {
++        guard LunagramSettings.showRoundSource else {
++            return nil
++        }
++        switch detect(fileName: fileName) {
++        case .iOS:
++            return "iOS"
++        case .android:
++            return "Android"
++        case .desktop:
++            return "Desktop"
++        case .other:
++            return nil
++        }
++    }
++
++    /// Развёрнутое пояснение для меню кружка.
++    public static func details(fileName: String?) -> String {
++        let name = (fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
++        let source: String
++        switch detect(fileName: fileName) {
++        case .iOS:
++            source = "iPhone или iPad — имя файла video.mp4."
++        case .android:
++            source = "Android — имени файла нет, официальный клиент его не задаёт."
++        case .desktop:
++            source = "Telegram Desktop — имя вида round_дата_время."
++        case .other:
++            source = "Сторонний клиент или бот — имя не похоже ни на один официальный."
++        }
++        return name.isEmpty ? source : "\(source)\n\nИмя файла: \(name)"
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 12c7232f..21b5f66f 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -36,6 +36,7 @@ public final class LunagramSettings {
+         static let statusBaseName = "lunagram.status.baseName"
+         static let statusTemplates = "lunagram.status.templates"
+         static let personalReactions = "lunagram.reactions.personal"
++        static let showRoundSource = "lunagram.messages.showRoundSource"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -431,6 +432,23 @@ public final class LunagramSettings {
+         defaults.set(Array(templates.prefix(10)), forKey: Key.statusTemplates)
+     }
+ 
++    // MARK: Сообщения
++
++    /// Метка у кружка: с какого клиента записан. Включена по умолчанию —
++    /// как на ПК.
++    public static var showRoundSource: Bool {
++        get {
++            guard defaults.object(forKey: Key.showRoundSource) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.showRoundSource)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.showRoundSource)
++            changed()
++        }
++    }
++
+     // MARK: Своя быстрая реакция для переписки
+ 
+     /// Реакция, которую двойное касание ставит в этой переписке. Пусто —
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/BUILD b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/BUILD
+index 2dcdf045..98ec24de 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/BUILD
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/BUILD
+@@ -25,6 +25,7 @@ swift_library(
+         "//submodules/Components/ReactionImageComponent",
+         "//submodules/TelegramUI/Components/AnimationCache",
+         "//submodules/TelegramUI/Components/MultiAnimationRenderer",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+index 1fd2d0a9..e9e3a3dc 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+@@ -6,6 +6,7 @@ import TelegramStringFormatting
+ import TextFormat
+ import LocalizedPeerData
+ import AccountContext
++import Lunagram
+ 
+ public enum MessageTimestampStatusFormat {
+     case full
+@@ -74,7 +75,11 @@ public func stringForMessageTimestampStatus(
+     associatedData: ChatMessageItemAssociatedData,
+     ignoreAuthor: Bool = false
+ ) -> String {
+-    let text = telegramStringForMessageTimestampStatus(context: context, message: message, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, strings: strings, format: format, associatedData: associatedData, ignoreAuthor: ignoreAuthor)
++    var text = telegramStringForMessageTimestampStatus(context: context, message: message, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, strings: strings, format: format, associatedData: associatedData, ignoreAuthor: ignoreAuthor)
++    // Lunagram: у кружка — с какого клиента он записан, как на ПК.
++    if let file = message.media.first(where: { ($0 as? TelegramMediaFile)?.isInstantVideo == true }) as? TelegramMediaFile, let badge = LunagramRoundSource.badge(fileName: file.fileName) {
++        text = "\(badge) · \(text)"
++    }
+     if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
+         return "🧹 " + text
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 8b683d1b..32d0e402 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -32,6 +32,7 @@ private enum LunagramToggle: Int32 {
+     case avatarFrame
+     case keepDeleted
+     case keepEditHistory
++    case showRoundSource
+ 
+     var value: Bool {
+         switch self {
+@@ -61,6 +62,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.keepDeletedMessages
+         case .keepEditHistory:
+             return LunagramSettings.keepEditHistory
++        case .showRoundSource:
++            return LunagramSettings.showRoundSource
+         }
+     }
+ 
+@@ -92,6 +95,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.keepDeletedMessages = value
+         case .keepEditHistory:
+             LunagramSettings.keepEditHistory = value
++        case .showRoundSource:
++            LunagramSettings.showRoundSource = value
+         }
+     }
+ 
+@@ -123,6 +128,8 @@ private enum LunagramToggle: Int32 {
+             return "Сохранять удалённые"
+         case .keepEditHistory:
+             return "Сохранять историю изменений"
++        case .showRoundSource:
++            return "Откуда записан кружок"
+         }
+     }
+ }
+@@ -165,8 +172,11 @@ private final class LunagramSettingsControllerArguments {
+ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case spy
+-    case privacy
++    // Порядок разделов здесь обязан совпадать с порядком на экране: список
++    // сверяет строки по номерам и ждёт их по возрастанию.
++    case messages
+     case profileStatus
++    case privacy
+     case banner
+     case bannerPhoto
+     case avatarFrame
+@@ -346,6 +356,10 @@ private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: Luna
+         .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
+         .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений»."),
+ 
++        .header(.messages, 0, "СООБЩЕНИЯ"),
++        .toggle(.messages, .showRoundSource, value(.showRoundSource)),
++        .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка."),
++
+         .header(.profileStatus, 0, "ПРОФИЛЬ"),
+         .disclosure(.profileStatus, "Статус в имени"),
+         .photoAction(.profileStatus, 0, "Удалить все фото профиля"),
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index 15307f0b..c67c2dd1 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1277,6 +1277,18 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             })))
+         }
+ 
++        // Lunagram: у кружка — откуда он записан, подробно.
++        if let roundFile = message.media.first(where: { ($0 as? TelegramMediaFile)?.isInstantVideo == true }) as? TelegramMediaFile {
++            actions.append(.action(ContextMenuActionItem(text: "Откуда записан кружок", icon: { theme in
++                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Info"), color: theme.actionSheet.primaryTextColor)
++            }, action: { c, _ in
++                c?.dismiss(completion: {
++                    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++                    controllerInteraction.presentController(textAlertController(context: context, title: "Откуда кружок", text: LunagramRoundSource.details(fileName: roundFile.fileName), actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
++                })
++            })))
++        }
++
+         // Lunagram: своя быстрая реакция для этой переписки.
+         if message.id.namespace == Namespaces.Message.Cloud {
+             let reactionPeerId = message.id.peerId
