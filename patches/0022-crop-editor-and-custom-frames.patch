@@ -1,0 +1,1067 @@
+diff --git a/submodules/Lunagram/Sources/LunagramAvatarFrame.swift b/submodules/Lunagram/Sources/LunagramAvatarFrame.swift
+index d5f0de4d..828759cb 100644
+--- a/submodules/Lunagram/Sources/LunagramAvatarFrame.swift
++++ b/submodules/Lunagram/Sources/LunagramAvatarFrame.swift
+@@ -1,4 +1,5 @@
+ import UIKit
++import CoreImage
+ 
+ /// Рамки вокруг аватарки — те же девять, что на ПК, под теми же номерами.
+ public enum LunagramAvatarFrameStyle: Int, CaseIterable {
+@@ -57,7 +58,13 @@ public final class LunagramAvatarFrameLayer: CALayer {
+     /// должна лечь за ним, а не поверх.
+     public static func update(in container: CALayer, avatarSize: CGFloat, skip: CGFloat, active: Bool) {
+         let current = container.sublayers?.compactMap({ $0 as? LunagramAvatarFrameLayer }).first
+-        guard active, avatarSize > 0.0, let style = LunagramAvatarFrameStyle(rawValue: LunagramSettings.avatarFrameStyle) else {
++        guard active, avatarSize > 0.0 else {
++            current?.removeFromSuperlayer()
++            return
++        }
++        // Своя картинка перебивает нарисованную рамку.
++        let customURL = LunagramSettings.avatarFrameImageURL
++        guard customURL != nil || LunagramAvatarFrameStyle(rawValue: LunagramSettings.avatarFrameStyle) != nil else {
+             current?.removeFromSuperlayer()
+             return
+         }
+@@ -68,10 +75,12 @@ public final class LunagramAvatarFrameLayer: CALayer {
+             layer = LunagramAvatarFrameLayer()
+             container.addSublayer(layer)
+         }
+-        layer.apply(style: style, avatarSize: avatarSize, skip: skip)
++        layer.apply(avatarSize: avatarSize, skip: skip)
+     }
+ 
+     private var renderedKey: String?
++    private var customImage: UIImage?
++    private var customImageURL: URL?
+ 
+     public override init() {
+         super.init()
+@@ -86,16 +95,54 @@ public final class LunagramAvatarFrameLayer: CALayer {
+         fatalError("init(coder:) has not been implemented")
+     }
+ 
+-    private func apply(style: LunagramAvatarFrameStyle, avatarSize: CGFloat, skip: CGFloat) {
+-        // Свечение и двойная рамка выходят далеко за аватарку — берём с
+-        // запасом, чтобы ничего не обрезалось.
+-        let margin = ceil(avatarSize * 0.36 + skip)
++    private func apply(avatarSize: CGFloat, skip: CGFloat) {
++        let customURL = LunagramSettings.avatarFrameImageURL
++        // У своей картинки запас — от её размера (до 250 %) и свечения.
++        let margin: CGFloat
++        if customURL != nil {
++            margin = ceil(avatarSize * (CGFloat(LunagramSettings.avatarFrameScale) / 100.0 - 1.0) / 2.0 + avatarSize * 0.2 + skip)
++        } else {
++            // Свечение и двойная рамка выходят далеко за аватарку.
++            margin = ceil(avatarSize * 0.36 + skip)
++        }
+         let side = avatarSize + margin * 2.0
+         CATransaction.begin()
+         CATransaction.setDisableActions(true)
+         self.frame = CGRect(x: -side / 2.0, y: -side / 2.0, width: side, height: side)
+         CATransaction.commit()
+ 
++        if let customURL = customURL {
++            // Картинку читаем один раз; перерисовываем при смене размеров или
++            // ползунков.
++            if self.customImageURL != customURL {
++                self.customImageURL = customURL
++                self.customImage = UIImage(contentsOfFile: customURL.path)
++            }
++            let key = "img-\(customURL.lastPathComponent)-\(avatarSize)-\(skip)-\(LunagramSettings.avatarFrameScale)-\(LunagramSettings.avatarFrameBrightness)-\(LunagramSettings.avatarFrameGlow)-\(LunagramSettings.avatarFrameSparkle)"
++            if key == self.renderedKey {
++                return
++            }
++            self.renderedKey = key
++            guard let source = self.customImage else {
++                self.contents = nil
++                return
++            }
++            let format = UIGraphicsImageRendererFormat()
++            format.scale = 3.0
++            format.opaque = false
++            let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
++            let image = renderer.image { rendererContext in
++                LunagramAvatarFrameLayer.drawCustom(source: source, in: rendererContext.cgContext, center: CGPoint(x: side / 2.0, y: side / 2.0), avatarSize: avatarSize)
++            }
++            self.contentsScale = 3.0
++            self.contents = image.cgImage
++            return
++        }
++
++        guard let style = LunagramAvatarFrameStyle(rawValue: LunagramSettings.avatarFrameStyle) else {
++            self.contents = nil
++            return
++        }
+         let key = "\(style.rawValue)-\(avatarSize)-\(skip)"
+         if key == self.renderedKey {
+             return
+@@ -112,6 +159,54 @@ public final class LunagramAvatarFrameLayer: CALayer {
+         self.contents = image.cgImage
+     }
+ 
++    /// Своя картинка-рамка: размер, осветление, свечение и искры — как на ПК.
++    /// Готовые кольца из интернета часто темнее, чем хочется, и перерисовать
++    /// их человек не может, поэтому осветление и свечение делаем мы поверх.
++    private static func drawCustom(source: UIImage, in context: CGContext, center: CGPoint, avatarSize: CGFloat) {
++        let scale = CGFloat(LunagramSettings.avatarFrameScale) / 100.0
++        let full = avatarSize * scale
++        let rect = CGRect(x: center.x - full / 2.0, y: center.y - full / 2.0, width: full, height: full)
++
++        // Осветление: 100 % — как есть, 300 % — заметно светлее. Делаем
++        // фильтром яркости, цвета остаются своими.
++        var drawImage = source
++        let brightness = CGFloat(LunagramSettings.avatarFrameBrightness)
++        if brightness > 100.0, let cg = source.cgImage {
++            let ciImage = CIImage(cgImage: cg)
++            let filter = CIFilter(name: "CIColorControls")
++            filter?.setValue(ciImage, forKey: kCIInputImageKey)
++            filter?.setValue((brightness - 100.0) / 200.0 * 0.6, forKey: kCIInputBrightnessKey)
++            let ciContext = CIContext(options: nil)
++            if let output = filter?.outputImage, let rendered = ciContext.createCGImage(output, from: ciImage.extent) {
++                drawImage = UIImage(cgImage: rendered)
++            }
++        }
++
++        // Свечение: мягкая копия покрупнее и посветлее позади. Настоящего
++        // размытия не делаем — дорого, а расплывшаяся копия читается так же.
++        let glow = CGFloat(LunagramSettings.avatarFrameGlow) / 100.0
++        if glow > 0.0 {
++            let grow = full * 0.12 * glow
++            let glowRect = rect.insetBy(dx: -grow, dy: -grow)
++            context.saveGState()
++            context.setAlpha(0.5 * glow)
++            drawImage.draw(in: glowRect)
++            context.restoreGState()
++        }
++
++        drawImage.draw(in: rect)
++
++        if LunagramSettings.avatarFrameSparkle {
++            context.setFillColor(rgb(255, 252, 232).cgColor)
++            let radius = full / 2.0 * 1.02
++            for i in 0 ..< 6 {
++                let at = point(center: center, radius: radius, fraction: CGFloat(i) / 6.0 + 0.05)
++                context.addPath(sparkle(center: at, radius: avatarSize * 0.05).cgPath)
++                context.fillPath()
++            }
++        }
++    }
++
+     private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 255.0) -> UIColor {
+         return UIColor(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: alpha / 255.0)
+     }
+diff --git a/submodules/Lunagram/Sources/LunagramCropEditor.swift b/submodules/Lunagram/Sources/LunagramCropEditor.swift
+new file mode 100644
+index 00000000..ad9e3698
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramCropEditor.swift
+@@ -0,0 +1,252 @@
++import AVFoundation
++import UIKit
++
++/// Окно подгонки кадра — как на ПК: двигаешь картинку пальцем, приближаешь
++/// щипком, сразу видно результат. Работает для фото и для видео.
++///
++/// Обычное окно UIKit, показанное поверх, а не экран Telegram: тут нужны
++/// только жесты и предпросмотр, а так — меньше зависимостей и надёжнее.
++public enum LunagramCropEditor {
++    public enum Kind {
++        case banner
++        case wallpaper
++    }
++
++    /// Показывает окно поверх `presenter`. onChange зовётся, когда кадр
++    /// поменяли, — чтобы обновить настройки-экран под ним.
++    public static func present(from presenter: UIViewController, kind: Kind, onChange: @escaping () -> Void) {
++        let editor = LunagramCropEditorViewController(kind: kind, onChange: onChange)
++        editor.modalPresentationStyle = .fullScreen
++        presenter.present(editor, animated: true, completion: nil)
++    }
++}
++
++private final class LunagramCropEditorViewController: UIViewController {
++    private let kind: LunagramCropEditor.Kind
++    private let onChange: () -> Void
++
++    private let clipView = UIView()
++    private let imageView = UIImageView()
++    private var playerLayer: AVPlayerLayer?
++    private var player: AVQueuePlayer?
++    private var looper: AVPlayerLooper?
++    private let dimView = UIView()
++    private let hintLabel = UILabel()
++
++    private var originalSize: CGSize = .zero
++    private var startCrop = LunagramSettings.Crop(offsetX: 0, offsetY: 0, zoom: 100)
++
++    init(kind: LunagramCropEditor.Kind, onChange: @escaping () -> Void) {
++        self.kind = kind
++        self.onChange = onChange
++        super.init(nibName: nil, bundle: nil)
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    private var crop: LunagramSettings.Crop {
++        get {
++            return kind == .banner ? LunagramSettings.bannerCrop : LunagramSettings.wallpaperCrop
++        }
++        set {
++            if kind == .banner {
++                LunagramSettings.bannerCrop = newValue
++            } else {
++                LunagramSettings.wallpaperCrop = newValue
++            }
++            self.onChange()
++        }
++    }
++
++    private var sourceURL: URL? {
++        return kind == .banner ? LunagramSettings.profileBannerURL : LunagramSettings.liveWallpaperURL
++    }
++
++    private var isVideo: Bool {
++        return kind == .banner ? LunagramSettings.profileBannerIsVideo : true
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++        self.view.backgroundColor = .black
++
++        let bar = UINavigationBar()
++        bar.translatesAutoresizingMaskIntoConstraints = false
++        let item = UINavigationItem(title: kind == .banner ? "Кадр баннера" : "Кадр обоев")
++        item.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(self.done))
++        bar.items = [item]
++        self.view.addSubview(bar)
++        NSLayoutConstraint.activate([
++            bar.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
++            bar.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
++            bar.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor)
++        ])
++
++        self.clipView.clipsToBounds = true
++        self.clipView.backgroundColor = UIColor(white: 0.1, alpha: 1.0)
++        self.view.addSubview(self.clipView)
++
++        self.imageView.contentMode = .scaleToFill
++        self.clipView.addSubview(self.imageView)
++
++        self.dimView.backgroundColor = .black
++        self.dimView.isUserInteractionEnabled = false
++        self.clipView.addSubview(self.dimView)
++
++        self.hintLabel.text = "Двигай пальцем, приближай щипком"
++        self.hintLabel.textColor = UIColor(white: 1.0, alpha: 0.85)
++        self.hintLabel.font = .systemFont(ofSize: 14.0)
++        self.hintLabel.textAlignment = .center
++        self.hintLabel.translatesAutoresizingMaskIntoConstraints = false
++        self.view.addSubview(self.hintLabel)
++        NSLayoutConstraint.activate([
++            self.hintLabel.leadingAnchor.constraint(equalTo: self.view.leadingAnchor, constant: 16.0),
++            self.hintLabel.trailingAnchor.constraint(equalTo: self.view.trailingAnchor, constant: -16.0),
++            self.hintLabel.bottomAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.bottomAnchor, constant: -20.0)
++        ])
++
++        let pan = UIPanGestureRecognizer(target: self, action: #selector(self.handlePan(_:)))
++        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(self.handlePinch(_:)))
++        pan.delegate = self
++        pinch.delegate = self
++        self.clipView.addGestureRecognizer(pan)
++        self.clipView.addGestureRecognizer(pinch)
++
++        self.loadSource()
++        self.applyDim()
++    }
++
++    override func viewDidLayoutSubviews() {
++        super.viewDidLayoutSubviews()
++        self.layoutClip()
++        self.layoutContent()
++    }
++
++    override func viewDidDisappear(_ animated: Bool) {
++        super.viewDidDisappear(animated)
++        self.player?.pause()
++    }
++
++    /// Область предпросмотра примерно тех же пропорций, что и место в
++    /// профиле: баннер широкий и низкий, обои — во весь экран.
++    private func layoutClip() {
++        let safe = self.view.safeAreaLayoutGuide.layoutFrame
++        let top = safe.minY + 44.0
++        let bottom = safe.maxY - 60.0
++        let availWidth = safe.width - 24.0
++        let availHeight = bottom - top
++        let box: CGRect
++        if kind == .banner {
++            let w = availWidth
++            let h = min(availHeight, w * 0.62)
++            box = CGRect(x: safe.minX + (safe.width - w) / 2.0, y: top + (availHeight - h) / 2.0, width: w, height: h)
++        } else {
++            let h = availHeight
++            let w = min(availWidth, h * 0.56)
++            box = CGRect(x: safe.minX + (safe.width - w) / 2.0, y: top, width: w, height: h)
++        }
++        self.clipView.frame = box
++        self.dimView.frame = self.clipView.bounds
++    }
++
++    private func layoutContent() {
++        guard self.originalSize.width > 0 else {
++            return
++        }
++        let placement = LunagramSettings.place(original: self.originalSize, target: self.clipView.bounds.size, crop: self.crop)
++        let frame = CGRect(origin: placement.origin, size: placement.size)
++        self.imageView.frame = frame
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        self.playerLayer?.frame = frame
++        CATransaction.commit()
++    }
++
++    private func loadSource() {
++        guard let url = self.sourceURL else {
++            return
++        }
++        if self.isVideo {
++            let asset = AVURLAsset(url: url)
++            if let track = asset.tracks(withMediaType: .video).first {
++                let rotated = CGRect(origin: .zero, size: track.naturalSize).applying(track.preferredTransform)
++                self.originalSize = CGSize(width: abs(rotated.width), height: abs(rotated.height))
++            }
++            let player = AVQueuePlayer()
++            player.isMuted = true
++            let item = AVPlayerItem(asset: asset)
++            self.looper = AVPlayerLooper(player: player, templateItem: item)
++            let layer = AVPlayerLayer(player: player)
++            layer.videoGravity = .resize
++            self.clipView.layer.insertSublayer(layer, below: self.dimView.layer)
++            self.playerLayer = layer
++            self.player = player
++            player.play()
++        } else {
++            if let image = UIImage(contentsOfFile: url.path) {
++                self.imageView.image = image
++                self.originalSize = image.size
++            }
++        }
++        self.view.setNeedsLayout()
++    }
++
++    private func applyDim() {
++        let index: Int
++        let alphas: [CGFloat]
++        if kind == .banner {
++            index = LunagramSettings.profileBannerDim
++            alphas = [0.0, 0.3, 0.55, 0.75]
++        } else {
++            index = LunagramSettings.liveWallpaperDim
++            alphas = [0.0, 0.25, 0.5]
++        }
++        self.dimView.alpha = alphas[max(0, min(alphas.count - 1, index))]
++    }
++
++    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
++        guard self.originalSize.width > 0 else {
++            return
++        }
++        if gesture.state == .began {
++            self.startCrop = self.crop
++        }
++        let placement = LunagramSettings.place(original: self.originalSize, target: self.clipView.bounds.size, crop: self.startCrop)
++        let extraX = placement.size.width - self.clipView.bounds.width
++        let extraY = placement.size.height - self.clipView.bounds.height
++        let delta = gesture.translation(in: self.clipView)
++        var updated = self.startCrop
++        // Так же, как на ПК: сдвиг — доля от лишка, весь ход от −100 до +100.
++        if extraX > 0 {
++            updated.offsetX = self.startCrop.offsetX - Int((delta.x * 200.0 / extraX).rounded())
++        }
++        if extraY > 0 {
++            updated.offsetY = self.startCrop.offsetY - Int((delta.y * 200.0 / extraY).rounded())
++        }
++        self.crop = updated
++        self.layoutContent()
++    }
++
++    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
++        if gesture.state == .began {
++            self.startCrop = self.crop
++        }
++        var updated = self.startCrop
++        updated.zoom = Int((Double(self.startCrop.zoom) * Double(gesture.scale)).rounded())
++        self.crop = updated
++        self.layoutContent()
++    }
++
++    @objc private func done() {
++        self.dismiss(animated: true, completion: nil)
++    }
++}
++
++extension LunagramCropEditorViewController: UIGestureRecognizerDelegate {
++    // Двигать и приближать можно одновременно — жесты не мешают друг другу.
++    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
++        return true
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBanner.swift b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+index 790e3651..c515c763 100644
+--- a/submodules/Lunagram/Sources/LunagramProfileBanner.swift
++++ b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+@@ -55,6 +55,8 @@ public final class LunagramProfileBannerView: UIView {
+     private var restHeight: CGFloat
+     private var shownURL: URL?
+     private var shownPreset: LunagramBannerPreset?
++    /// Размер своего фото или видео — по нему считается подгонка кадра.
++    private var mediaSize: CGSize = .zero
+     private var presetWidth: CGFloat = 0.0
+     private var isAttached = false
+     private var settingsObserver: NSObjectProtocol?
+@@ -80,6 +82,8 @@ public final class LunagramProfileBannerView: UIView {
+         self.reload()
+         self.settingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
+             self?.reload()
++            // Подгонку кадра меняют, не трогая файл, — перекладываем всегда.
++            self?.setNeedsLayout()
+         })
+     }
+ 
+@@ -113,12 +117,22 @@ public final class LunagramProfileBannerView: UIView {
+         let size = self.bounds.size
+         let height = max(size.height, self.restHeight)
+         let frame = CGRect(x: 0.0, y: size.height - height, width: size.width, height: height)
+-        if self.contentView.frame != frame {
+-            self.contentView.frame = frame
+-            let bounds = CGRect(origin: CGPoint(), size: frame.size)
++        self.contentView.frame = frame
++        let bounds = CGRect(origin: CGPoint(), size: frame.size)
++        self.dimView.frame = bounds
++        // Нарисованный баннер закрывает всё сам — кадр не двигаем. Своё фото
++        // или видео кладём с подгонкой: сдвиг и приближение из настроек.
++        if self.shownPreset != nil || self.mediaSize.width < 1.0 {
+             self.imageView.frame = bounds
+             self.playerView?.frame = bounds
+-            self.dimView.frame = bounds
++        } else {
++            let placement = LunagramSettings.place(original: self.mediaSize, target: bounds.size, crop: LunagramSettings.bannerCrop)
++            let placed = CGRect(origin: placement.origin, size: placement.size)
++            self.imageView.frame = placed
++            CATransaction.begin()
++            CATransaction.setDisableActions(true)
++            self.playerView?.frame = placed
++            CATransaction.commit()
+         }
+         self.renderPresetIfNeeded()
+     }
+@@ -168,14 +182,15 @@ public final class LunagramProfileBannerView: UIView {
+         let url = LunagramSettings.profileBannerURL
+         if url != self.shownURL {
+             self.shownURL = url
+-            if url != nil && LunagramSettings.profileBannerIsVideo {
++            if let url = url, LunagramSettings.profileBannerIsVideo {
+                 self.imageView.image = nil
++                self.mediaSize = LunagramProfileBannerView.videoSize(url)
+                 if self.playerView == nil {
+                     let playerView = LunagramBannerPlayerView()
+                     playerView.playerLayer.player = LunagramVideoWallpaper.banner.player
+-                    // Заполняем целиком, обрезая лишнее по краям: у шапки и
+-                    // ролика разная вытянутость.
+-                    playerView.playerLayer.videoGravity = .resizeAspectFill
++                    // Кадр кладём сами по подгонке, поэтому слой заполняет
++                    // ровно свой прямоугольник — пропорции в нём уже верные.
++                    playerView.playerLayer.videoGravity = .resize
+                     playerView.frame = self.imageView.frame
+                     self.contentView.insertSubview(playerView, belowSubview: self.dimView)
+                     self.playerView = playerView
+@@ -183,7 +198,10 @@ public final class LunagramProfileBannerView: UIView {
+             } else {
+                 self.playerView?.removeFromSuperview()
+                 self.playerView = nil
+-                self.imageView.image = url.flatMap(LunagramProfileBannerView.loadImage)
++                let image = url.flatMap(LunagramProfileBannerView.loadImage)
++                self.imageView.image = image
++                self.imageView.contentMode = .scaleToFill
++                self.mediaSize = image?.size ?? .zero
+             }
+         }
+         self.updatePlayback()
+@@ -207,6 +225,15 @@ public final class LunagramProfileBannerView: UIView {
+     /// профиля, а читать и раскодировать снимок каждый раз незачем.
+     private static var cachedImage: (url: URL, image: UIImage)?
+ 
++    /// Размер видео с учётом поворота из пометок — по нему считается кадр.
++    private static func videoSize(_ url: URL) -> CGSize {
++        guard let track = AVURLAsset(url: url).tracks(withMediaType: .video).first else {
++            return .zero
++        }
++        let rotated = CGRect(origin: .zero, size: track.naturalSize).applying(track.preferredTransform)
++        return CGSize(width: abs(rotated.width), height: abs(rotated.height))
++    }
++
+     private static func loadImage(_ url: URL) -> UIImage? {
+         if let cachedImage = self.cachedImage, cachedImage.url == url {
+             return cachedImage.image
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 51c138fb..068205fd 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -1,4 +1,5 @@
+ import Foundation
++import CoreGraphics
+ import ImageIO
+ import LunagramGhost
+ 
+@@ -26,8 +27,19 @@ public final class LunagramSettings {
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerFile = "lunagram.banner.file"
+         static let profileBannerPreset = "lunagram.banner.preset"
++        static let profileBannerOffsetX = "lunagram.banner.offsetX"
++        static let profileBannerOffsetY = "lunagram.banner.offsetY"
++        static let profileBannerZoom = "lunagram.banner.zoom"
++        static let liveWallpaperOffsetX = "lunagram.liveWallpaper.offsetX"
++        static let liveWallpaperOffsetY = "lunagram.liveWallpaper.offsetY"
++        static let liveWallpaperZoom = "lunagram.liveWallpaper.zoom"
+         static let avatarFrameEnabled = "lunagram.avatarFrame.enabled"
+         static let avatarFrameStyle = "lunagram.avatarFrame.style"
++        static let avatarFrameImage = "lunagram.avatarFrame.image"
++        static let avatarFrameScale = "lunagram.avatarFrame.scale"
++        static let avatarFrameBrightness = "lunagram.avatarFrame.brightness"
++        static let avatarFrameGlow = "lunagram.avatarFrame.glow"
++        static let avatarFrameSparkle = "lunagram.avatarFrame.sparkle"
+         static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
+         static let dialogCardsDim = "lunagram.dialogCards.dim"
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
+@@ -486,6 +498,127 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    // MARK: Подгонка кадра
++
++    /// Куда и как лечь картинке: сдвиг по осям (-100…100, 0 — центр) и
++    /// приближение (100…300 %). Те же числа и тот же смысл, что на ПК.
++    public struct Crop: Equatable {
++        public var offsetX: Int
++        public var offsetY: Int
++        public var zoom: Int
++
++        public init(offsetX: Int, offsetY: Int, zoom: Int) {
++            self.offsetX = offsetX
++            self.offsetY = offsetY
++            self.zoom = zoom
++        }
++    }
++
++    /// Кадр баннера.
++    public static var bannerCrop: Crop {
++        get { return crop(Key.profileBannerOffsetX, Key.profileBannerOffsetY, Key.profileBannerZoom) }
++        set { setCrop(newValue, Key.profileBannerOffsetX, Key.profileBannerOffsetY, Key.profileBannerZoom) }
++    }
++
++    /// Кадр живых обоев.
++    public static var wallpaperCrop: Crop {
++        get { return crop(Key.liveWallpaperOffsetX, Key.liveWallpaperOffsetY, Key.liveWallpaperZoom) }
++        set { setCrop(newValue, Key.liveWallpaperOffsetX, Key.liveWallpaperOffsetY, Key.liveWallpaperZoom) }
++    }
++
++    private static func crop(_ xKey: String, _ yKey: String, _ zoomKey: String) -> Crop {
++        let zoom = defaults.object(forKey: zoomKey) != nil ? defaults.integer(forKey: zoomKey) : 100
++        return Crop(offsetX: max(-100, min(100, defaults.integer(forKey: xKey))), offsetY: max(-100, min(100, defaults.integer(forKey: yKey))), zoom: max(100, min(300, zoom)))
++    }
++
++    private static func setCrop(_ value: Crop, _ xKey: String, _ yKey: String, _ zoomKey: String) {
++        defaults.set(max(-100, min(100, value.offsetX)), forKey: xKey)
++        defaults.set(max(-100, min(100, value.offsetY)), forKey: yKey)
++        defaults.set(max(100, min(300, value.zoom)), forKey: zoomKey)
++        changed()
++    }
++
++    /// «С покрытием»: картинка закрывает место целиком, пропорции сохранены,
++    /// лишнее уходит за край. Сдвиг задан долей от лишка, поэтому выбранный
++    /// кадр один и тот же и в узком месте, и в широком. Перенос PlaceCover с
++    /// ПК один в один.
++    public static func place(original: CGSize, target: CGSize, crop: Crop) -> (size: CGSize, origin: CGPoint) {
++        guard original.width > 0, original.height > 0, target.width > 0, target.height > 0 else {
++            return (target, .zero)
++        }
++        let zoom = CGFloat(max(100, crop.zoom)) / 100.0
++        let cover = max(target.width / original.width, target.height / original.height) * zoom
++        let size = CGSize(width: max(original.width * cover, 1.0), height: max(original.height * cover, 1.0))
++        func shift(_ extra: CGFloat, _ percent: Int) -> CGFloat {
++            return -(extra / 2.0 * (1.0 + CGFloat(percent) / 100.0))
++        }
++        return (size, CGPoint(x: shift(size.width - target.width, crop.offsetX), y: shift(size.height - target.height, crop.offsetY)))
++    }
++
++    // MARK: Рамка-картинка
++
++    /// Своя картинка-рамка. Пусто — рамка нарисованная.
++    public static var avatarFrameImageURL: URL? {
++        return storedURL(forKey: Key.avatarFrameImage)
++    }
++
++    /// Забирает картинку-рамку к себе. Сжимаем и переводим в PNG, чтобы
++    /// сохранить прозрачность: рамке нужна дырка в середине под аватарку.
++    public static func importAvatarFrameImage(from source: URL) throws {
++        let folder = try lunagramFolder()
++        let name = "frame-\(UUID().uuidString).png"
++        try writeScaledImage(from: source, to: folder.appendingPathComponent(name), asPNG: true)
++        store(name, forKey: Key.avatarFrameImage, in: folder)
++    }
++
++    /// Убирает свою картинку-рамку — вернётся нарисованная.
++    public static func clearAvatarFrameImage() {
++        if let folder = try? lunagramFolder(), let name = defaults.string(forKey: Key.avatarFrameImage) {
++            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
++        }
++        defaults.removeObject(forKey: Key.avatarFrameImage)
++        changed()
++    }
++
++    /// Размер своей рамки, 100…250 % от аватарки. По умолчанию 140, как на ПК.
++    public static var avatarFrameScale: Int {
++        get { return clamped(Key.avatarFrameScale, 100, 250, 140) }
++        set { setClamped(newValue, Key.avatarFrameScale, 100, 250) }
++    }
++
++    /// Осветление тёмной рамки, 100…300 %. Цвета остаются своими.
++    public static var avatarFrameBrightness: Int {
++        get { return clamped(Key.avatarFrameBrightness, 100, 300, 100) }
++        set { setClamped(newValue, Key.avatarFrameBrightness, 100, 300) }
++    }
++
++    /// Свечение под рамкой, 0…100 %.
++    public static var avatarFrameGlow: Int {
++        get { return clamped(Key.avatarFrameGlow, 0, 100, 0) }
++        set { setClamped(newValue, Key.avatarFrameGlow, 0, 100) }
++    }
++
++    /// Бегущие искры поверх рамки.
++    public static var avatarFrameSparkle: Bool {
++        get { return defaults.bool(forKey: Key.avatarFrameSparkle) }
++        set {
++            defaults.set(newValue, forKey: Key.avatarFrameSparkle)
++            changed()
++        }
++    }
++
++    private static func clamped(_ key: String, _ lo: Int, _ hi: Int, _ fallback: Int) -> Int {
++        guard defaults.object(forKey: key) != nil else {
++            return fallback
++        }
++        return max(lo, min(hi, defaults.integer(forKey: key)))
++    }
++
++    private static func setClamped(_ value: Int, _ key: String, _ lo: Int, _ hi: Int) {
++        defaults.set(max(lo, min(hi, value)), forKey: key)
++        changed()
++    }
++
+     // MARK: Файлы
+ 
+     private enum ImportError: Error {
+@@ -524,7 +657,7 @@ public final class LunagramSettings {
+     /// мегабайт, а шапка шириной с экран: больше 2048 точек по длинной
+     /// стороне ей не нужно. Заодно HEIC становится JPEG, а поворот из
+     /// пометок снимка впечатывается в сами точки — показывать проще.
+-    private static func writeScaledImage(from source: URL, to target: URL) throws {
++    private static func writeScaledImage(from source: URL, to target: URL, asPNG: Bool = false) throws {
+         let options: [CFString: Any] = [
+             kCGImageSourceCreateThumbnailFromImageAlways: true,
+             kCGImageSourceCreateThumbnailWithTransform: true,
+@@ -533,12 +666,13 @@ public final class LunagramSettings {
+         guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, nil), let image = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+             throw ImportError.unreadable
+         }
+-        guard let destination = CGImageDestinationCreateWithURL(target as CFURL, "public.jpeg" as CFString, 1, nil) else {
++        // PNG держит прозрачность — она нужна рамке; JPEG меньше — годится
++        // фото и баннеру, у которых прозрачности нет.
++        let type = asPNG ? "public.png" : "public.jpeg"
++        guard let destination = CGImageDestinationCreateWithURL(target as CFURL, type as CFString, 1, nil) else {
+             throw ImportError.unreadable
+         }
+-        let properties: [CFString: Any] = [
+-            kCGImageDestinationLossyCompressionQuality: 0.9
+-        ]
++        let properties: [CFString: Any] = asPNG ? [:] : [kCGImageDestinationLossyCompressionQuality: 0.9]
+         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+         guard CGImageDestinationFinalize(destination) else {
+             throw ImportError.unreadable
+diff --git a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+index c46ef905..431cd778 100644
+--- a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
++++ b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+@@ -130,15 +130,23 @@ public final class LunagramVideoWallpaper {
+ public final class LunagramVideoWallpaperLayer: CALayer {
+     private var playerLayer: AVPlayerLayer?
+     private var dimLayer: CALayer?
++    private var size: CGSize = .zero
++    /// Размер ролика — по нему считается подгонка кадра. Читаем один раз.
++    private var videoSize: CGSize = .zero
+ 
+     public override init() {
+         super.init()
+         let playerLayer = AVPlayerLayer(player: LunagramVideoWallpaper.shared.player)
+-        // Заполняем целиком, обрезая лишнее по краям: ролик и экран разной
+-        // вытянутости, иначе остались бы пустые поля.
+-        playerLayer.videoGravity = .resizeAspectFill
++        // Кадр кладём сами по подгонке — слой заполняет ровно свой
++        // прямоугольник, пропорции в нём уже верные. Без подгонки (кадр по
++        // центру, приближение 100 %) выходит то же «покрытие», что и раньше.
++        playerLayer.videoGravity = .resize
+         self.addSublayer(playerLayer)
+         self.playerLayer = playerLayer
++        if let url = LunagramSettings.liveWallpaperURL, let track = AVURLAsset(url: url).tracks(withMediaType: .video).first {
++            let rotated = CGRect(origin: .zero, size: track.naturalSize).applying(track.preferredTransform)
++            self.videoSize = CGSize(width: abs(rotated.width), height: abs(rotated.height))
++        }
+ 
+         let dimLayer = CALayer()
+         dimLayer.backgroundColor = UIColor.black.cgColor
+@@ -166,12 +174,18 @@ public final class LunagramVideoWallpaperLayer: CALayer {
+     }
+ 
+     public func updateSize(_ size: CGSize) {
++        self.size = size
+         CATransaction.begin()
+         CATransaction.setDisableActions(true)
+         let bounds = CGRect(origin: CGPoint(), size: size)
+         self.frame = bounds
+-        self.playerLayer?.frame = bounds
+         self.dimLayer?.frame = bounds
++        if self.videoSize.width > 0 {
++            let placement = LunagramSettings.place(original: self.videoSize, target: size, crop: LunagramSettings.wallpaperCrop)
++            self.playerLayer?.frame = CGRect(origin: placement.origin, size: placement.size)
++        } else {
++            self.playerLayer?.frame = bounds
++        }
+         CATransaction.commit()
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f03754ce..37ef7500 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -34,6 +34,7 @@ private enum LunagramToggle: Int32 {
+     case keepEditHistory
+     case showRoundSource
+     case roundFromVideo
++    case avatarFrameSparkle
+ 
+     var value: Bool {
+         switch self {
+@@ -67,6 +68,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showRoundSource
+         case .roundFromVideo:
+             return LunagramSettings.roundFromVideo
++        case .avatarFrameSparkle:
++            return LunagramSettings.avatarFrameSparkle
+         }
+     }
+ 
+@@ -102,6 +105,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showRoundSource = value
+         case .roundFromVideo:
+             LunagramSettings.roundFromVideo = value
++        case .avatarFrameSparkle:
++            LunagramSettings.avatarFrameSparkle = value
+         }
+     }
+ 
+@@ -137,6 +142,8 @@ private enum LunagramToggle: Int32 {
+             return "Откуда записан кружок"
+         case .roundFromVideo:
+             return "Кружок из любого видео"
++        case .avatarFrameSparkle:
++            return "Искры вокруг рамки"
+         }
+     }
+ }
+@@ -154,6 +161,11 @@ private let lunagramCardsDimTitles = ["Аватарка ярче", "Средне
+ private let lunagramParticlesDensityLevels: [(String, Int)] = [("Редко", 20), ("Средне", 40), ("Густо", 80)]
+ private let lunagramParticlesSpeedLevels: [(String, Int)] = [("Медленно", 60), ("Обычно", 100), ("Быстро", 160)]
+ 
++/// Уровни настроек своей рамки — размер, осветление, свечение.
++private let lunagramFrameSizeLevels: [(String, Int)] = [("Меньше", 110), ("Средне", 150), ("Больше", 210)]
++private let lunagramFrameBrightLevels: [(String, Int)] = [("Как есть", 100), ("Светлее", 180), ("Ярко", 260)]
++private let lunagramFrameGlowLevels: [(String, Int)] = [("Без свечения", 0), ("Мягкое", 50), ("Сильное", 100)]
++
+ /// Какая ступень ближе всего к числу из настроек: густоту в первой версии
+ /// можно было задать любую, не только ступенью.
+ private func lunagramNearestLevel(_ value: Int, _ levels: [(String, Int)]) -> Int {
+@@ -173,8 +185,9 @@ private final class LunagramSettingsControllerArguments {
+     let openGroup: (LunagramSettingsGroup) -> Void
+     let ghostMaster: (Bool) -> Void
+     let ghostExpand: () -> Void
++    let openEditor: (LunagramSettingsSection) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+@@ -183,6 +196,7 @@ private final class LunagramSettingsControllerArguments {
+         self.openGroup = openGroup
+         self.ghostMaster = ghostMaster
+         self.ghostExpand = ghostExpand
++        self.openEditor = openEditor
+     }
+ }
+ 
+@@ -196,6 +210,9 @@ private enum LunagramSettingsSection: Int32 {
+     case banner
+     case bannerPhoto
+     case avatarFrame
++    case avatarFrameSize
++    case avatarFrameBright
++    case avatarFrameGlow
+     case liveWallpaper
+     case dialogCards
+     case appearance
+@@ -257,7 +274,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .banner:
+             return [.banner, .bannerPhoto]
+         case .avatarFrame:
+-            return [.avatarFrame]
++            return [.avatarFrame, .avatarFrameSize, .avatarFrameBright, .avatarFrameGlow]
+         case .liveWallpaper:
+             return [.liveWallpaper]
+         case .dialogCards:
+@@ -277,6 +294,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+     case input(LunagramSettingsSection, String, String, String)
+     case disclosure(LunagramSettingsSection, String)
++    case editor(LunagramSettingsSection, String)
+     case photoAction(LunagramSettingsSection, Int32, String)
+     case info(LunagramSettingsSection, Int32, String)
+ 
+@@ -286,7 +304,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue
+-        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .photoAction(section, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -310,6 +328,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + 50
+         case let .disclosure(section, _):
+             return section.rawValue * 100 + 5
++        case let .editor(section, _):
++            return section.rawValue * 100 + 6
+         case let .photoAction(section, index, _):
+             return section.rawValue * 100 + 20 + index
+         case let .info(section, index, _):
+@@ -361,6 +381,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .editor(lhsSection, lhsTitle):
++            if case let .editor(rhsSection, rhsTitle) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle {
++                return true
++            } else {
++                return false
++            }
+         case let .photoAction(lhsSection, lhsIndex, lhsTitle):
+             if case let .photoAction(rhsSection, rhsIndex, rhsTitle) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsTitle == rhsTitle {
+                 return true
+@@ -424,6 +450,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.pick(section)
+             })
++        case let .editor(section, title):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.openEditor(section)
++            })
+         case let .photoAction(_, index, title):
+             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                 arguments.photoAction(Int(index))
+@@ -451,10 +481,14 @@ private struct LunagramMediaState: Equatable {
+     var particlesDensity: Int
+     var particlesSpeed: Int
+     var avatarFrameStyle: Int
++    var hasAvatarFrameImage: Bool
++    var frameSize: Int
++    var frameBright: Int
++    var frameGlow: Int
+     var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -522,11 +556,14 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
+             .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
+         ]
++        if media.hasBanner {
++            entries.append(.editor(.bannerPhoto, "Подогнать кадр"))
++        }
+         for (index, title) in lunagramBannerDimTitles.enumerated() {
+             entries.append(.dim(.bannerPhoto, Int32(index), title, index == media.bannerDim))
+         }
+         entries.append(.info(.bannerPhoto, 0, media.hasBanner
+-            ? "Затемнение нужно, чтобы на светлом фото читались имя и статус. Нарисованным баннерам оно не нужно — они и так тёмные."
++            ? "«Подогнать кадр» — двигай пальцем и приближай щипком, как на ПК. Затемнение нужно, чтобы на светлом фото читались имя и статус."
+             : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля."))
+         return entries
+     case .avatarFrame:
+@@ -535,9 +572,46 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .toggle(.avatarFrame, .avatarFrame, value(.avatarFrame))
+         ]
+         for style in LunagramAvatarFrameStyle.allCases {
+-            entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, style.rawValue == media.avatarFrameStyle))
++            entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, !media.hasAvatarFrameImage && style.rawValue == media.avatarFrameStyle))
++        }
++        entries.append(.action(.avatarFrame, 0, media.hasAvatarFrameImage ? "Заменить свою картинку" : "Своя картинка-рамка"))
++        if media.hasAvatarFrameImage {
++            entries.append(.photoAction(.avatarFrame, 2, "Убрать свою картинку"))
++        }
++        entries.append(.info(.avatarFrame, 0, media.hasAvatarFrameImage
++            ? "Своя рамка вместо нарисованной. Ниже — размер, осветление, свечение и искры, как на ПК. Нужна прозрачная картинка с дыркой посередине."
++            : "Девять нарисованных рамок, как на ПК, или своя картинка (PNG с прозрачной серединой). Видишь рамку только ты."))
++        return entries
++    case .avatarFrameSize:
++        guard media.hasAvatarFrameImage else {
++            return []
++        }
++        var entries: [LunagramSettingsEntry] = [.header(.avatarFrameSize, 0, "РАЗМЕР РАМКИ")]
++        let level = lunagramNearestLevel(media.frameSize, lunagramFrameSizeLevels)
++        for (index, item) in lunagramFrameSizeLevels.enumerated() {
++            entries.append(.dim(.avatarFrameSize, Int32(index), item.0, index == level))
++        }
++        return entries
++    case .avatarFrameBright:
++        guard media.hasAvatarFrameImage else {
++            return []
++        }
++        var entries: [LunagramSettingsEntry] = [.header(.avatarFrameBright, 0, "ОСВЕТЛЕНИЕ")]
++        let level = lunagramNearestLevel(media.frameBright, lunagramFrameBrightLevels)
++        for (index, item) in lunagramFrameBrightLevels.enumerated() {
++            entries.append(.dim(.avatarFrameBright, Int32(index), item.0, index == level))
+         }
+-        entries.append(.info(.avatarFrame, 0, "Вокруг твоей аватарки в профиле — те же девять рамок, что на ПК. Видишь её только ты."))
++        return entries
++    case .avatarFrameGlow:
++        guard media.hasAvatarFrameImage else {
++            return []
++        }
++        var entries: [LunagramSettingsEntry] = [.header(.avatarFrameGlow, 0, "СВЕЧЕНИЕ И ИСКРЫ")]
++        let level = lunagramNearestLevel(media.frameGlow, lunagramFrameGlowLevels)
++        for (index, item) in lunagramFrameGlowLevels.enumerated() {
++            entries.append(.dim(.avatarFrameGlow, Int32(index), item.0, index == level))
++        }
++        entries.append(.toggle(.avatarFrameGlow, .avatarFrameSparkle, value(.avatarFrameSparkle)))
+         return entries
+     case .liveWallpaper:
+         var entries: [LunagramSettingsEntry] = [
+@@ -545,11 +619,14 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
+             .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
+         ]
++        if media.hasWallpaper {
++            entries.append(.editor(.liveWallpaper, "Подогнать кадр"))
++        }
+         for (index, title) in lunagramWallpaperDimTitles.enumerated() {
+             entries.append(.dim(.liveWallpaper, Int32(index), title, index == media.wallpaperDim))
+         }
+         entries.append(.info(.liveWallpaper, 0, media.hasWallpaper
+-            ? "Видео играет по кругу вместо обоев, без звука — твою музыку оно не прервёт. Затемнение нужно, чтобы на пёстром ролике читались сообщения."
++            ? "Видео играет по кругу вместо обоев, без звука. «Подогнать кадр» — двигай и приближай, как на ПК. Затемнение — чтобы на пёстром ролике читались сообщения."
+             : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
+         return entries
+     case .dialogCards:
+@@ -680,13 +757,16 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             return
+         }
+         let isBanner = section == .bannerPhoto
++        let isFrame = section == .avatarFrame
+         var configuration = PHPickerConfiguration()
+-        configuration.filter = isBanner ? PHPickerFilter.any(of: [.images, .videos]) : PHPickerFilter.videos
++        configuration.filter = isBanner ? PHPickerFilter.any(of: [.images, .videos]) : (isFrame ? PHPickerFilter.images : PHPickerFilter.videos)
+         configuration.selectionLimit = 1
+         let picker = PHPickerViewController(configuration: configuration)
+-        let delegate = LunagramMediaPickerDelegate(allowsImages: isBanner, importer: { url, isVideo in
++        let delegate = LunagramMediaPickerDelegate(allowsImages: isBanner || isFrame, importer: { url, isVideo in
+             if isBanner {
+                 try LunagramSettings.importProfileBanner(from: url, isVideo: isVideo)
++            } else if isFrame {
++                try LunagramSettings.importAvatarFrameImage(from: url)
+             } else {
+                 try LunagramSettings.importLiveWallpaper(from: url)
+             }
+@@ -695,7 +775,7 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             guard imported else {
+                 return
+             }
+-            let toggle: LunagramToggle = isBanner ? .profileBanner : .liveWallpaper
++            let toggle: LunagramToggle = isBanner ? .profileBanner : (isFrame ? .avatarFrame : .liveWallpaper)
+             toggle.set(true)
+             shared.values[toggle] = true
+             shared.valuesPromise.set(shared.values)
+@@ -721,7 +801,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.values[.particles] = true
+             shared.valuesPromise.set(shared.values)
+         case .avatarFrame:
++            // Выбрал нарисованную — она перебивает свою картинку.
+             LunagramSettings.avatarFrameStyle = dim + 1
++            LunagramSettings.clearAvatarFrameImage()
+             LunagramToggle.avatarFrame.set(true)
+             shared.values[.avatarFrame] = true
+             shared.valuesPromise.set(shared.values)
+@@ -729,6 +811,12 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.particlesDensity = lunagramParticlesDensityLevels[max(0, min(lunagramParticlesDensityLevels.count - 1, dim))].1
+         case .particlesSpeed:
+             LunagramSettings.particlesSpeed = lunagramParticlesSpeedLevels[max(0, min(lunagramParticlesSpeedLevels.count - 1, dim))].1
++        case .avatarFrameSize:
++            LunagramSettings.avatarFrameScale = lunagramFrameSizeLevels[max(0, min(lunagramFrameSizeLevels.count - 1, dim))].1
++        case .avatarFrameBright:
++            LunagramSettings.avatarFrameBrightness = lunagramFrameBrightLevels[max(0, min(lunagramFrameBrightLevels.count - 1, dim))].1
++        case .avatarFrameGlow:
++            LunagramSettings.avatarFrameGlow = lunagramFrameGlowLevels[max(0, min(lunagramFrameGlowLevels.count - 1, dim))].1
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+@@ -736,6 +824,12 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, updateText: { _, text in
+         LunagramSettings.deviceModelName = text
+     }, photoAction: { index in
++        if index == 2 {
++            // Убрать свою картинку-рамку — вернётся нарисованная.
++            LunagramSettings.clearAvatarFrameImage()
++            refreshMedia()
++            return
++        }
+         lunagramDeleteProfilePhotos(context: context, keepMain: index == 1, present: { c in
+             shared.present?(c)
+         })
+@@ -750,6 +844,22 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, ghostExpand: {
+         shared.ghostExpanded.toggle()
+         shared.ghostExpandedPromise.set(shared.ghostExpanded)
++    }, openEditor: { section in
++        let kind: LunagramCropEditor.Kind
++        switch section {
++        case .bannerPhoto:
++            kind = .banner
++        case .liveWallpaper:
++            kind = .wallpaper
++        default:
++            return
++        }
++        // Окно подгонки — обычное окно UIKit поверх, как галерея.
++        if let presenter = (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController {
++            LunagramCropEditor.present(from: presenter, kind: kind, onChange: {
++                refreshMedia()
++            })
++        }
+     })
+ }
+ 
