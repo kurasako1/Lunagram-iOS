@@ -1,0 +1,644 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 3cabbda3..f03754ce 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -11,9 +11,9 @@ import Lunagram
+ 
+ // Раздел настроек Lunagram.
+ //
+-// Сделан по образцу экрана Apple Watch из SettingsUI — самого маленького
+-// экрана-списка у Telegram. Тексты пока прямо здесь, по-русски: переводить
+-// на другие языки будем, когда разделов станет больше.
++// Устроено, как на ПК: главный экран — список разделов, каждый открывается
++// своим экраном. Так строк на экране немного, и ничего не сваливается в
++// одну простыню. Тексты пока прямо здесь, по-русски.
+ 
+ /// Все выключатели раздела. Один перечень вместо пачки отдельных замыканий:
+ /// так новый выключатель добавляется одной строчкой в трёх местах, а не
+@@ -141,6 +141,10 @@ private enum LunagramToggle: Int32 {
+     }
+ }
+ 
++/// Четыре выключателя Ghost — мастер-переключатель включает и выключает
++/// разом, а под стрелкой они настраиваются по отдельности.
++private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories]
++
+ /// Варианты затемнения — по номеру, как их хранят настройки.
+ private let lunagramWallpaperDimTitles = ["Без затемнения", "Слегка затемнить", "Сильно затемнить"]
+ private let lunagramBannerDimTitles = ["Без затемнения", "Слегка затемнить", "Затемнить", "Сильно затемнить"]
+@@ -166,21 +170,26 @@ private final class LunagramSettingsControllerArguments {
+     let setDim: (LunagramSettingsSection, Int) -> Void
+     let updateText: (LunagramSettingsSection, String) -> Void
+     let photoAction: (Int) -> Void
++    let openGroup: (LunagramSettingsGroup) -> Void
++    let ghostMaster: (Bool) -> Void
++    let ghostExpand: () -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+         self.updateText = updateText
+         self.photoAction = photoAction
++        self.openGroup = openGroup
++        self.ghostMaster = ghostMaster
++        self.ghostExpand = ghostExpand
+     }
+ }
+ 
+ private enum LunagramSettingsSection: Int32 {
++    case menu
+     case ghost
+     case spy
+-    // Порядок разделов здесь обязан совпадать с порядком на экране: список
+-    // сверяет строки по номерам и ждёт их по возрастанию.
+     case messages
+     case profileStatus
+     case privacy
+@@ -194,9 +203,76 @@ private enum LunagramSettingsSection: Int32 {
+     case particlesSpeed
+ }
+ 
++/// Разделы главного экрана — каждый открывается своим экраном.
++private enum LunagramSettingsGroup: Int32, CaseIterable {
++    case ghost
++    case spy
++    case messages
++    case profile
++    case privacy
++    case banner
++    case avatarFrame
++    case liveWallpaper
++    case dialogCards
++    case particles
++
++    var title: String {
++        switch self {
++        case .ghost:
++            return "Ghost"
++        case .spy:
++            return "Удалённые и изменённые"
++        case .messages:
++            return "Сообщения"
++        case .profile:
++            return "Профиль"
++        case .privacy:
++            return "Приватность"
++        case .banner:
++            return "Баннер профиля"
++        case .avatarFrame:
++            return "Рамка вокруг аватарки"
++        case .liveWallpaper:
++            return "Живые обои"
++        case .dialogCards:
++            return "Плитки в списке"
++        case .particles:
++            return "Частицы в переписке"
++        }
++    }
++
++    /// Из каких разделов-строк состоит экран группы.
++    var sections: [LunagramSettingsSection] {
++        switch self {
++        case .ghost:
++            return [.ghost]
++        case .spy:
++            return [.spy]
++        case .messages:
++            return [.messages]
++        case .profile:
++            return [.profileStatus]
++        case .privacy:
++            return [.privacy]
++        case .banner:
++            return [.banner, .bannerPhoto]
++        case .avatarFrame:
++            return [.avatarFrame]
++        case .liveWallpaper:
++            return [.liveWallpaper]
++        case .dialogCards:
++            return [.dialogCards]
++        case .particles:
++            return [.appearance, .particlesDensity, .particlesSpeed]
++        }
++    }
++}
++
+ private enum LunagramSettingsEntry: ItemListNodeEntry {
++    case menuItem(LunagramSettingsGroup)
+     case header(LunagramSettingsSection, Int32, String)
+     case toggle(LunagramSettingsSection, LunagramToggle, Bool)
++    case ghostRow(Bool, Bool, [Bool])
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+     case input(LunagramSettingsSection, String, String, String)
+@@ -206,6 +282,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+ 
+     var section: ItemListSectionId {
+         switch self {
++        case .menuItem:
++            return LunagramSettingsSection.menu.rawValue
++        case .ghostRow:
++            return LunagramSettingsSection.ghost.rawValue
+         case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+@@ -214,8 +294,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     // Порядок строк: по сотне на раздел, внутри — по порядку появления.
+     var stableId: Int32 {
+         switch self {
++        case let .menuItem(group):
++            return group.rawValue
+         case let .header(section, index, _):
+             return section.rawValue * 100 + index
++        case .ghostRow:
++            return LunagramSettingsSection.ghost.rawValue * 100 + 1
+         case let .toggle(section, toggle, _):
+             return section.rawValue * 100 + 10 + toggle.rawValue
+         case let .action(section, index, _):
+@@ -235,6 +319,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+ 
+     static func ==(lhs: LunagramSettingsEntry, rhs: LunagramSettingsEntry) -> Bool {
+         switch lhs {
++        case let .menuItem(lhsGroup):
++            if case let .menuItem(rhsGroup) = rhs, lhsGroup == rhsGroup {
++                return true
++            } else {
++                return false
++            }
+         case let .header(lhsSection, lhsIndex, lhsText):
+             if case let .header(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+@@ -247,6 +337,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .ghostRow(lhsExpanded, lhsMaster, lhsSubs):
++            if case let .ghostRow(rhsExpanded, rhsMaster, rhsSubs) = rhs, lhsExpanded == rhsExpanded, lhsMaster == rhsMaster, lhsSubs == rhsSubs {
++                return true
++            } else {
++                return false
++            }
+         case let .action(lhsSection, lhsIndex, lhsText):
+             if case let .action(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+@@ -293,12 +389,29 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+         let arguments = arguments as! LunagramSettingsControllerArguments
+         switch self {
++        case let .menuItem(group):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.openGroup(group)
++            })
+         case let .header(_, _, text):
+             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+         case let .toggle(_, toggle, value):
+             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             })
++        case let .ghostRow(expanded, master, subs):
++            let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
++                return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++            }
++            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Ghost", value: master, isExpanded: expanded, subItems: subItems, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.ghostMaster(value)
++            }, selectAction: {
++                arguments.ghostExpand()
++            }, subAction: { sub in
++                if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
++                    arguments.toggle(toggle, !toggle.value)
++                }
++            })
+         case let .action(section, _, text):
+             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                 arguments.pick(section)
+@@ -345,111 +458,136 @@ private struct LunagramMediaState: Equatable {
+     }
+ }
+ 
+-private func lunagramSettingsEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++/// Строки одного раздела-экрана. Общий список на все разделы: экран группы
++/// отбирает из него только свои.
++private func lunagramSectionEntries(section: LunagramSettingsSection, values: [LunagramToggle: Bool], media: LunagramMediaState, ghostExpanded: Bool) -> [LunagramSettingsEntry] {
+     func value(_ toggle: LunagramToggle) -> Bool {
+         return values[toggle] ?? toggle.value
+     }
+ 
+-    var entries: [LunagramSettingsEntry] = [
+-        .header(.ghost, 0, "GHOST"),
+-        .toggle(.ghost, .ghostDontRead, value(.ghostDontRead)),
+-        .toggle(.ghost, .ghostDontType, value(.ghostDontType)),
+-        .toggle(.ghost, .ghostStayOffline, value(.ghostStayOffline)),
+-        .toggle(.ghost, .ghostDontViewStories, value(.ghostDontViewStories)),
+-        .info(.ghost, 0, "Собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети. Истории можно смотреть, не попадая в список зрителей. Каждое — отдельно, включай только нужное."),
+-
+-        .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
+-        .toggle(.spy, .keepDeleted, value(.keepDeleted)),
+-        .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
+-        .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений»."),
+-
+-        .header(.messages, 0, "СООБЩЕНИЯ"),
+-        .toggle(.messages, .showRoundSource, value(.showRoundSource)),
+-        .toggle(.messages, .roundFromVideo, value(.roundFromVideo)),
+-        .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат."),
+-
+-        .header(.profileStatus, 0, "ПРОФИЛЬ"),
+-        .disclosure(.profileStatus, "Статус в имени"),
+-        .photoAction(.profileStatus, 0, "Удалить все фото профиля"),
+-        .photoAction(.profileStatus, 1, "Оставить только главное фото"),
+-        .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя."),
+-
+-        .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+-        .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+-        .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
+-        .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Пусто — настоящее имя. Начнёт действовать после перезапуска Lunagram."),
+-
+-        .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+-        .toggle(.banner, .profileBanner, value(.profileBanner))
+-    ]
+-    // Нарисованные — с нуля до девяти, своё фото — десятое.
+-    for preset in LunagramBannerPreset.allCases {
+-        entries.append(.dim(.banner, Int32(preset.rawValue - 1), preset.title, preset.rawValue == media.bannerPreset))
+-    }
+-    entries.append(.dim(.banner, 10, "Своё фото или видео", media.bannerPreset == 0))
+-    entries.append(.info(.banner, 0, "Картинка в шапке твоего профиля — видишь её только ты. Нарисованные — те же десять, что на ПК."))
+-
+-    entries.append(contentsOf: [
+-        .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
+-        .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
+-    ])
+-    for (index, title) in lunagramBannerDimTitles.enumerated() {
+-        entries.append(.dim(.bannerPhoto, Int32(index), title, index == media.bannerDim))
+-    }
+-    entries.append(.info(.bannerPhoto, 0, media.hasBanner
+-        ? "Затемнение нужно, чтобы на светлом фото читались имя и статус. Нарисованным баннерам оно не нужно — они и так тёмные."
+-        : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля."))
+-
+-    entries.append(contentsOf: [
+-        .header(.avatarFrame, 0, "РАМКА ВОКРУГ АВАТАРКИ"),
+-        .toggle(.avatarFrame, .avatarFrame, value(.avatarFrame))
+-    ])
+-    for style in LunagramAvatarFrameStyle.allCases {
+-        entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, style.rawValue == media.avatarFrameStyle))
+-    }
+-    entries.append(.info(.avatarFrame, 0, "Вокруг твоей аватарки в профиле — те же девять рамок, что на ПК. Видишь её только ты."))
+-
+-    entries.append(contentsOf: [
+-        .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+-        .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
+-        .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
+-    ])
+-    for (index, title) in lunagramWallpaperDimTitles.enumerated() {
+-        entries.append(.dim(.liveWallpaper, Int32(index), title, index == media.wallpaperDim))
+-    }
+-    entries.append(.info(.liveWallpaper, 0, media.hasWallpaper
+-        ? "Видео играет по кругу вместо обоев, без звука — твою музыку оно не прервёт. Затемнение нужно, чтобы на пёстром ролике читались сообщения."
+-        : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
+-
+-    entries.append(contentsOf: [
+-        .header(.dialogCards, 0, "ПЛИТКИ В СПИСКЕ ПЕРЕПИСОК"),
+-        .toggle(.dialogCards, .dialogCards, value(.dialogCards)),
+-        .toggle(.dialogCards, .dialogCardsFadeMuted, value(.dialogCardsFadeMuted))
+-    ])
+-    for (index, title) in lunagramCardsDimTitles.enumerated() {
+-        entries.append(.dim(.dialogCards, Int32(index), title, index == media.cardsDim))
+-    }
+-    entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
+-
+-    entries.append(contentsOf: [
+-        .header(.appearance, 0, "ЧАСТИЦЫ В ПЕРЕПИСКЕ"),
+-        .toggle(.appearance, .particles, value(.particles))
+-    ])
+-    for kind in LunagramParticleKind.allCases {
+-        entries.append(.dim(.appearance, Int32(kind.rawValue - 1), kind.title, kind.rawValue == media.particlesKind))
+-    }
+-    entries.append(.header(.particlesDensity, 0, "ГУСТОТА"))
+-    let density = lunagramNearestLevel(media.particlesDensity, lunagramParticlesDensityLevels)
+-    for (index, level) in lunagramParticlesDensityLevels.enumerated() {
+-        entries.append(.dim(.particlesDensity, Int32(index), level.0, index == density))
+-    }
+-    entries.append(.header(.particlesSpeed, 0, "СКОРОСТЬ"))
+-    let speed = lunagramNearestLevel(media.particlesSpeed, lunagramParticlesSpeedLevels)
+-    for (index, level) in lunagramParticlesSpeedLevels.enumerated() {
+-        entries.append(.dim(.particlesSpeed, Int32(index), level.0, index == speed))
++    switch section {
++    case .menu:
++        return []
++    case .ghost:
++        let subs = lunagramGhostToggles.map { value($0) }
++        let master = subs.contains(true)
++        return [
++            .header(.ghost, 0, "GHOST"),
++            .ghostRow(ghostExpanded, master, subs),
++            .info(.ghost, 0, "Один переключатель — и собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети, а истории можно смотреть, не попадая в список зрителей. Стрелка справа раскрывает всё по отдельности.")
++        ]
++    case .spy:
++        return [
++            .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
++            .toggle(.spy, .keepDeleted, value(.keepDeleted)),
++            .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
++            .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений».")
++        ]
++    case .messages:
++        return [
++            .header(.messages, 0, "СООБЩЕНИЯ"),
++            .toggle(.messages, .showRoundSource, value(.showRoundSource)),
++            .toggle(.messages, .roundFromVideo, value(.roundFromVideo)),
++            .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат.")
++        ]
++    case .profileStatus:
++        return [
++            .header(.profileStatus, 0, "ПРОФИЛЬ"),
++            .disclosure(.profileStatus, "Статус в имени"),
++            .photoAction(.profileStatus, 0, "Удалить все фото профиля"),
++            .photoAction(.profileStatus, 1, "Оставить только главное фото"),
++            .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя.")
++        ]
++    case .privacy:
++        return [
++            .header(.privacy, 0, "ПРИВАТНОСТЬ"),
++            .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
++            .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
++            .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Пусто — настоящее имя. Начнёт действовать после перезапуска Lunagram.")
++        ]
++    case .banner:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
++            .toggle(.banner, .profileBanner, value(.profileBanner))
++        ]
++        // Нарисованные — с нуля до девяти, своё фото — десятое.
++        for preset in LunagramBannerPreset.allCases {
++            entries.append(.dim(.banner, Int32(preset.rawValue - 1), preset.title, preset.rawValue == media.bannerPreset))
++        }
++        entries.append(.dim(.banner, 10, "Своё фото или видео", media.bannerPreset == 0))
++        entries.append(.info(.banner, 0, "Картинка в шапке твоего профиля — видишь её только ты. Нарисованные — те же десять, что на ПК."))
++        return entries
++    case .bannerPhoto:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
++            .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
++        ]
++        for (index, title) in lunagramBannerDimTitles.enumerated() {
++            entries.append(.dim(.bannerPhoto, Int32(index), title, index == media.bannerDim))
++        }
++        entries.append(.info(.bannerPhoto, 0, media.hasBanner
++            ? "Затемнение нужно, чтобы на светлом фото читались имя и статус. Нарисованным баннерам оно не нужно — они и так тёмные."
++            : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля."))
++        return entries
++    case .avatarFrame:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.avatarFrame, 0, "РАМКА ВОКРУГ АВАТАРКИ"),
++            .toggle(.avatarFrame, .avatarFrame, value(.avatarFrame))
++        ]
++        for style in LunagramAvatarFrameStyle.allCases {
++            entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, style.rawValue == media.avatarFrameStyle))
++        }
++        entries.append(.info(.avatarFrame, 0, "Вокруг твоей аватарки в профиле — те же девять рамок, что на ПК. Видишь её только ты."))
++        return entries
++    case .liveWallpaper:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
++            .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
++            .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
++        ]
++        for (index, title) in lunagramWallpaperDimTitles.enumerated() {
++            entries.append(.dim(.liveWallpaper, Int32(index), title, index == media.wallpaperDim))
++        }
++        entries.append(.info(.liveWallpaper, 0, media.hasWallpaper
++            ? "Видео играет по кругу вместо обоев, без звука — твою музыку оно не прервёт. Затемнение нужно, чтобы на пёстром ролике читались сообщения."
++            : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
++        return entries
++    case .dialogCards:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.dialogCards, 0, "ПЛИТКИ В СПИСКЕ ПЕРЕПИСОК"),
++            .toggle(.dialogCards, .dialogCards, value(.dialogCards)),
++            .toggle(.dialogCards, .dialogCardsFadeMuted, value(.dialogCardsFadeMuted))
++        ]
++        for (index, title) in lunagramCardsDimTitles.enumerated() {
++            entries.append(.dim(.dialogCards, Int32(index), title, index == media.cardsDim))
++        }
++        entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
++        return entries
++    case .appearance:
++        var entries: [LunagramSettingsEntry] = [
++            .header(.appearance, 0, "ЧАСТИЦЫ В ПЕРЕПИСКЕ"),
++            .toggle(.appearance, .particles, value(.particles))
++        ]
++        for kind in LunagramParticleKind.allCases {
++            entries.append(.dim(.appearance, Int32(kind.rawValue - 1), kind.title, kind.rawValue == media.particlesKind))
++        }
++        return entries
++    case .particlesDensity:
++        var entries: [LunagramSettingsEntry] = [.header(.particlesDensity, 0, "ГУСТОТА")]
++        let density = lunagramNearestLevel(media.particlesDensity, lunagramParticlesDensityLevels)
++        for (index, level) in lunagramParticlesDensityLevels.enumerated() {
++            entries.append(.dim(.particlesDensity, Int32(index), level.0, index == density))
++        }
++        return entries
++    case .particlesSpeed:
++        var entries: [LunagramSettingsEntry] = [.header(.particlesSpeed, 0, "СКОРОСТЬ")]
++        let speed = lunagramNearestLevel(media.particlesSpeed, lunagramParticlesSpeedLevels)
++        for (index, level) in lunagramParticlesSpeedLevels.enumerated() {
++            entries.append(.dim(.particlesSpeed, Int32(index), level.0, index == speed))
++        }
++        entries.append(.info(.particlesSpeed, 0, "Падают поверх фона переписки — те же пять видов, что на ПК. Рисует их сама система, поэтому батарею они почти не тратят."))
++        return entries
+     }
+-    entries.append(.info(.particlesSpeed, 0, "Падают поверх фона переписки — те же пять видов, что на ПК. Рисует их сама система, поэтому батарею они почти не тратят."))
+-    return entries
+ }
+ 
+ /// Держит делегата галереи, пока она открыта: сама галерея держит его
+@@ -497,8 +635,6 @@ private final class LunagramMediaPickerDelegate: NSObject, PHPickerViewControlle
+         }
+         let importer = self.importer
+         provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
+-            // Файл временный: система удалит его, как только это замыкание
+-            // закончится. Поэтому копируем здесь же, не откладывая.
+             var imported = false
+             if let url = url {
+                 imported = (try? importer(url, isVideo)) != nil
+@@ -510,30 +646,36 @@ private final class LunagramMediaPickerDelegate: NSObject, PHPickerViewControlle
+     }
+ }
+ 
+-func lunagramSettingsController(context: AccountContext) -> ViewController {
+-    // Значения держим в обещаниях, а не читаем из настроек при каждой
+-    // перерисовке: так экран обновляется сразу, как только что-то
+-    // поменяли, и не ждёт никаких уведомлений.
++/// Всё, что экраны Lunagram делят между собой: обещания-значения и общие
++/// действия. Одно на все экраны, поэтому переключил на одном — сразу видно
++/// на другом.
++private final class LunagramSharedState {
+     let valuesPromise = ValuePromise<[LunagramToggle: Bool]>([:], ignoreRepeated: true)
+     var values: [LunagramToggle: Bool] = [:]
+     let mediaPromise = ValuePromise<LunagramMediaState>(LunagramMediaState.current(), ignoreRepeated: true)
++    let ghostExpandedPromise = ValuePromise<Bool>(false, ignoreRepeated: true)
++    var ghostExpanded = false
+     let pickerHolder = LunagramPickerHolder()
+-    // Вложенные экраны и окна раздела открываем через сам экран — он
+-    // появится ниже.
+-    var pushImpl: ((ViewController) -> Void)?
+-    var presentImpl: ((ViewController) -> Void)?
++    var arguments: LunagramSettingsControllerArguments?
++    // Навигацию и показ берём у главного экрана — он в той же стопке, что и
++    // экраны групп, поэтому открытое ляжет сверху видимого.
++    var push: ((ViewController) -> Void)?
++    var present: ((ViewController) -> Void)?
++}
+ 
+-    let arguments = LunagramSettingsControllerArguments(toggle: { toggle, value in
++private func lunagramMakeArguments(context: AccountContext, shared: LunagramSharedState) -> LunagramSettingsControllerArguments {
++    let refreshMedia = {
++        shared.mediaPromise.set(LunagramMediaState.current())
++    }
++    return LunagramSettingsControllerArguments(toggle: { toggle, value in
+         toggle.set(value)
+-        values[toggle] = value
+-        valuesPromise.set(values)
++        shared.values[toggle] = value
++        shared.valuesPromise.set(shared.values)
+     }, pick: { section in
+         if section == .profileStatus {
+-            pushImpl?(lunagramStatusController(context: context))
++            shared.push?(lunagramStatusController(context: context))
+             return
+         }
+-        // Галерея без запроса доступа к фото есть только с iOS 14, а
+-        // Telegram поддерживает и 13-ю.
+         guard #available(iOS 14.0, *) else {
+             return
+         }
+@@ -549,45 +691,40 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+                 try LunagramSettings.importLiveWallpaper(from: url)
+             }
+         }, completion: { imported in
+-            pickerHolder.delegate = nil
++            shared.pickerHolder.delegate = nil
+             guard imported else {
+                 return
+             }
+-            // Выбрал файл — значит хочет его видеть: включаем сразу.
+             let toggle: LunagramToggle = isBanner ? .profileBanner : .liveWallpaper
+             toggle.set(true)
+-            values[toggle] = true
+-            valuesPromise.set(values)
+-            mediaPromise.set(LunagramMediaState.current())
++            shared.values[toggle] = true
++            shared.valuesPromise.set(shared.values)
++            refreshMedia()
+         })
+-        pickerHolder.delegate = delegate
++        shared.pickerHolder.delegate = delegate
+         picker.delegate = delegate
+-        // Так же открывает галерею сам Telegram — в MediaPickerScreen.
+         (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
+     }, setDim: { section, dim in
+         switch section {
+         case .banner:
+-            // Нарисованный или своё. Выбрал — значит хочет видеть: включаем.
+             LunagramSettings.profileBannerPreset = dim < 10 ? dim + 1 : 0
+             LunagramToggle.profileBanner.set(true)
+-            values[.profileBanner] = true
+-            valuesPromise.set(values)
++            shared.values[.profileBanner] = true
++            shared.valuesPromise.set(shared.values)
+         case .bannerPhoto:
+             LunagramSettings.profileBannerDim = dim
+         case .dialogCards:
+             LunagramSettings.dialogCardsDim = dim
+         case .appearance:
+-            // Выбрал вид — значит хочет его видеть: включаем частицы сразу.
+             LunagramSettings.particlesKind = dim + 1
+             LunagramToggle.particles.set(true)
+-            values[.particles] = true
+-            valuesPromise.set(values)
++            shared.values[.particles] = true
++            shared.valuesPromise.set(shared.values)
+         case .avatarFrame:
+-            // Выбрал рамку — значит хочет её видеть: включаем сразу.
+             LunagramSettings.avatarFrameStyle = dim + 1
+             LunagramToggle.avatarFrame.set(true)
+-            values[.avatarFrame] = true
+-            valuesPromise.set(values)
++            shared.values[.avatarFrame] = true
++            shared.valuesPromise.set(shared.values)
+         case .particlesDensity:
+             LunagramSettings.particlesDensity = lunagramParticlesDensityLevels[max(0, min(lunagramParticlesDensityLevels.count - 1, dim))].1
+         case .particlesSpeed:
+@@ -595,31 +732,64 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+-        mediaPromise.set(LunagramMediaState.current())
++        refreshMedia()
+     }, updateText: { _, text in
+-        // Поле пока одно — имя устройства. Экран не перестраиваем: поле само
+-        // держит набранное, а на лету это имя никому не нужно.
+         LunagramSettings.deviceModelName = text
+     }, photoAction: { index in
+         lunagramDeleteProfilePhotos(context: context, keepMain: index == 1, present: { c in
+-            presentImpl?(c)
++            shared.present?(c)
+         })
++    }, openGroup: { group in
++        shared.push?(lunagramGroupController(context: context, group: group, shared: shared))
++    }, ghostMaster: { value in
++        for toggle in lunagramGhostToggles {
++            toggle.set(value)
++            shared.values[toggle] = value
++        }
++        shared.valuesPromise.set(shared.values)
++    }, ghostExpand: {
++        shared.ghostExpanded.toggle()
++        shared.ghostExpandedPromise.set(shared.ghostExpanded)
+     })
++}
+ 
+-    let signal = combineLatest(context.sharedContext.presentationData, valuesPromise.get(), mediaPromise.get())
++/// Экран одной группы: те же строки, что были в общей простыне, но только
++/// свои. Делит состояние с остальными экранами.
++private func lunagramGroupController(context: AccountContext, group: LunagramSettingsGroup, shared: LunagramSharedState) -> ViewController {
++    let arguments = shared.arguments!
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData, currentValues, media -> (ItemListControllerState, (ItemListNodeState, Any)) in
+-        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Lunagram"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: lunagramSettingsEntries(values: currentValues, media: media), style: .blocks, animateChanges: false)
++    |> map { presentationData, currentValues, media, ghostExpanded -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramSettingsEntry] = []
++        for section in group.sections {
++            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded))
++        }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(group.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
+ 
++func lunagramSettingsController(context: AccountContext) -> ViewController {
++    let shared = LunagramSharedState()
++    let arguments = lunagramMakeArguments(context: context, shared: shared)
++    shared.arguments = arguments
++
++    let signal = context.sharedContext.presentationData
++    |> deliverOnMainQueue
++    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let entries = LunagramSettingsGroup.allCases.map { LunagramSettingsEntry.menuItem($0) }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Lunagram"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
+         return (controllerState, (listState, arguments))
+     }
+ 
+     let controller = ItemListController(context: context, state: signal)
+-    pushImpl = { [weak controller] c in
++    shared.push = { [weak controller] c in
+         controller?.push(c)
+     }
+-    presentImpl = { [weak controller] c in
++    shared.present = { [weak controller] c in
+         controller?.present(c, in: .window(.root))
+     }
+     return controller
