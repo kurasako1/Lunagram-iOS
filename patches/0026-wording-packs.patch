@@ -1,0 +1,368 @@
+diff --git a/build-system/GenerateStrings/GenerateStrings.py b/build-system/GenerateStrings/GenerateStrings.py
+index e10ff2b8..3a1539c5 100644
+--- a/build-system/GenerateStrings/GenerateStrings.py
++++ b/build-system/GenerateStrings/GenerateStrings.py
+@@ -445,6 +445,255 @@ static NSString * _Nonnull getPluralizationSuffix(uint32_t lc, int32_t value) {
+     }
+ }
+ 
++
++// Lunagram: свои надписи вместо телеграмовских — «языки», как на картинке у
++// хозяина. Меняется только то, что человек видит; ключи строк и всё, что на
++// них завязано, остаются телеграмовскими.
++//
++// Крючок стоит в самом низу, в getSingle: через неё проходит каждая надпись
++// клиента, поэтому один набор накрывает весь интерфейс разом.
++static NSDictionary<NSString *, NSString *> * _Nullable lunagramWordingDict(NSInteger pack) {
++    static NSLock *lock = nil;
++    static NSInteger cachedPack = 0;
++    static NSDictionary<NSString *, NSString *> *cachedDict = nil;
++    static dispatch_once_t onceToken;
++    dispatch_once(&onceToken, ^{
++        lock = [[NSLock alloc] init];
++    });
++
++    [lock lock];
++    if (cachedPack == pack && cachedDict != nil) {
++        NSDictionary<NSString *, NSString *> *result = cachedDict;
++        [lock unlock];
++        return result;
++    }
++
++    NSDictionary<NSString *, NSString *> *dict = nil;
++    switch (pack) {
++        case 1: {
++            // Доксграм
++            dict = @{
++                @"Conversation.ContextMenuReply": @"Отписать",
++                @"Conversation.ContextMenuCopy": @"Спереть",
++                @"Conversation.ContextMenuForward": @"Вжух",
++                @"Conversation.ContextMenuDelete": @"Снести",
++                @"Conversation.ContextMenuSelect": @"Отметить",
++                @"Conversation.ContextMenuShare": @"Раскидать",
++                @"Conversation.ContextMenuMore": @"Дальше...",
++                @"Conversation.ContextMenuCopyLink": @"Спереть ссылку",
++                @"Conversation.ContextMenuBan": @"Урезать",
++                @"Conversation.Pin": @"Прибить",
++                @"Conversation.Unpin": @"Отодрать",
++                @"Conversation.Edit": @"Переписать",
++                @"Conversation.Info": @"Досье",
++                @"Conversation.Search": @"Пробить",
++                @"Conversation.Mute": @"Заткнуть",
++                @"Conversation.Unmute": @"Развязать язык",
++                @"Conversation.Block": @"Забанить",
++                @"Conversation.Unblock": @"Разбанить",
++                @"Conversation.Report": @"Настучать",
++                @"ChatList.Mute": @"Заткнуть",
++                @"ChatList.Unmute": @"Развязать язык",
++                @"ChatList.ReadAll": @"Прочесть всё",
++                @"ChatList.ArchiveAction": @"Чулан",
++                @"Common.OK": @"Норм",
++                @"Common.Cancel": @"Забей",
++                @"Common.Done": @"Всё",
++                @"Common.Delete": @"Снести",
++                @"Common.Back": @"Обратно",
++                @"Common.Next": @"Дальше",
++                @"Common.Close": @"Свалить",
++                @"Common.Yes": @"Ага",
++                @"Common.No": @"Не",
++                @"Common.Save": @"Заныкать",
++                @"Common.Edit": @"Переписать",
++                @"Common.Search": @"Пробить",
++                @"Common.More": @"Больше",
++                @"Common.Select": @"Отметить",
++                @"Settings.Title": @"Крутилки",
++                @"Settings.Appearance": @"Внешка",
++                @"Settings.Logout": @"Слиться",
++                @"Settings.SavedMessages": @"Заначка",
++                @"Settings.Search": @"Пробить настройки",
++                @"Contacts.Title": @"Кореша",
++                @"Calls.TabTitle": @"Звонилка",
++            };
++            break;
++        }
++        case 2: {
++            // Ангельский
++            dict = @{
++                @"Conversation.ContextMenuReply": @"Откликнуться",
++                @"Conversation.ContextMenuCopy": @"Переписать себе",
++                @"Conversation.ContextMenuForward": @"Передать",
++                @"Conversation.ContextMenuDelete": @"Отпустить",
++                @"Conversation.ContextMenuSelect": @"Отметить",
++                @"Conversation.ContextMenuShare": @"Подарить",
++                @"Conversation.ContextMenuMore": @"Ещё...",
++                @"Conversation.ContextMenuCopyLink": @"Взять ссылку",
++                @"Conversation.ContextMenuBan": @"Ограничить",
++                @"Conversation.Pin": @"Сберечь",
++                @"Conversation.Unpin": @"Снять",
++                @"Conversation.Edit": @"Поправить",
++                @"Conversation.Info": @"О нём",
++                @"Conversation.Search": @"Найти",
++                @"Conversation.Mute": @"Утишить",
++                @"Conversation.Unmute": @"Вернуть голос",
++                @"Conversation.Block": @"Затворить",
++                @"Conversation.Unblock": @"Отворить",
++                @"Conversation.Report": @"Просить помощи",
++                @"ChatList.Mute": @"Утишить",
++                @"ChatList.Unmute": @"Вернуть голос",
++                @"ChatList.ReadAll": @"Принять всё",
++                @"ChatList.ArchiveAction": @"Затвор",
++                @"Common.OK": @"Хорошо",
++                @"Common.Cancel": @"Не надо",
++                @"Common.Done": @"Готово",
++                @"Common.Delete": @"Отпустить",
++                @"Common.Back": @"Назад",
++                @"Common.Next": @"Дальше",
++                @"Common.Close": @"Закрыть",
++                @"Common.Yes": @"Да",
++                @"Common.No": @"Нет",
++                @"Common.Save": @"Сберечь",
++                @"Common.Edit": @"Поправить",
++                @"Common.Search": @"Найти",
++                @"Common.More": @"Ещё",
++                @"Common.Select": @"Отметить",
++                @"Settings.Title": @"Уклад",
++                @"Settings.Appearance": @"Облик",
++                @"Settings.Logout": @"Проститься",
++                @"Settings.SavedMessages": @"Тихая гавань",
++                @"Settings.Search": @"Найти в укладе",
++                @"Contacts.Title": @"Близкие",
++                @"Calls.TabTitle": @"Голоса",
++            };
++            break;
++        }
++        case 3: {
++            // Майнкрафт
++            dict = @{
++                @"Conversation.ContextMenuReply": @"Скрафтить ответ",
++                @"Conversation.ContextMenuCopy": @"Дюпнуть",
++                @"Conversation.ContextMenuForward": @"Телепортнуть",
++                @"Conversation.ContextMenuDelete": @"Сломать",
++                @"Conversation.ContextMenuSelect": @"Выделить",
++                @"Conversation.ContextMenuShare": @"Дропнуть",
++                @"Conversation.ContextMenuMore": @"Ещё...",
++                @"Conversation.ContextMenuCopyLink": @"Скопировать координаты",
++                @"Conversation.ContextMenuBan": @"Забрать права",
++                @"Conversation.Pin": @"Поставить блок",
++                @"Conversation.Unpin": @"Сломать блок",
++                @"Conversation.Edit": @"Зачаровать",
++                @"Conversation.Info": @"Инфо",
++                @"Conversation.Search": @"Найти",
++                @"Conversation.Mute": @"Замьютить",
++                @"Conversation.Unmute": @"Размьютить",
++                @"Conversation.Block": @"Забанить",
++                @"Conversation.Unblock": @"Разбанить",
++                @"Conversation.Report": @"Позвать админа",
++                @"ChatList.Mute": @"Замьютить",
++                @"ChatList.Unmute": @"Размьютить",
++                @"ChatList.ReadAll": @"Прочитать всё",
++                @"ChatList.ArchiveAction": @"Сундук",
++                @"Common.OK": @"Принять",
++                @"Common.Cancel": @"Отмена",
++                @"Common.Done": @"Скрафчено",
++                @"Common.Delete": @"Сломать",
++                @"Common.Back": @"Назад",
++                @"Common.Next": @"Дальше",
++                @"Common.Close": @"Закрыть сундук",
++                @"Common.Yes": @"Ага",
++                @"Common.No": @"Неа",
++                @"Common.Save": @"Сохранить мир",
++                @"Common.Edit": @"Зачаровать",
++                @"Common.Search": @"Найти",
++                @"Common.More": @"Ещё",
++                @"Common.Select": @"Выделить",
++                @"Settings.Title": @"Настройки мира",
++                @"Settings.Appearance": @"Ресурспак",
++                @"Settings.Logout": @"Выйти из игры",
++                @"Settings.SavedMessages": @"Эндер-сундук",
++                @"Settings.Search": @"Найти настройку",
++                @"Contacts.Title": @"Игроки",
++                @"Calls.TabTitle": @"Голосовой чат",
++            };
++            break;
++        }
++        case 4: {
++            // Готический
++            dict = @{
++                @"Conversation.ContextMenuReply": @"Изречь",
++                @"Conversation.ContextMenuCopy": @"Списать",
++                @"Conversation.ContextMenuForward": @"Разослать",
++                @"Conversation.ContextMenuDelete": @"Предать забвению",
++                @"Conversation.ContextMenuSelect": @"Избрать",
++                @"Conversation.ContextMenuShare": @"Возвестить",
++                @"Conversation.ContextMenuMore": @"Далее...",
++                @"Conversation.ContextMenuCopyLink": @"Списать ссылку",
++                @"Conversation.ContextMenuBan": @"Умалить",
++                @"Conversation.Pin": @"Пригвоздить",
++                @"Conversation.Unpin": @"Снять",
++                @"Conversation.Edit": @"Переиначить",
++                @"Conversation.Info": @"Сведения",
++                @"Conversation.Search": @"Взыскать",
++                @"Conversation.Mute": @"Обречь на немоту",
++                @"Conversation.Unmute": @"Вернуть глас",
++                @"Conversation.Block": @"Изгнать",
++                @"Conversation.Unblock": @"Простить",
++                @"Conversation.Report": @"Донести",
++                @"ChatList.Mute": @"Обречь на немоту",
++                @"ChatList.Unmute": @"Вернуть глас",
++                @"ChatList.ReadAll": @"Прочесть всё",
++                @"ChatList.ArchiveAction": @"Склеп",
++                @"Common.OK": @"Быть по сему",
++                @"Common.Cancel": @"Отречься",
++                @"Common.Done": @"Свершилось",
++                @"Common.Delete": @"Предать забвению",
++                @"Common.Back": @"Вспять",
++                @"Common.Next": @"Далее",
++                @"Common.Close": @"Затворить",
++                @"Common.Yes": @"Истинно",
++                @"Common.No": @"Отнюдь",
++                @"Common.Save": @"Сберечь",
++                @"Common.Edit": @"Переиначить",
++                @"Common.Search": @"Взыскать",
++                @"Common.More": @"Более",
++                @"Common.Select": @"Избрать",
++                @"Settings.Title": @"Уложение",
++                @"Settings.Appearance": @"Убранство",
++                @"Settings.Logout": @"Отринуть",
++                @"Settings.SavedMessages": @"Скрижали",
++                @"Settings.Search": @"Взыскать в уложении",
++                @"Contacts.Title": @"Ближние",
++                @"Calls.TabTitle": @"Зовы",
++            };
++            break;
++        }
++        default: {
++            break;
++        }
++    }
++
++    cachedPack = pack;
++    cachedDict = dict;
++    [lock unlock];
++    return dict;
++}
++
++static NSString * _Nonnull lunagramApplyWording(NSString * _Nonnull key, NSString * _Nonnull value) {
++    NSInteger pack = [[NSUserDefaults standardUserDefaults] integerForKey:@"lunagram.wording.pack"];
++    if (pack <= 0) {
++        return value;
++    }
++    NSDictionary<NSString *, NSString *> *dict = lunagramWordingDict(pack);
++    NSString *replacement = dict[key];
++    if (replacement != nil) {
++        return replacement;
++    }
++    return value;
++}
++
+ static NSString * _Nonnull getSingle(_PresentationStrings * _Nullable strings, NSString * _Nonnull key,
+     bool * _Nullable isFound) {
+     NSString *result = nil;
+@@ -484,7 +733,7 @@ static NSString * _Nonnull getSingle(_PresentationStrings * _Nullable strings, N
+             *isFound = true;
+         }
+     }
+-    return result;
++    return lunagramApplyWording(key, result);
+ }
+ 
+ static NSString * _Nonnull getSingleIndirect(_PresentationStrings * _Nonnull strings, uint32_t keyId) {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 98627ee1..02bc4e22 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -236,6 +236,25 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    // MARK: Надписи интерфейса
++    //
++    // Ключ читает не Swift, а сам генератор строк Telegram — тот кусок, через
++    // который проходит каждая надпись клиента. Поэтому имя ключа менять
++    // нельзя, не поправив заплатку генератора.
++
++    /// Набор надписей: 0 — родные телеграмовские, дальше по порядку
++    /// Доксграм, Ангельский, Майнкрафт, Готический.
++    public static var wordingPack: Int {
++        get { return defaults.integer(forKey: "lunagram.wording.pack") }
++        set {
++            defaults.set(newValue, forKey: "lunagram.wording.pack")
++            changed()
++        }
++    }
++
++    /// Названия наборов — по порядку, начиная с обычного.
++    public static let wordingPackTitles = ["Обычные", "Доксграм", "Ангельский", "Майнкрафт", "Готический"]
++
+     // MARK: Живые обои
+ 
+     /// Видео вместо обоев переписки.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index a631c6fb..54a25cb2 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -229,6 +229,7 @@ private enum LunagramSettingsSection: Int32 {
+     case avatarFrameBright
+     case avatarFrameGlow
+     case font
++    case wording
+     case liveWallpaper
+     case dialogCards
+     case appearance
+@@ -273,7 +274,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .particles:
+             return "Частицы в переписке"
+         case .font:
+-            return "Шрифт интерфейса"
++            return "Шрифт и надписи"
+         }
+     }
+ 
+@@ -301,7 +302,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .particles:
+             return [.appearance, .particlesDensity, .particlesSpeed]
+         case .font:
+-            return [.font]
++            return [.font, .wording]
+         }
+     }
+ }
+@@ -504,13 +505,14 @@ private struct LunagramMediaState: Equatable {
+     var avatarFrameStyle: Int
+     var hasAvatarFrameImage: Bool
+     var fontTitle: String?
++    var wordingPack: Int
+     var frameSize: Int
+     var frameBright: Int
+     var frameGlow: Int
+     var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, wordingPack: LunagramSettings.wordingPack, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -620,6 +622,13 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             ? "Свой шрифт на весь клиент — списки, переписки, настройки. Возьми файл .ttf или .otf из «Файлов» — например, майнкрафтовский или готический. Кириллица в шрифте должна быть, иначе русские буквы останутся системными.\n\nКод и ссылки останутся ровным шрифтом — там важна одинаковая ширина букв."
+             : "Шрифт «\(media.fontTitle ?? "")» стоит на всём клиенте. Выключатель возвращает системный, файл при этом остаётся.\n\nЧасть надписей перерисуется не сразу — перезапусти Lunagram, чтобы шрифт встал везде."))
+         return entries
++    case .wording:
++        var entries: [LunagramSettingsEntry] = [.header(.wording, 0, "НАДПИСИ")]
++        for (index, title) in LunagramSettings.wordingPackTitles.enumerated() {
++            entries.append(.dim(.wording, Int32(index), title, index == media.wordingPack))
++        }
++        entries.append(.info(.wording, 0, "Свои слова вместо телеграмовских — те самые «языки»: «Вжух» вместо «Переслать», «Предать забвению» вместо «Удалить». Меняются меню сообщения, кнопки, разделы настроек и вкладки.\n\nПереведены самые ходовые надписи, остальные остаются родными. Перезапусти Lunagram, чтобы сменилось везде."))
++        return entries
+     case .avatarFrameSize:
+         guard media.hasAvatarFrameImage else {
+             return []
+@@ -902,6 +911,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.avatarFrameBrightness = lunagramFrameBrightLevels[max(0, min(lunagramFrameBrightLevels.count - 1, dim))].1
+         case .avatarFrameGlow:
+             LunagramSettings.avatarFrameGlow = lunagramFrameGlowLevels[max(0, min(lunagramFrameGlowLevels.count - 1, dim))].1
++        case .wording:
++            LunagramSettings.wordingPack = dim
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
