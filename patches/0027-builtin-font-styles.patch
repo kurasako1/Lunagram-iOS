@@ -1,0 +1,376 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 02bc4e22..6af154fe 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -206,15 +206,31 @@ public final class LunagramSettings {
+     // Само значение — в LunagramFont, его читает Display. Здесь переходники,
+     // чтобы экран настроек ходил в одно место.
+ 
+-    /// Включён ли свой шрифт.
+-    public static var customFontEnabled: Bool {
+-        get { return LunagramFontSettings.isEnabled }
++    /// Какое начертание выбрано: 0 — системное, дальше готовые, и отдельно
++    /// свой файл.
++    public static var fontStyle: Int {
++        get { return LunagramFontSettings.style }
+         set {
+-            LunagramFontSettings.isEnabled = newValue
++            LunagramFontSettings.style = newValue
+             changed()
+         }
+     }
+ 
++    /// Готовые начертания, взятые из самого айфона.
++    public static var fontStyles: [(id: Int, title: String)] {
++        return LunagramFontSettings.builtInStyles
++    }
++
++    /// Номер, которым обозначен свой файл шрифта.
++    public static var ownFontStyle: Int {
++        return LunagramFontSettings.ownFileStyle
++    }
++
++    /// Есть ли в выбранном файле русские буквы.
++    public static var customFontHasCyrillic: Bool {
++        return LunagramFontSettings.fileHasCyrillic
++    }
++
+     /// Название выбранного шрифта, или `nil`, если файла нет.
+     public static var customFontTitle: String? {
+         return LunagramFontSettings.title
+diff --git a/submodules/LunagramFont/Sources/LunagramFontSettings.swift b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+index c3c42282..f7024fae 100644
+--- a/submodules/LunagramFont/Sources/LunagramFontSettings.swift
++++ b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+@@ -13,9 +13,10 @@ public enum LunagramFontSettings {
+     private static let defaults = UserDefaults.standard
+ 
+     private enum Key {
+-        static let enabled = "lunagram.font.enabled"
++        static let style = "lunagram.font.style"
+         static let file = "lunagram.font.file"
+         static let title = "lunagram.font.title"
++        static let fileHasCyrillic = "lunagram.font.fileCyrillic"
+     }
+ 
+     /// Сообщается, когда шрифт сменили: экраны по ней перерисовываются.
+@@ -27,26 +28,9 @@ public enum LunagramFontSettings {
+     private static var cache: [String: UIFont] = [:]
+     private static var registeredFile: String?
+     private static var familyName: String?
+-    private static var enabledCache: Bool?
+-
+-    /// Включён ли свой шрифт. Значение держим в памяти: его спрашивают на
+-    /// каждую строчку текста, а не раз в экран.
+-    public static var isEnabled: Bool {
+-        get {
+-            lock.lock()
+-            defer { lock.unlock() }
+-            if let enabledCache = self.enabledCache {
+-                return enabledCache
+-            }
+-            let value = defaults.bool(forKey: Key.enabled)
+-            self.enabledCache = value
+-            return value
+-        }
+-        set {
+-            defaults.set(newValue, forKey: Key.enabled)
+-            invalidate()
+-        }
+-    }
++    /// Выбранное начертание держим в памяти: его спрашивают на каждую
++    /// строчку текста, а не раз в экран.
++    private static var styleCache: Int?
+ 
+     /// Как называется выбранный шрифт — показываем в настройках.
+     public static var title: String? {
+@@ -78,15 +62,28 @@ public enum LunagramFontSettings {
+         clearStoredFile()
+         defaults.set(name, forKey: Key.file)
+         defaults.set(family, forKey: Key.title)
+-        defaults.set(true, forKey: Key.enabled)
++        // Сразу смотрим, есть ли в файле русские буквы: если нет, честно
++        // скажем об этом в настройках, а не оставим человека с квадратами.
++        CTFontManagerRegisterFontsForURL(target as CFURL, .process, nil)
++        let cyrillic = UIFont(name: family, size: 12.0).map { hasCyrillic($0) } ?? false
++        defaults.set(cyrillic, forKey: Key.fileHasCyrillic)
++        defaults.set(ownFileStyle, forKey: Key.style)
+         invalidate()
+     }
+ 
+-    /// Убирает свой шрифт — вернётся родной системный.
++    /// Есть ли в выбранном файле русские буквы.
++    public static var fileHasCyrillic: Bool {
++        return defaults.bool(forKey: Key.fileHasCyrillic)
++    }
++
++    /// Убирает свой файл шрифта — вернётся системный.
+     public static func clearFont() {
+         clearStoredFile()
+         defaults.removeObject(forKey: Key.title)
+-        defaults.set(false, forKey: Key.enabled)
++        defaults.removeObject(forKey: Key.fileHasCyrillic)
++        if style == ownFileStyle {
++            defaults.set(0, forKey: Key.style)
++        }
+         invalidate()
+     }
+ 
+@@ -98,20 +95,28 @@ public enum LunagramFontSettings {
+     /// курсив. Где их нет, останется обычное — это лучше, чем потерять
+     /// свой шрифт на половине надписей.
+     public static func font(size: CGFloat, weight: UIFont.Weight, italic: Bool) -> UIFont? {
+-        guard isEnabled else {
++        let style = self.style
++        guard style != 0 else {
+             return nil
+         }
+-        let key = "\(size)_\(weight.rawValue)_\(italic ? 1 : 0)"
++        let key = "\(style)_\(size)_\(weight.rawValue)_\(italic ? 1 : 0)"
+ 
+         lock.lock()
+         if let cached = cache[key] {
+             lock.unlock()
+             return cached
+         }
+-        let family = self.resolvedFamily()
++        var base: UIFont?
++        if style == LunagramFontSettings.ownFileStyle {
++            if let family = self.resolvedFamily() {
++                base = UIFont(name: family, size: size)
++            }
++        } else {
++            base = builtInFont(style: style, size: size)
++        }
+         lock.unlock()
+ 
+-        guard let family = family, let base = UIFont(name: family, size: size) else {
++        guard let base = base else {
+             return nil
+         }
+ 
+@@ -134,6 +139,94 @@ public enum LunagramFontSettings {
+         return font
+     }
+ 
++    // MARK: Готовые начертания
++
++    /// Номер, которым обозначен «свой файл» — чтобы не путать его со
++    /// встроенными.
++    public static let ownFileStyle = 100
++
++    /// Готовые начертания: берутся из самого айфона, качать ничего не надо.
++    /// Каждое проверено на русские буквы — те, где их нет, сюда не попали.
++    ///
++    /// Первые два — сам системный шрифт, только другой выделки: у Apple к
++    /// нему идут скруглённый и с засечками варианты, и кириллица в них
++    /// родная. Остальные — обычные шрифты, лежащие в системе с давних пор.
++    public static let builtInStyles: [(id: Int, title: String)] = [
++        (1, "Округлый"),
++        (2, "С засечками"),
++        (3, "Печатная машинка"),
++        (4, "Книжный"),
++        (5, "Плакатный"),
++        (6, "Широкий"),
++        (7, "Узкий")
++    ]
++
++    /// Какое начертание выбрано: 0 — системное, 1…7 — готовое,
++    /// `ownFileStyle` — свой файл.
++    public static var style: Int {
++        get {
++            lock.lock()
++            defer { lock.unlock() }
++            if let styleCache = self.styleCache {
++                return styleCache
++            }
++            let value = defaults.integer(forKey: Key.style)
++            self.styleCache = value
++            return value
++        }
++        set {
++            defaults.set(newValue, forKey: Key.style)
++            invalidate()
++        }
++    }
++
++    /// Шрифт готового начертания. Если в нём вдруг не окажется русских
++    /// букв — не берём его вовсе: лучше системный, чем пустые квадраты.
++    private static func builtInFont(style: Int, size: CGFloat) -> UIFont? {
++        switch style {
++        case 1, 2:
++            // Системный шрифт другой выделки — кириллица в нём родная.
++            let design: UIFontDescriptor.SystemDesign = style == 1 ? .rounded : .serif
++            guard let descriptor = UIFont.systemFont(ofSize: size).fontDescriptor.withDesign(design) else {
++                return nil
++            }
++            return UIFont(descriptor: descriptor, size: size)
++        default:
++            // Имена пишем по-разному: у одних шрифтов система знает
++            // семейство, у других — только внутреннее имя начертания.
++            let candidates: [String]
++            switch style {
++            case 3:
++                candidates = ["CourierNewPSMT", "Courier New", "Courier"]
++            case 4:
++                candidates = ["Georgia", "TimesNewRomanPSMT"]
++            case 5:
++                candidates = ["Arial-Black", "Arial Black", "HelveticaNeue-Bold"]
++            case 6:
++                candidates = ["Verdana", "Tahoma"]
++            case 7:
++                candidates = ["AvenirNextCondensed-Regular", "Avenir Next Condensed", "HelveticaNeue-CondensedBold"]
++            default:
++                return nil
++            }
++            for name in candidates {
++                if let font = UIFont(name: name, size: size), hasCyrillic(font) {
++                    return font
++                }
++            }
++            return nil
++        }
++    }
++
++    /// Есть ли в шрифте русские буквы. Проверяем по-настоящему — просим у
++    /// него очертания для «А» и «я»; если хоть одного нет, шрифт не годится.
++    public static func hasCyrillic(_ font: UIFont) -> Bool {
++        let characters: [UniChar] = Array("Ая".utf16)
++        var glyphs = [CGGlyph](repeating: 0, count: characters.count)
++        let found = CTFontGetGlyphsForCharacters(font as CTFont, characters, &glyphs, characters.count)
++        return found && !glyphs.contains(0)
++    }
++
+     // MARK: Внутреннее
+ 
+     private enum ImportError: Error {
+@@ -182,7 +275,7 @@ public enum LunagramFontSettings {
+         cache.removeAll()
+         registeredFile = nil
+         familyName = nil
+-        enabledCache = nil
++        styleCache = nil
+         lock.unlock()
+         NotificationCenter.default.post(name: didChangeNotification, object: nil)
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 54a25cb2..c9446278 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -37,7 +37,6 @@ private enum LunagramToggle: Int32 {
+     case roundFromVideo
+     case showPeerId
+     case avatarFrameSparkle
+-    case customFont
+ 
+     var value: Bool {
+         switch self {
+@@ -75,8 +74,6 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showPeerId
+         case .avatarFrameSparkle:
+             return LunagramSettings.avatarFrameSparkle
+-        case .customFont:
+-            return LunagramSettings.customFontEnabled
+         }
+     }
+ 
+@@ -116,8 +113,6 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showPeerId = value
+         case .avatarFrameSparkle:
+             LunagramSettings.avatarFrameSparkle = value
+-        case .customFont:
+-            LunagramSettings.customFontEnabled = value
+         }
+     }
+ 
+@@ -157,8 +152,6 @@ private enum LunagramToggle: Int32 {
+             return "Показывать ID в профиле"
+         case .avatarFrameSparkle:
+             return "Искры вокруг рамки"
+-        case .customFont:
+-            return "Свой шрифт"
+         }
+     }
+ }
+@@ -176,6 +169,9 @@ private let lunagramCardsDimTitles = ["Аватарка ярче", "Средне
+ private let lunagramParticlesDensityLevels: [(String, Int)] = [("Редко", 20), ("Средне", 40), ("Густо", 80)]
+ private let lunagramParticlesSpeedLevels: [(String, Int)] = [("Медленно", 60), ("Обычно", 100), ("Быстро", 160)]
+ 
++/// Строка «свой файл» в списке начертаний. Стоит сразу за готовыми.
++private let lunagramOwnFontRow = 8
++
+ /// Уровни настроек своей рамки — размер, осветление, свечение.
+ private let lunagramFrameSizeLevels: [(String, Int)] = [("Меньше", 110), ("Средне", 150), ("Больше", 210)]
+ private let lunagramFrameBrightLevels: [(String, Int)] = [("Как есть", 100), ("Светлее", 180), ("Ярко", 260)]
+@@ -505,6 +501,8 @@ private struct LunagramMediaState: Equatable {
+     var avatarFrameStyle: Int
+     var hasAvatarFrameImage: Bool
+     var fontTitle: String?
++    var fontStyle: Int
++    var fontHasCyrillic: Bool
+     var wordingPack: Int
+     var frameSize: Int
+     var frameBright: Int
+@@ -512,7 +510,7 @@ private struct LunagramMediaState: Equatable {
+     var bannerPreset: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, wordingPack: LunagramSettings.wordingPack, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
+     }
+ }
+ 
+@@ -609,18 +607,27 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return entries
+     case .font:
+         var entries: [LunagramSettingsEntry] = [
+-            .header(.font, 0, "ШРИФТ ИНТЕРФЕЙСА")
++            .header(.font, 0, "ШРИФТ ИНТЕРФЕЙСА"),
++            .dim(.font, 0, "Системный", media.fontStyle == 0)
+         ]
++        // Готовые начертания взяты из самого айфона — скачивать нечего.
++        for style in LunagramSettings.fontStyles {
++            entries.append(.dim(.font, Int32(style.id), style.title, media.fontStyle == style.id))
++        }
++        // Свой файл — последней строкой списка. Номер строки берём небольшой:
++        // строки сверяются по нему, и он обязан оставаться внутри раздела.
+         if let fontTitle = media.fontTitle {
+-            entries.append(.toggle(.font, .customFont, value(.customFont)))
+-            entries.append(.action(.font, 0, "Заменить файл шрифта"))
+-            entries.append(.photoAction(.font, 3, "Убрать шрифт «\(fontTitle)»"))
++            entries.append(.dim(.font, Int32(lunagramOwnFontRow), "Свой: \(fontTitle)", media.fontStyle == LunagramSettings.ownFontStyle))
++            entries.append(.action(.font, 30, "Заменить свой файл"))
++            entries.append(.photoAction(.font, 51, "Убрать свой файл"))
+         } else {
+-            entries.append(.action(.font, 0, "Выбрать файл шрифта"))
++            entries.append(.action(.font, 30, "Свой файл шрифта"))
+         }
+-        entries.append(.info(.font, 0, media.fontTitle == nil
+-            ? "Свой шрифт на весь клиент — списки, переписки, настройки. Возьми файл .ttf или .otf из «Файлов» — например, майнкрафтовский или готический. Кириллица в шрифте должна быть, иначе русские буквы останутся системными.\n\nКод и ссылки останутся ровным шрифтом — там важна одинаковая ширина букв."
+-            : "Шрифт «\(media.fontTitle ?? "")» стоит на всём клиенте. Выключатель возвращает системный, файл при этом остаётся.\n\nЧасть надписей перерисуется не сразу — перезапусти Lunagram, чтобы шрифт встал везде."))
++        var info = "Начертания в списке уже лежат в самом айфоне — скачивать ничего не надо, и русские буквы в каждом проверены. Шрифт встаёт на весь клиент: списки, переписки, настройки.\n\nКод и ссылки останутся ровным шрифтом — там важна одинаковая ширина букв. Перезапусти Lunagram, чтобы шрифт встал везде."
++        if media.fontTitle != nil && !media.fontHasCyrillic {
++            info += "\n\n⚠️ В твоём файле «\(media.fontTitle ?? "")» русских букв нет — с ним русские надписи станут квадратами. Это не поломка, просто в самом файле их не нарисовали."
++        }
++        entries.append(.info(.font, 0, info))
+         return entries
+     case .wording:
+         var entries: [LunagramSettingsEntry] = [.header(.wording, 0, "НАДПИСИ")]
+@@ -913,6 +920,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.avatarFrameGlow = lunagramFrameGlowLevels[max(0, min(lunagramFrameGlowLevels.count - 1, dim))].1
+         case .wording:
+             LunagramSettings.wordingPack = dim
++        case .font:
++            LunagramSettings.fontStyle = dim == lunagramOwnFontRow ? LunagramSettings.ownFontStyle : dim
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+@@ -920,7 +929,7 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, updateText: { _, text in
+         LunagramSettings.deviceModelName = text
+     }, photoAction: { index in
+-        if index == 3 {
++        if index == 51 {
+             LunagramSettings.clearCustomFont()
+             refreshMedia()
+             return
