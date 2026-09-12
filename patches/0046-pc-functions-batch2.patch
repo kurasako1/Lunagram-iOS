@@ -1,0 +1,167 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 68dd94f1..b70f4ab0 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -58,6 +58,8 @@ public final class LunagramSettings {
+         static let roundFromVideo = "lunagram.messages.roundFromVideo"
+         static let showPeerId = "lunagram.messages.showPeerId"
+         static let disableAds = "lunagram.other.disableAds"
++        static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
++        static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+         static let showMessageSeconds = "lunagram.other.showMessageSeconds"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+@@ -214,6 +216,30 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    /// Отправлять без звука: 0 — никогда, 1 — только в режиме призрака,
++    /// 2 — всегда. Как на ПК.
++    public static var sendWithoutSound: Int {
++        get { return clamped(Key.sendWithoutSound, 0, 2, 0) }
++        set { setClamped(newValue, Key.sendWithoutSound, 0, 2) }
++    }
++
++    /// Названия вариантов отправки без звука — по порядку.
++    public static let sendWithoutSoundTitles = ["Никогда", "В режиме призрака", "Всегда"]
++
++    /// Предупреждать перед открытием историй, предлагая включить призрака.
++    public static var suggestGhostForStories: Bool {
++        get {
++            guard defaults.object(forKey: Key.suggestGhostForStories) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.suggestGhostForStories)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.suggestGhostForStories)
++            changed()
++        }
++    }
++
+     /// Прятать спонсорские сообщения в каналах — как на ПК.
+     public static var disableAds: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index ac452fad..c668029f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -40,6 +40,7 @@ private enum LunagramToggle: Int32 {
+     case saveForBots
+     case disableAds
+     case showMessageSeconds
++    case suggestGhostForStories
+ 
+     var value: Bool {
+         switch self {
+@@ -83,6 +84,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.disableAds
+         case .showMessageSeconds:
+             return LunagramSettings.showMessageSeconds
++        case .suggestGhostForStories:
++            return LunagramSettings.suggestGhostForStories
+         }
+     }
+ 
+@@ -128,6 +131,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.disableAds = value
+         case .showMessageSeconds:
+             LunagramSettings.showMessageSeconds = value
++        case .suggestGhostForStories:
++            LunagramSettings.suggestGhostForStories = value
+         }
+     }
+ 
+@@ -173,6 +178,8 @@ private enum LunagramToggle: Int32 {
+             return "Отключить рекламу"
+         case .showMessageSeconds:
+             return "Время с секундами"
++        case .suggestGhostForStories:
++            return "Предлагать призрака для сторис"
+         }
+     }
+ 
+@@ -212,6 +219,8 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.premium
+         case .showMessageSeconds:
+             return PresentationResourcesSettings.notifications
++        case .suggestGhostForStories:
++            return PresentationResourcesSettings.stories
+         }
+     }
+ 
+@@ -251,6 +260,8 @@ private enum LunagramToggle: Int32 {
+             return "Скрывает спонсорские сообщения в каналах."
+         case .showMessageSeconds:
+             return "У сообщений будет видно не только час и минуту, но и секунды."
++        case .suggestGhostForStories:
++            return "Перед открытием историй спросим, включить ли призрака, — чтобы не попасть в список зрителей случайно."
+         default:
+             return nil
+         }
+@@ -768,12 +779,13 @@ private struct LunagramMediaState: Equatable {
+     var cardsStroke: Int
+     var cardsMuteOpacity: Int
+     var bannerBlur: Int
++    var sendWithoutSound: Int
+     var hasProfileBackground: Bool
+     var profileBgDim: Int
+     var profileBgBlur: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, sendWithoutSound: LunagramSettings.sendWithoutSound, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur)
+     }
+ }
+ 
+@@ -800,6 +812,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return [
+             .header(.ghost, 0, "GHOST"),
+             .ghostRow(ghostExpanded, master, subs),
++            tgl(.ghost, .suggestGhostForStories),
++            .slider(.ghost, 50, "Отправлять без звука", media.sendWithoutSound, 0, LunagramSettings.sendWithoutSoundTitles.count - 1, 1, LunagramSettings.sendWithoutSoundTitles[max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))]),
+             .info(.ghost, 0, "Один переключатель — и собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети, а истории можно смотреть, не попадая в список зрителей. Стрелка справа раскрывает всё по отдельности.")
+         ]
+     case .spy:
+@@ -1346,6 +1360,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBackgroundDim = value
+         case 41:
+             LunagramSettings.profileBackgroundBlur = value
++        case 50:
++            LunagramSettings.sendWithoutSound = value
+         default:
+             break
+         }
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 23695c21..76e921e3 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -146,6 +146,7 @@ import GlobalControlPanelsContext
+ import ChatSearchNavigationContentNode
+ import ChatAgeRestrictionAlertController
+ import TextProcessingScreen
++import Lunagram
+ 
+ public final class ChatControllerOverlayPresentationData {
+     public let expandData: (ASDisplayNode?, () -> Void)
+@@ -8849,6 +8850,20 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     }
+         
+     func transformEnqueueMessages(_ messages: [EnqueueMessage], silentPosting: Bool, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false) -> [EnqueueMessage] {
++        // Lunagram: «Отправлять без звука» — как на ПК. Никогда / только в
++        // режиме призрака / всегда. Здесь сходятся все исходящие, поэтому
++        // достаточно одной проверки.
++        var silentPosting = silentPosting
++        switch LunagramSettings.sendWithoutSound {
++        case 1:
++            if LunagramSettings.ghostStayOffline {
++                silentPosting = true
++            }
++        case 2:
++            silentPosting = true
++        default:
++            break
++        }
+         var defaultThreadId: Int64?
+         var defaultReplyMessageSubject: EngineMessageReplySubject?
+         switch self.chatLocation {
