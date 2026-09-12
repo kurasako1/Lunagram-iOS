@@ -1,0 +1,405 @@
+diff --git a/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift b/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
+index 6f95c58d..de6602ed 100644
+--- a/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
++++ b/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
+@@ -40,6 +40,9 @@ public class ItemListExpandableSwitchItem: ListViewItem, ItemListItem {
+     let value: Bool
+     let isExpanded: Bool
+     let subItems: [SubItem]
++    // Lunagram: если задан, под стрелкой раскрывается это описание, а не
++    // под-переключатели. Тогда «N/M» рядом с названием не показываем.
++    let expandedText: String?
+     let type: ItemListExpandableSwitchItemNodeType
+     let enableInteractiveChanges: Bool
+     let enabled: Bool
+@@ -57,7 +60,7 @@ public class ItemListExpandableSwitchItem: ListViewItem, ItemListItem {
+     
+     public let selectable: Bool = true
+     
+-    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, icon: UIImage? = nil, title: String, value: Bool, isExpanded: Bool, subItems: [SubItem], type: ItemListExpandableSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, displayLocked: Bool = false, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, selectAction: @escaping () -> Void, subAction: @escaping (SubItem) -> Void, tag: ItemListItemTag? = nil) {
++    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, icon: UIImage? = nil, title: String, value: Bool, isExpanded: Bool, subItems: [SubItem], expandedText: String? = nil, type: ItemListExpandableSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, displayLocked: Bool = false, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, selectAction: @escaping () -> Void, subAction: @escaping (SubItem) -> Void, tag: ItemListItemTag? = nil) {
+         self.presentationData = presentationData
+         self.systemStyle = systemStyle
+         self.icon = icon
+@@ -65,6 +68,7 @@ public class ItemListExpandableSwitchItem: ListViewItem, ItemListItem {
+         self.value = value
+         self.isExpanded = isExpanded
+         self.subItems = subItems
++        self.expandedText = expandedText
+         self.type = type
+         self.enableInteractiveChanges = enableInteractiveChanges
+         self.enabled = enabled
+@@ -212,6 +216,8 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+     
+     private let subItemContainer: ASDisplayNode
+     private var subItemNodes: [AnyHashable: SubItemNode] = [:]
++    // Lunagram: текст описания под стрелкой (когда задан expandedText).
++    private let descriptionNode: TextNode
+     
+     private let activateArea: AccessibilityAreaNode
+     
+@@ -266,7 +272,10 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+         
+         self.subItemContainer = ASDisplayNode()
+         self.subItemContainer.clipsToBounds = true
+-        
++
++        self.descriptionNode = TextNode()
++        self.descriptionNode.isUserInteractionEnabled = false
++
+         super.init(layerBacked: false)
+         
+         self.addSubnode(self.titleNode)
+@@ -276,6 +285,7 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+         self.addSubnode(self.switchGestureNode)
+         self.addSubnode(self.activateArea)
+         self.addSubnode(self.subItemContainer)
++        self.subItemContainer.addSubnode(self.descriptionNode)
+         
+         self.activateArea.activate = { [weak self] in
+             guard let strongSelf = self, let item = strongSelf.item, item.enabled else {
+@@ -300,6 +310,7 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+     func asyncLayout() -> (_ item: ItemListExpandableSwitchItem, _ params: ListViewItemLayoutParams, _ insets: ItemListNeighbors) -> (ListViewItemNodeLayout, (ListViewItemUpdateAnimation) -> Void) {
+         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
+         let makeTitleValueLayout = TextNode.asyncLayout(self.titleValueNode)
++        let makeDescriptionLayout = TextNode.asyncLayout(self.descriptionNode)
+         
+         let currentItem = self.item
+         var currentDisabledOverlayNode = self.disabledOverlayNode
+@@ -350,8 +361,23 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+             
+             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: item.maximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 64.0 - 32.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+             
+-            let titleValue = "\(item.subItems.filter(\.isSelected).count)/\(item.subItems.count)"
++            // «N/M» показываем только для набора под-переключателей. У строки
++            // с описанием его нет — там под стрелкой просто текст.
++            let titleValue = item.expandedText != nil ? "" : "\(item.subItems.filter(\.isSelected).count)/\(item.subItems.count)"
+             let (titleValueLayout, titleValueApply) = makeTitleValueLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleValue, font: Font.bold(14.0), textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 64.0 - titleLayout.size.width, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++
++            // Описание под стрелкой. Считаем его высоту здесь, как и заголовок.
++            let descriptionTopPadding: CGFloat = 2.0
++            let descriptionBottomPadding: CGFloat = 12.0
++            var descriptionHeight: CGFloat = 0.0
++            var descriptionApply: (() -> TextNode)?
++            var descriptionSize = CGSize()
++            if let expandedText = item.expandedText {
++                let (descriptionLayout, descriptionApplyFn) = makeDescriptionLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: expandedText, font: Font.regular(14.0), textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 16.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++                descriptionApply = descriptionApplyFn
++                descriptionSize = descriptionLayout.size
++                descriptionHeight = descriptionTopPadding + descriptionLayout.size.height + descriptionBottomPadding
++            }
+                         
+             let verticalInset: CGFloat
+             switch item.systemStyle {
+@@ -366,7 +392,11 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+             let mainContentHeight = contentSize.height
+             var effectiveSubItemsHeight: CGFloat = 0.0
+             if item.isExpanded {
+-                effectiveSubItemsHeight = CGFloat(item.subItems.count) * (item.systemStyle == .glass ? 52.0 : 44.0)
++                if item.expandedText != nil {
++                    effectiveSubItemsHeight = descriptionHeight
++                } else {
++                    effectiveSubItemsHeight = CGFloat(item.subItems.count) * (item.systemStyle == .glass ? 52.0 : 44.0)
++                }
+             }
+             contentSize.height += effectiveSubItemsHeight
+             
+@@ -580,7 +610,14 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: (item.systemStyle == .glass ? 52.0 : 44.0) + UIScreenPixel + UIScreenPixel))
+                     
+                     animation.animator.updateFrame(layer: strongSelf.subItemContainer.layer, frame: CGRect(origin: CGPoint(x: 0.0, y: mainContentHeight), size: CGSize(width: params.width, height: effectiveSubItemsHeight)), completion: nil)
+-                    
++
++                    // Lunagram: описание под стрелкой. Контейнер обрезает по краям,
++                    // поэтому в свёрнутом виде (высота 0) текст просто не виден.
++                    if let descriptionApply {
++                        let _ = descriptionApply()
++                        strongSelf.descriptionNode.frame = CGRect(origin: CGPoint(x: leftInset, y: descriptionTopPadding), size: descriptionSize)
++                    }
++
+                     var validIds: [AnyHashable] = []
+                     let subItemSize = CGSize(width: params.width - params.leftInset - params.rightInset, height: item.systemStyle == .glass ? 52.0 : 44.0)
+                     var nextSubItemPosition = CGPoint(x: params.leftInset, y: 0.0)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index b5472aed..fc3f916f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -154,6 +154,41 @@ private enum LunagramToggle: Int32 {
+             return "Искры вокруг рамки"
+         }
+     }
++
++    /// Короткое описание — прячется под стрелкой у названия, как на ПК.
++    /// Если пусто, стрелки нет.
++    var descriptionText: String? {
++        switch self {
++        case .keepDeleted:
++            return "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени. Твои удаления работают как обычно. Сообщения ботов не сохраняются."
++        case .keepEditHistory:
++            return "Поправил сообщение — прежний текст остаётся. Зажми сообщение, «История изменений»."
++        case .showRoundSource:
++            return "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. По имени файла, запросов на сервер нет. Не уверены — метки нет."
++        case .roundFromVideo:
++            return "Зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат."
++        case .showPeerId:
++            return "Числовой номер человека или канала. Копируется по нажатию."
++        case .hideOwnPhone:
++            return "Вместо твоего номера в шапке настроек и в профиле — точки. Сам номер не меняется, прячется только показ."
++        case .liveWallpaper:
++            return "Видео играет по кругу вместо обоев, без звука."
++        case .particles:
++            return "Падают поверх фона переписки. Рисует их сама система, батарею почти не тратят."
++        case .profileBanner:
++            return "Картинка в шапке твоего профиля — видишь её только ты."
++        case .dialogCards:
++            return "Фон каждой переписки — её размытая аватарка."
++        case .dialogCardsFadeMuted:
++            return "Приглушённые переписки станут бледнее, чтобы не отвлекали."
++        case .avatarFrame:
++            return "Рамка вокруг твоей аватарки в профиле. Видишь её только ты."
++        case .avatarFrameSparkle:
++            return "Бегущие искры поверх своей картинки-рамки."
++        default:
++            return nil
++        }
++    }
+ }
+ 
+ /// Четыре выключателя Ghost — мастер-переключатель включает и выключает
+@@ -197,9 +232,10 @@ private final class LunagramSettingsControllerArguments {
+     let openGroup: (LunagramSettingsGroup) -> Void
+     let ghostMaster: (Bool) -> Void
+     let ghostExpand: () -> Void
++    let toggleExpand: (LunagramToggle) -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+@@ -209,6 +245,7 @@ private final class LunagramSettingsControllerArguments {
+         self.openGroup = openGroup
+         self.ghostMaster = ghostMaster
+         self.ghostExpand = ghostExpand
++        self.toggleExpand = toggleExpand
+         self.openEditor = openEditor
+     }
+ }
+@@ -341,6 +378,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case menuItem(LunagramSettingsGroup)
+     case header(LunagramSettingsSection, Int32, String)
+     case toggle(LunagramSettingsSection, LunagramToggle, Bool)
++    // Переключатель с описанием под стрелкой: раскрыт или нет.
++    case toggleDesc(LunagramSettingsSection, LunagramToggle, Bool, Bool)
+     case ghostRow(Bool, Bool, [Bool])
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+@@ -356,7 +395,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue
+-        case let .header(section, _, _), let .toggle(section, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -374,6 +413,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return LunagramSettingsSection.ghost.rawValue * 100 + 1
+         case let .toggle(section, toggle, _):
+             return section.rawValue * 100 + 10 + toggle.rawValue
++        case let .toggleDesc(section, toggle, _, _):
++            return section.rawValue * 100 + 10 + toggle.rawValue
+         case let .action(section, index, _):
+             return section.rawValue * 100 + 40 + index
+         case let .dim(section, index, _, _):
+@@ -417,6 +458,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .toggleDesc(lhsSection, lhsToggle, lhsValue, lhsExpanded):
++            if case let .toggleDesc(rhsSection, rhsToggle, rhsValue, rhsExpanded) = rhs, lhsSection == rhsSection, lhsToggle == rhsToggle, lhsValue == rhsValue, lhsExpanded == rhsExpanded {
++                return true
++            } else {
++                return false
++            }
+         case let .ghostRow(lhsExpanded, lhsMaster, lhsSubs):
+             if case let .ghostRow(rhsExpanded, rhsMaster, rhsSubs) = rhs, lhsExpanded == rhsExpanded, lhsMaster == rhsMaster, lhsSubs == rhsSubs {
+                 return true
+@@ -489,6 +536,15 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             })
++        case let .toggleDesc(_, toggle, value, expanded):
++            // Переключатель справа работает сам; стрелка у названия раскрывает
++            // описание. Под-переключателей нет — вместо них текст.
++            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, isExpanded: expanded, subItems: [], expandedText: toggle.descriptionText, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.toggle(toggle, value)
++            }, selectAction: {
++                arguments.toggleExpand(toggle)
++            }, subAction: { _ in
++            })
+         case let .ghostRow(expanded, master, subs):
+             let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
+                 return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
+@@ -565,10 +621,17 @@ private struct LunagramMediaState: Equatable {
+ 
+ /// Строки одного раздела-экрана. Общий список на все разделы: экран группы
+ /// отбирает из него только свои.
+-private func lunagramSectionEntries(section: LunagramSettingsSection, values: [LunagramToggle: Bool], media: LunagramMediaState, ghostExpanded: Bool) -> [LunagramSettingsEntry] {
++private func lunagramSectionEntries(section: LunagramSettingsSection, values: [LunagramToggle: Bool], media: LunagramMediaState, ghostExpanded: Bool, expandedToggles: Set<Int32>) -> [LunagramSettingsEntry] {
+     func value(_ toggle: LunagramToggle) -> Bool {
+         return values[toggle] ?? toggle.value
+     }
++    // Есть описание — строка со стрелкой; нет — обычный переключатель.
++    func tgl(_ section: LunagramSettingsSection, _ toggle: LunagramToggle) -> LunagramSettingsEntry {
++        if toggle.descriptionText != nil {
++            return .toggleDesc(section, toggle, value(toggle), expandedToggles.contains(toggle.rawValue))
++        }
++        return .toggle(section, toggle, value(toggle))
++    }
+ 
+     switch section {
+     case .menu:
+@@ -584,17 +647,16 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .spy:
+         return [
+             .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
+-            .toggle(.spy, .keepDeleted, value(.keepDeleted)),
+-            .toggle(.spy, .keepEditHistory, value(.keepEditHistory)),
+-            .info(.spy, 0, "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени, как на ПК. Твои удаления с этого телефона работают как обычно. Сообщения ботов не сохраняются.\n\nПоправил сообщение — прежний текст остаётся: зажми сообщение, «История изменений».\n\nЗаглушить человека: зажми его сообщение → «Заглушить». Новые входящие от него перестанут приходить, уже полученные останутся. Снять — там же.")
++            tgl(.spy, .keepDeleted),
++            tgl(.spy, .keepEditHistory),
++            .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Новые входящие от него перестанут приходить, уже полученные останутся. Снять — там же.")
+         ]
+     case .messages:
+         return [
+             .header(.messages, 0, "СООБЩЕНИЯ"),
+-            .toggle(.messages, .showRoundSource, value(.showRoundSource)),
+-            .toggle(.messages, .roundFromVideo, value(.roundFromVideo)),
+-            .toggle(.messages, .showPeerId, value(.showPeerId)),
+-            .info(.messages, 0, "Рядом со временем у кружка — с чего он записан: iOS, Android или Desktop. Определяется по имени файла, запросов на сервер нет. Не уверены — метки нет. Подробности — в меню кружка.\n\nКружок из любого видео: зажми видео в чате → «Отправить кружком». Середина кадра, до минуты, со звуком — уйдёт в тот же чат.\n\nID в профиле — числовой номер человека или канала, копируется по нажатию.")
++            tgl(.messages, .showRoundSource),
++            tgl(.messages, .roundFromVideo),
++            tgl(.messages, .showPeerId)
+         ]
+     case .profileStatus:
+         return [
+@@ -623,7 +685,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .privacy:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+-            .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
++            tgl(.privacy, .hideOwnPhone),
+             // Индекс 55 — чтобы заголовок встал после переключателя (там +10…)
+             // и перед списком масок (там +60…): строки сортируются по номеру.
+             .header(.privacy, 55, "УСТРОЙСТВО В СЕАНСАХ")
+@@ -637,7 +699,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .banner:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+-            .toggle(.banner, .profileBanner, value(.profileBanner))
++            tgl(.banner, .profileBanner)
+         ]
+         // Нарисованные — с нуля до девяти, своё фото — десятое.
+         for preset in LunagramBannerPreset.allCases {
+@@ -664,7 +726,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .avatarFrame:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.avatarFrame, 0, "РАМКА ВОКРУГ АВАТАРКИ"),
+-            .toggle(.avatarFrame, .avatarFrame, value(.avatarFrame))
++            tgl(.avatarFrame, .avatarFrame)
+         ]
+         for style in LunagramAvatarFrameStyle.allCases {
+             entries.append(.dim(.avatarFrame, Int32(style.rawValue - 1), style.title, !media.hasAvatarFrameImage && style.rawValue == media.avatarFrameStyle))
+@@ -737,12 +799,12 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         for (index, item) in lunagramFrameGlowLevels.enumerated() {
+             entries.append(.dim(.avatarFrameGlow, Int32(index), item.0, index == level))
+         }
+-        entries.append(.toggle(.avatarFrameGlow, .avatarFrameSparkle, value(.avatarFrameSparkle)))
++        entries.append(tgl(.avatarFrameGlow, .avatarFrameSparkle))
+         return entries
+     case .liveWallpaper:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+-            .toggle(.liveWallpaper, .liveWallpaper, value(.liveWallpaper)),
++            tgl(.liveWallpaper, .liveWallpaper),
+             .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
+         ]
+         if media.hasWallpaper {
+@@ -758,8 +820,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .dialogCards:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.dialogCards, 0, "ПЛИТКИ В СПИСКЕ ПЕРЕПИСОК"),
+-            .toggle(.dialogCards, .dialogCards, value(.dialogCards)),
+-            .toggle(.dialogCards, .dialogCardsFadeMuted, value(.dialogCardsFadeMuted))
++            tgl(.dialogCards, .dialogCards),
++            tgl(.dialogCards, .dialogCardsFadeMuted)
+         ]
+         for (index, title) in lunagramCardsDimTitles.enumerated() {
+             entries.append(.dim(.dialogCards, Int32(index), title, index == media.cardsDim))
+@@ -769,7 +831,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .appearance:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.appearance, 0, "ЧАСТИЦЫ В ПЕРЕПИСКЕ"),
+-            .toggle(.appearance, .particles, value(.particles))
++            tgl(.appearance, .particles)
+         ]
+         for kind in LunagramParticleKind.allCases {
+             entries.append(.dim(.appearance, Int32(kind.rawValue - 1), kind.title, kind.rawValue == media.particlesKind))
+@@ -888,6 +950,9 @@ private final class LunagramSharedState {
+     let mediaPromise = ValuePromise<LunagramMediaState>(LunagramMediaState.current(), ignoreRepeated: true)
+     let ghostExpandedPromise = ValuePromise<Bool>(false, ignoreRepeated: true)
+     var ghostExpanded = false
++    // Какие переключатели раскрыли описание (по номеру переключателя).
++    let expandedTogglesPromise = ValuePromise<Set<Int32>>(Set(), ignoreRepeated: true)
++    var expandedToggles = Set<Int32>()
+     let pickerHolder = LunagramPickerHolder()
+     var arguments: LunagramSettingsControllerArguments?
+     // Навигацию и показ берём у главного экрана — он в той же стопке, что и
+@@ -1033,6 +1098,13 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, ghostExpand: {
+         shared.ghostExpanded.toggle()
+         shared.ghostExpandedPromise.set(shared.ghostExpanded)
++    }, toggleExpand: { toggle in
++        if shared.expandedToggles.contains(toggle.rawValue) {
++            shared.expandedToggles.remove(toggle.rawValue)
++        } else {
++            shared.expandedToggles.insert(toggle.rawValue)
++        }
++        shared.expandedTogglesPromise.set(shared.expandedToggles)
+     }, openEditor: { section in
+         let kind: LunagramCropEditor.Kind
+         switch section {
+@@ -1071,12 +1143,12 @@ private func lunagramCategoryController(context: AccountContext, category: Lunag
+ /// свои. Делит состояние с остальными экранами.
+ private func lunagramGroupController(context: AccountContext, group: LunagramSettingsGroup, shared: LunagramSharedState) -> ViewController {
+     let arguments = shared.arguments!
+-    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get())
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get(), shared.expandedTogglesPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData, currentValues, media, ghostExpanded -> (ItemListControllerState, (ItemListNodeState, Any)) in
++    |> map { presentationData, currentValues, media, ghostExpanded, expandedToggles -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         var entries: [LunagramSettingsEntry] = []
+         for section in group.sections {
+-            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded))
++            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
+         }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(group.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
+@@ -1093,12 +1165,12 @@ private func lunagramSectionsScreen(context: AccountContext, title: String, sect
+     let arguments = lunagramMakeArguments(context: context, shared: shared)
+     shared.arguments = arguments
+ 
+-    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get())
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get(), shared.expandedTogglesPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData, currentValues, media, ghostExpanded -> (ItemListControllerState, (ItemListNodeState, Any)) in
++    |> map { presentationData, currentValues, media, ghostExpanded, expandedToggles -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         var entries: [LunagramSettingsEntry] = []
+         for section in sections {
+-            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded))
++            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
+         }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
