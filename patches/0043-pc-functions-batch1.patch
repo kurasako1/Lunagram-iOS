@@ -1,0 +1,256 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 266e7d99..2f1d46d6 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -57,6 +57,8 @@ public final class LunagramSettings {
+         static let showRoundSource = "lunagram.messages.showRoundSource"
+         static let roundFromVideo = "lunagram.messages.roundFromVideo"
+         static let showPeerId = "lunagram.messages.showPeerId"
++        static let disableAds = "lunagram.other.disableAds"
++        static let showMessageSeconds = "lunagram.other.showMessageSeconds"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
+@@ -209,6 +211,37 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
++    /// Прятать спонсорские сообщения в каналах — как на ПК.
++    public static var disableAds: Bool {
++        get {
++            return defaults.bool(forKey: Key.disableAds)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.disableAds)
++            changed()
++        }
++    }
++
++    /// Показывать у сообщений не только час и минуту, но и секунды.
++    public static var showMessageSeconds: Bool {
++        get {
++            return defaults.bool(forKey: Key.showMessageSeconds)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.showMessageSeconds)
++            changed()
++        }
++    }
++
++    /// Сохранять удалённое и в переписках с ботами.
++    public static var saveForBots: Bool {
++        get { return LunagramSpySettings.saveForBots }
++        set {
++            LunagramSpySettings.saveForBots = newValue
++            changed()
++        }
++    }
++
+     // MARK: Свой шрифт интерфейса
+     //
+     // Само значение — в LunagramFont, его читает Display. Здесь переходники,
+diff --git a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+index ead70b10..bcbfa22f 100644
+--- a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+@@ -10,6 +10,7 @@ public enum LunagramSpySettings {
+     private enum Key {
+         static let keepDeleted = "lunagram.spy.keepDeleted"
+         static let keepEditHistory = "lunagram.spy.keepEditHistory"
++        static let saveForBots = "lunagram.spy.saveForBots"
+         static let mutedPeers = "lunagram.spy.mutedPeers"
+     }
+ 
+@@ -33,6 +34,18 @@ public enum LunagramSpySettings {
+         }
+     }
+ 
++    /// Сохранять удалённое и в переписках с ботами. По умолчанию нет: боты
++    /// стирают свои сообщения постоянно — меню, подсказки, — и архив забился
++    /// бы мусором. На ПК так же.
++    public static var saveForBots: Bool {
++        get {
++            return defaults.bool(forKey: Key.saveForBots)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.saveForBots)
++        }
++    }
++
+     // MARK: Заглушённые люди
+     //
+     // Входящие от заглушённых не сохраняем — их отсекает сетевая часть,
+diff --git a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+index 716a26b8..e54b4975 100644
+--- a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
++++ b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+@@ -68,8 +68,8 @@ private func lunagramKeepDeletedMessage(transaction: Transaction, id: MessageId,
+         return false
+     }
+     // Боты стирают свои сообщения постоянно — меню, подсказки, «печатаю».
+-    // Хранить их незачем; на ПК сохранение для ботов тоже выключено.
+-    if let user = transaction.getPeer(id.peerId) as? TelegramUser, user.botInfo != nil {
++    // По умолчанию их не храним, но выключатель это разрешает — как на ПК.
++    if !LunagramSpySettings.saveForBots, let user = transaction.getPeer(id.peerId) as? TelegramUser, user.botInfo != nil {
+         return false
+     }
+     if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+index e9e3a3dc..74b67e1a 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+@@ -132,7 +132,8 @@ private func telegramStringForMessageTimestampStatus(
+         timestamp = orignalDate
+     }
+     
+-    var dateText = stringForMessageTimestamp(timestamp: timestamp, dateTimeFormat: dateTimeFormat)
++    // Lunagram: по выключателю показываем ещё и секунды — как на ПК.
++    var dateText = stringForMessageTimestamp(timestamp: timestamp, dateTimeFormat: dateTimeFormat, withSeconds: LunagramSettings.showMessageSeconds)
+     if timestamp == scheduleWhenOnlineTimestamp {
+         dateText = "         "
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 29bc1456..79d60410 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -37,6 +37,9 @@ private enum LunagramToggle: Int32 {
+     case roundFromVideo
+     case showPeerId
+     case avatarFrameSparkle
++    case saveForBots
++    case disableAds
++    case showMessageSeconds
+ 
+     var value: Bool {
+         switch self {
+@@ -74,6 +77,12 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showPeerId
+         case .avatarFrameSparkle:
+             return LunagramSettings.avatarFrameSparkle
++        case .saveForBots:
++            return LunagramSettings.saveForBots
++        case .disableAds:
++            return LunagramSettings.disableAds
++        case .showMessageSeconds:
++            return LunagramSettings.showMessageSeconds
+         }
+     }
+ 
+@@ -113,6 +122,12 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showPeerId = value
+         case .avatarFrameSparkle:
+             LunagramSettings.avatarFrameSparkle = value
++        case .saveForBots:
++            LunagramSettings.saveForBots = value
++        case .disableAds:
++            LunagramSettings.disableAds = value
++        case .showMessageSeconds:
++            LunagramSettings.showMessageSeconds = value
+         }
+     }
+ 
+@@ -152,6 +167,12 @@ private enum LunagramToggle: Int32 {
+             return "Показывать ID в профиле"
+         case .avatarFrameSparkle:
+             return "Искры вокруг рамки"
++        case .saveForBots:
++            return "Сохранять в чатах с ботами"
++        case .disableAds:
++            return "Отключить рекламу"
++        case .showMessageSeconds:
++            return "Время с секундами"
+         }
+     }
+ 
+@@ -185,6 +206,12 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.myProfile
+         case .avatarFrameSparkle:
+             return PresentationResourcesSettings.stars
++        case .saveForBots:
++            return PresentationResourcesSettings.business
++        case .disableAds:
++            return PresentationResourcesSettings.premium
++        case .showMessageSeconds:
++            return PresentationResourcesSettings.notifications
+         }
+     }
+ 
+@@ -218,6 +245,12 @@ private enum LunagramToggle: Int32 {
+             return "Рамка вокруг твоей аватарки в профиле. Видишь её только ты."
+         case .avatarFrameSparkle:
+             return "Бегущие искры поверх своей картинки-рамки."
++        case .saveForBots:
++            return "Обычно удалённое у ботов не хранится: они стирают свои сообщения постоянно — меню, подсказки — и архив забился бы мусором."
++        case .disableAds:
++            return "Скрывает спонсорские сообщения в каналах."
++        case .showMessageSeconds:
++            return "У сообщений будет видно не только час и минуту, но и секунды."
+         default:
+             return nil
+         }
+@@ -290,6 +323,7 @@ private enum LunagramSettingsSection: Int32 {
+     case ghost
+     case spy
+     case messages
++    case other
+     case profileStatus
+     case profileNameColor
+     case profileNameGlow
+@@ -423,7 +457,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .spy:
+             return [.spy]
+         case .messages:
+-            return [.messages]
++            return [.messages, .other]
+         case .profile:
+             return [.profileStatus, .profileNameColor, .profileNameGlow]
+         case .privacy:
+@@ -769,6 +803,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
+             tgl(.spy, .keepDeleted),
+             tgl(.spy, .keepEditHistory),
++            tgl(.spy, .saveForBots),
+             .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с метлой 🧹, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
+         ]
+     case .messages:
+@@ -778,6 +813,13 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.messages, .roundFromVideo),
+             tgl(.messages, .showPeerId)
+         ]
++    case .other:
++        // Раздел «Другое» — как на ПК.
++        return [
++            .header(.other, 0, "ДРУГОЕ"),
++            tgl(.other, .disableAds),
++            tgl(.other, .showMessageSeconds)
++        ]
+     case .profileStatus:
+         return [
+             .header(.profileStatus, 0, "ПРОФИЛЬ"),
+diff --git a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
+index 126190f9..394eb6b1 100644
+--- a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
++++ b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
+@@ -38,6 +38,7 @@ import TextFormat
+ import ChatNewThreadInfoItem
+ import PhoneNumberFormat
+ import Postbox
++import Lunagram
+ 
+ struct ChatTopVisibleMessageRange: Equatable {
+     var lowerBound: MessageIndex
+@@ -922,7 +923,13 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+         } else {
+             adMessages = .single((nil, [], nil, nil))
+         }
+-        
++
++        // Lunagram: выключатель «Отключить рекламу» — просто не отдаём
++        // спонсорские сообщения дальше, откуда бы они ни пришли.
++        if LunagramSettings.disableAds {
++            adMessages = .single((nil, [], nil, nil))
++        }
++
+         let clientId = Atomic<Int32>(value: nextClientId)
+         self.clientId = clientId
+         nextClientId += 1
