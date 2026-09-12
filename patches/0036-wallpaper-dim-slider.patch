@@ -1,0 +1,26 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 1cc08dd7..229e462c 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -830,9 +830,9 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         ]
+         if media.hasWallpaper {
+             entries.append(.editor(.liveWallpaper, "Подогнать кадр"))
+-        }
+-        for (index, title) in lunagramWallpaperDimTitles.enumerated() {
+-            entries.append(.dim(.liveWallpaper, Int32(index), title, index == media.wallpaperDim))
++            // Затемнение — ползунком, как на ПК.
++            let wallDim = max(0, min(lunagramWallpaperDimTitles.count - 1, media.wallpaperDim))
++            entries.append(.slider(.liveWallpaper, 20, "Затемнение", wallDim, 0, lunagramWallpaperDimTitles.count - 1, 1, lunagramWallpaperDimTitles[wallDim]))
+         }
+         entries.append(.info(.liveWallpaper, 0, media.hasWallpaper
+             ? "Видео играет по кругу вместо обоев, без звука. «Подогнать кадр» — двигай и приближай, как на ПК. Затемнение — чтобы на пёстром ролике читались сообщения."
+@@ -1108,6 +1108,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBannerDim = value
+         case 11:
+             LunagramSettings.profileBannerBlur = value
++        case 20:
++            LunagramSettings.liveWallpaperDim = value
+         default:
+             break
+         }
