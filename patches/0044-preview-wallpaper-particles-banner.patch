@@ -1,0 +1,230 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 2bbed7fb..2e05accb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import UIKit
++import AVFoundation
+ import Display
+ import AsyncDisplayKit
+ import SwiftSignalKit
+@@ -13,6 +14,9 @@ enum LunagramPreviewKind {
+     case dialogCard
+     case avatarFrame
+     case name
++    case wallpaper
++    case particles
++    case banner
+ }
+ 
+ /// Живой образец сверху экрана настроек — «так это будет выглядеть», как на
+@@ -70,6 +74,15 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+     /// Сюда кладём то, что показываем. У каждого вида свои слои.
+     private let previewContainer: UIView
+     private var cardView: LunagramDialogCardView?
++    /// Для обоев и баннера: картинка/видео + затемнение и размытие поверх.
++    private var mediaView: UIImageView?
++    private var mediaPlayerLayer: AVPlayerLayer?
++    private var mediaPlayer: AVQueuePlayer?
++    private var mediaLooper: AVPlayerLooper?
++    private var mediaBlurView: UIVisualEffectView?
++    private var mediaDimView: UIView?
++    private var shownMediaURL: URL?
++    private var particlesLayer: CALayer?
+     private let avatarView: UIView
+     private let frameHost: UIView
+     private let titleNode: TextNode
+@@ -142,6 +155,12 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 subtitleText = "Так будет выглядеть аватарка"
+             case .name:
+                 subtitleText = "Так будет выглядеть имя"
++            case .wallpaper:
++                subtitleText = "Так будут выглядеть обои"
++            case .particles:
++                subtitleText = "Так будут выглядеть частицы"
++            case .banner:
++                subtitleText = "Так будет выглядеть баннер"
+             }
+ 
+             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleText, font: titleFont, textColor: titleColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset * 2.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+@@ -155,6 +174,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 previewHeight = 150.0
+             case .name:
+                 previewHeight = 76.0
++            case .wallpaper, .particles, .banner:
++                previewHeight = 170.0
+             }
+             let contentSize = CGSize(width: params.width, height: previewHeight)
+             let insets = itemListNeighborsGroupedInsets(neighbors, params)
+@@ -279,6 +300,142 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             }
+             self.titleNode.frame = CGRect(x: floor((rowSize.width - titleSize.width) / 2.0), y: 14.0, width: titleSize.width, height: titleSize.height)
+             self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 12.0, width: subtitleSize.width, height: subtitleSize.height)
++
++        case .wallpaper, .particles, .banner:
++            self.cardView?.isHidden = true
++            self.avatarView.isHidden = true
++            self.frameHost.isHidden = true
++            self.titleNode.isHidden = true
++
++            let area = CGRect(x: 12.0, y: 8.0, width: rowSize.width - 24.0, height: rowSize.height - 40.0)
++            self.updateMedia(kind: item.kind, area: area, theme: theme)
++
++            self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 10.0, width: subtitleSize.width, height: subtitleSize.height)
++        }
++
++        if case .wallpaper = item.kind {
++        } else if case .particles = item.kind {
++        } else if case .banner = item.kind {
++        } else {
++            self.titleNode.isHidden = false
++        }
++    }
++
++    /// Образец обоев, частиц и баннера: показываем сам выбранный файл с теми
++    /// же затемнением и размытием, что и на деле.
++    private func updateMedia(kind: LunagramPreviewKind, area: CGRect, theme: PresentationTheme) {
++        let mediaView: UIImageView
++        if let current = self.mediaView {
++            mediaView = current
++        } else {
++            mediaView = UIImageView()
++            mediaView.contentMode = .scaleAspectFill
++            mediaView.clipsToBounds = true
++            mediaView.layer.cornerRadius = 12.0
++            self.mediaView = mediaView
++            self.previewContainer.insertSubview(mediaView, at: 0)
++        }
++        mediaView.frame = area
++        mediaView.backgroundColor = theme.list.itemSecondaryTextColor.withAlphaComponent(0.15)
++
++        let blurView: UIVisualEffectView
++        if let current = self.mediaBlurView {
++            blurView = current
++        } else {
++            blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
++            blurView.isUserInteractionEnabled = false
++            blurView.clipsToBounds = true
++            blurView.layer.cornerRadius = 12.0
++            self.mediaBlurView = blurView
++            self.previewContainer.addSubview(blurView)
++        }
++        blurView.frame = area
++
++        let dimView: UIView
++        if let current = self.mediaDimView {
++            dimView = current
++        } else {
++            dimView = UIView()
++            dimView.backgroundColor = .black
++            dimView.isUserInteractionEnabled = false
++            dimView.layer.cornerRadius = 12.0
++            self.mediaDimView = dimView
++            self.previewContainer.addSubview(dimView)
++        }
++        dimView.frame = area
++
++        // Какой файл и какие затемнение с размытием — зависит от вида.
++        let url: URL?
++        let dimAlpha: CGFloat
++        let blurAlpha: CGFloat
++        switch kind {
++        case .banner:
++            url = LunagramSettings.profileBannerURL
++            dimAlpha = [0.0, 0.3, 0.55, 0.75][max(0, min(3, LunagramSettings.profileBannerDim))]
++            blurAlpha = CGFloat(LunagramSettings.profileBannerBlur) / 100.0
++        default:
++            url = LunagramSettings.liveWallpaperURL
++            dimAlpha = [0.0, 0.25, 0.5][max(0, min(2, LunagramSettings.liveWallpaperDim))]
++            blurAlpha = 0.0
++        }
++        dimView.alpha = dimAlpha
++        blurView.alpha = blurAlpha
++
++        let isVideo = kind == .banner ? LunagramSettings.profileBannerIsVideo : true
++        if url != self.shownMediaURL {
++            self.shownMediaURL = url
++            self.mediaPlayerLayer?.removeFromSuperlayer()
++            self.mediaPlayerLayer = nil
++            self.mediaPlayer = nil
++            self.mediaLooper = nil
++            mediaView.image = nil
++            if let url = url {
++                if isVideo {
++                    let player = AVQueuePlayer()
++                    player.isMuted = true
++                    let looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(asset: AVURLAsset(url: url)))
++                    let layer = AVPlayerLayer(player: player)
++                    layer.videoGravity = .resizeAspectFill
++                    layer.cornerRadius = 12.0
++                    layer.masksToBounds = true
++                    mediaView.layer.addSublayer(layer)
++                    self.mediaPlayerLayer = layer
++                    self.mediaPlayer = player
++                    self.mediaLooper = looper
++                    player.play()
++                } else {
++                    mediaView.image = UIImage(contentsOfFile: url.path)
++                }
++            }
++        }
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        self.mediaPlayerLayer?.frame = CGRect(origin: CGPoint(), size: area.size)
++        CATransaction.commit()
++
++        // Частицы поверх — те же, что падают в переписке.
++        if kind == .particles {
++            let layer: CALayer
++            if let current = self.particlesLayer {
++                layer = current
++            } else {
++                layer = LunagramParticlesLayer()
++                layer.cornerRadius = 12.0
++                layer.masksToBounds = true
++                self.particlesLayer = layer
++                self.previewContainer.layer.addSublayer(layer)
++            }
++            CATransaction.begin()
++            CATransaction.setDisableActions(true)
++            layer.frame = area
++            CATransaction.commit()
++            if let particles = layer as? LunagramParticlesLayer {
++                particles.updateSize(area.size)
++                particles.applyDensity(LunagramSettings.particlesDensity)
++            }
++            layer.isHidden = false
++        } else {
++            self.particlesLayer?.isHidden = true
+         }
+     }
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 79d60410..98b1abcf 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -871,6 +871,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         ]
+     case .bannerPhoto:
+         var entries: [LunagramSettingsEntry] = [
++            .preview(.bannerPhoto, .banner, media.bannerDim &* 10_000 &+ media.bannerBlur &* 10 &+ (media.hasBanner ? 1 : 0)),
+             .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
+             .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
+         ]
+@@ -971,6 +972,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return entries
+     case .liveWallpaper:
+         var entries: [LunagramSettingsEntry] = [
++            .preview(.liveWallpaper, .wallpaper, media.wallpaperDim &* 10 &+ (media.hasWallpaper ? 1 : 0)),
+             .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+             tgl(.liveWallpaper, .liveWallpaper),
+             .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
+@@ -1003,6 +1005,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return entries
+     case .appearance:
+         var entries: [LunagramSettingsEntry] = [
++            .preview(.appearance, .particles, media.particlesKind &* 10_000 &+ media.particlesDensity &* 100 &+ media.particlesSpeed % 100),
+             .header(.appearance, 0, "ЧАСТИЦЫ В ПЕРЕПИСКЕ"),
+             tgl(.appearance, .particles)
+         ]
