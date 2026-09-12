@@ -1,0 +1,333 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 282f9a58..022b5e86 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -237,6 +237,12 @@ public final class LunagramSettings {
+         return LunagramFontSettings.fileHasCyrillic
+     }
+ 
++    /// Шрифт для показа образца в списке начертаний: строка пишется тем
++    /// шрифтом, который она выбирает, — иначе все выглядят одинаково.
++    public static func sampleFont(styleIndex: Int, size: CGFloat) -> UIFont? {
++        return LunagramFontSettings.sampleFont(styleIndex: styleIndex, size: size)
++    }
++
+     /// Название выбранного шрифта, или `nil`, если файла нет.
+     public static var customFontTitle: String? {
+         return LunagramFontSettings.title
+diff --git a/submodules/LunagramFont/Sources/LunagramFontSettings.swift b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+index f7024fae..67dda136 100644
+--- a/submodules/LunagramFont/Sources/LunagramFontSettings.swift
++++ b/submodules/LunagramFont/Sources/LunagramFontSettings.swift
+@@ -218,6 +218,25 @@ public enum LunagramFontSettings {
+         }
+     }
+ 
++    /// Шрифт для показа образца в списке: 0 — системный, 1…7 — готовые,
++    /// `ownFileStyle` — свой файл. Нужен, чтобы строка выбора писалась тем
++    /// самым шрифтом и было видно, какой из них какой.
++    public static func sampleFont(styleIndex: Int, size: CGFloat) -> UIFont? {
++        if styleIndex == 0 {
++            return nil
++        }
++        if styleIndex == ownFileStyle {
++            lock.lock()
++            let family = resolvedFamily()
++            lock.unlock()
++            guard let family = family else {
++                return nil
++            }
++            return UIFont(name: family, size: size)
++        }
++        return builtInFont(style: styleIndex, size: size)
++    }
++
+     /// Есть ли в шрифте русские буквы. Проверяем по-настоящему — просим у
+     /// него очертания для «А» и «я»; если хоть одного нет, шрифт не годится.
+     public static func hasCyrillic(_ font: UIFont) -> Bool {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramFontChoiceItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramFontChoiceItem.swift
+new file mode 100644
+index 00000000..cb254e81
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramFontChoiceItem.swift
+@@ -0,0 +1,186 @@
++import Foundation
++import UIKit
++import Display
++import AsyncDisplayKit
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++
++/// Строка выбора шрифта: название написано ТЕМ САМЫМ шрифтом, чтобы было
++/// видно, какой из них какой. Обычная строка-галочка этого не умеет — у неё
++/// шрифт всегда системный.
++final class LunagramFontChoiceItem: ListViewItem, ItemListItem {
++    let presentationData: ItemListPresentationData
++    let title: String
++    /// Каким шрифтом рисовать название. Пусто — системным.
++    let sampleFont: UIFont?
++    let isSelected: Bool
++    let sectionId: ItemListSectionId
++    let action: () -> Void
++
++    init(presentationData: ItemListPresentationData, title: String, sampleFont: UIFont?, isSelected: Bool, sectionId: ItemListSectionId, action: @escaping () -> Void) {
++        self.presentationData = presentationData
++        self.title = title
++        self.sampleFont = sampleFont
++        self.isSelected = isSelected
++        self.sectionId = sectionId
++        self.action = action
++    }
++
++    var selectable: Bool = true
++
++    func selected(listView: ListView) {
++        listView.clearHighlightAnimated(true)
++        self.action()
++    }
++
++    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
++        async {
++            let node = LunagramFontChoiceItemNode()
++            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++            node.contentSize = layout.contentSize
++            node.insets = layout.insets
++            Queue.mainQueue().async {
++                completion(node, {
++                    return (nil, { _ in apply() })
++                })
++            }
++        }
++    }
++
++    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
++        Queue.mainQueue().async {
++            if let node = node() as? LunagramFontChoiceItemNode {
++                let makeLayout = node.asyncLayout()
++                async {
++                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++                    Queue.mainQueue().async {
++                        completion(layout, { _ in apply() })
++                    }
++                }
++            }
++        }
++    }
++}
++
++final class LunagramFontChoiceItemNode: ListViewItemNode {
++    private let backgroundNode: ASDisplayNode
++    private let topStripeNode: ASDisplayNode
++    private let bottomStripeNode: ASDisplayNode
++    private let maskNode: ASImageNode
++    private let highlightedBackgroundNode: ASDisplayNode
++
++    private let titleNode: TextNode
++    private let checkNode: ASImageNode
++
++    init() {
++        self.backgroundNode = ASDisplayNode()
++        self.backgroundNode.isLayerBacked = true
++        self.topStripeNode = ASDisplayNode()
++        self.topStripeNode.isLayerBacked = true
++        self.bottomStripeNode = ASDisplayNode()
++        self.bottomStripeNode.isLayerBacked = true
++        self.maskNode = ASImageNode()
++        self.highlightedBackgroundNode = ASDisplayNode()
++        self.highlightedBackgroundNode.isLayerBacked = true
++
++        self.titleNode = TextNode()
++        self.titleNode.isUserInteractionEnabled = false
++        self.checkNode = ASImageNode()
++        self.checkNode.displaysAsynchronously = false
++
++        super.init(layerBacked: false)
++
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.checkNode)
++    }
++
++    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
++        super.setHighlighted(highlighted, at: point, animated: animated)
++        if highlighted {
++            if self.highlightedBackgroundNode.supernode == nil {
++                self.insertSubnode(self.highlightedBackgroundNode, aboveSubnode: self.backgroundNode)
++            }
++            self.highlightedBackgroundNode.alpha = 1.0
++        } else if self.highlightedBackgroundNode.supernode != nil {
++            self.highlightedBackgroundNode.removeFromSupernode()
++        }
++    }
++
++    func asyncLayout() -> (_ item: LunagramFontChoiceItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
++        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
++
++        return { item, params, neighbors in
++            let separatorHeight = UIScreenPixel
++            let leftInset = 44.0 + params.leftInset
++            let font = item.sampleFont ?? Font.regular(item.presentationData.fontSize.itemListBaseFontSize)
++
++            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: font, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 16.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++
++            let contentSize = CGSize(width: params.width, height: max(44.0, titleLayout.size.height + 22.0))
++            let insets = itemListNeighborsGroupedInsets(neighbors, params)
++            let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
++            let layoutSize = layout.size
++
++            return (layout, { [weak self] in
++                guard let strongSelf = self else {
++                    return
++                }
++                strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++                strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
++                strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
++                strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
++
++                if strongSelf.backgroundNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
++                }
++                if strongSelf.topStripeNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.topStripeNode, at: 1)
++                }
++                if strongSelf.bottomStripeNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.bottomStripeNode, at: 2)
++                }
++                if strongSelf.maskNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.maskNode, at: 3)
++                }
++                let hasCorners = itemListHasRoundedBlockLayout(params)
++                var hasTopCorners = false
++                var hasBottomCorners = false
++                switch neighbors.top {
++                case .sameSection(false):
++                    strongSelf.topStripeNode.isHidden = true
++                default:
++                    hasTopCorners = true
++                    strongSelf.topStripeNode.isHidden = hasCorners
++                }
++                let bottomStripeInset: CGFloat
++                switch neighbors.bottom {
++                case .sameSection(false):
++                    bottomStripeInset = leftInset
++                    strongSelf.bottomStripeNode.isHidden = false
++                default:
++                    bottomStripeInset = 0.0
++                    hasBottomCorners = true
++                    strongSelf.bottomStripeNode.isHidden = hasCorners
++                }
++
++                strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: false) : nil
++                strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
++                strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
++                strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
++                strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - 16.0, height: separatorHeight))
++                strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: params.width, height: contentSize.height))
++
++                let _ = titleApply()
++                strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: leftInset, y: floor((contentSize.height - titleLayout.size.height) / 2.0)), size: titleLayout.size)
++
++                strongSelf.checkNode.image = PresentationResourcesItemList.checkIconImage(item.presentationData.theme)
++                strongSelf.checkNode.isHidden = !item.isSelected
++                if let image = strongSelf.checkNode.image {
++                    strongSelf.checkNode.frame = CGRect(x: params.leftInset + 14.0, y: floor((contentSize.height - image.size.height) / 2.0), width: image.size.width, height: image.size.height)
++                }
++            })
++        }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 05948d2a..f202e1f5 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -458,6 +458,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case slider(LunagramSettingsSection, Int32, String, Int, Int, Int, Int, String)
+     // Живой образец сверху экрана: раздел, вид, слепок настроек.
+     case preview(LunagramSettingsSection, LunagramPreviewKind, Int)
++    // Выбор начертания: название пишется тем самым шрифтом.
++    case fontChoice(LunagramSettingsSection, Int32, String, Bool)
+     case input(LunagramSettingsSection, String, String, String)
+     case disclosure(LunagramSettingsSection, String)
+     case editor(LunagramSettingsSection, String)
+@@ -470,7 +472,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue
+-        case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .slider(section, _, _, _, _, _, _, _), let .preview(section, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .slider(section, _, _, _, _, _, _, _), let .preview(section, _, _), let .fontChoice(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -499,6 +501,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+         case let .preview(section, _, _):
+             // Образец всегда самой первой строкой раздела.
+             return section.rawValue * 100 - 1
++        case let .fontChoice(section, index, _, _):
++            return section.rawValue * 100 + 60 + index
+         case let .input(section, _, _, _):
+             return section.rawValue * 100 + 50
+         case let .disclosure(section, _):
+@@ -574,6 +578,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .fontChoice(lhsSection, lhsIndex, lhsTitle, lhsSelected):
++            if case let .fontChoice(rhsSection, rhsIndex, rhsTitle, rhsSelected) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsTitle == rhsTitle, lhsSelected == rhsSelected {
++                return true
++            } else {
++                return false
++            }
+         case let .disclosure(lhsSection, lhsTitle):
+             if case let .disclosure(rhsSection, rhsTitle) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle {
+                 return true
+@@ -660,6 +670,14 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             })
+         case let .preview(_, kind, token):
+             return LunagramPreviewItem(presentationData: presentationData, kind: kind, token: token, sectionId: self.section)
++        case let .fontChoice(section, index, title, selected):
++            // Название рисуем тем шрифтом, который эта строка выбирает.
++            // Последняя строка — свой файл, у него свой номер начертания.
++            let styleIndex = Int(index) == lunagramOwnFontRow ? LunagramSettings.ownFontStyle : Int(index)
++            let sample = LunagramSettings.sampleFont(styleIndex: styleIndex, size: presentationData.fontSize.itemListBaseFontSize)
++            return LunagramFontChoiceItem(presentationData: presentationData, title: title, sampleFont: sample, isSelected: selected, sectionId: self.section, action: {
++                arguments.setDim(section, Int(index))
++            })
+         case let .slider(_, id, title, value, minValue, maxValue, step, label):
+             return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in label }, sectionId: self.section, updated: { newValue in
+                 arguments.setSlider(id, newValue)
+@@ -842,16 +860,17 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .font:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.font, 0, "ШРИФТ ИНТЕРФЕЙСА"),
+-            .dim(.font, 0, "Системный", media.fontStyle == 0)
++            // Каждая строка написана своим шрифтом — видно, какой какой.
++            .fontChoice(.font, 0, "Системный", media.fontStyle == 0)
+         ]
+         // Готовые начертания взяты из самого айфона — скачивать нечего.
+         for style in LunagramSettings.fontStyles {
+-            entries.append(.dim(.font, Int32(style.id), style.title, media.fontStyle == style.id))
++            entries.append(.fontChoice(.font, Int32(style.id), style.title, media.fontStyle == style.id))
+         }
+         // Свой файл — последней строкой списка. Номер строки берём небольшой:
+         // строки сверяются по нему, и он обязан оставаться внутри раздела.
+         if let fontTitle = media.fontTitle {
+-            entries.append(.dim(.font, Int32(lunagramOwnFontRow), "Свой: \(fontTitle)", media.fontStyle == LunagramSettings.ownFontStyle))
++            entries.append(.fontChoice(.font, Int32(lunagramOwnFontRow), "Свой: \(fontTitle)", media.fontStyle == LunagramSettings.ownFontStyle))
+             entries.append(.action(.font, 30, "Заменить свой файл"))
+             entries.append(.photoAction(.font, 51, "Убрать свой файл"))
+         } else {
+@@ -865,8 +884,12 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return entries
+     case .wording:
+         var entries: [LunagramSettingsEntry] = [.header(.wording, 0, "НАДПИСИ")]
++        // Рядом с названием — пример слов из набора, чтобы было видно, какой
++        // он: одни названия выглядели одинаково.
++        let wordingSamples = ["Переслать · Удалить", "Вжух · Снести", "Передать · Отпустить", "Телепортнуть · Сломать", "Разослать · Предать забвению"]
+         for (index, title) in LunagramSettings.wordingPackTitles.enumerated() {
+-            entries.append(.dim(.wording, Int32(index), title, index == media.wordingPack))
++            let sample = index < wordingSamples.count ? "\(title) — \(wordingSamples[index])" : title
++            entries.append(.dim(.wording, Int32(index), sample, index == media.wordingPack))
+         }
+         entries.append(.info(.wording, 0, "Свои слова вместо телеграмовских — те самые «языки»: «Вжух» вместо «Переслать», «Предать забвению» вместо «Удалить». Меняются меню сообщения, кнопки, разделы настроек и вкладки.\n\nПереведены самые ходовые надписи, остальные остаются родными. Перезапусти Lunagram, чтобы сменилось везде."))
+         return entries
