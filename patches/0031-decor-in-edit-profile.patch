@@ -67,7 +67,7 @@ index 9130baf3..b5472aed 100644
      let shared = LunagramSharedState()
      let arguments = lunagramMakeArguments(context: context, shared: shared)
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
-index b89055a5..53fe0148 100644
+index b89055a5..389200ac 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
 @@ -12,6 +12,7 @@ import ItemListPeerItem
@@ -87,7 +87,7 @@ index b89055a5..53fe0148 100644
          case help
          case bio
          case birthday
-@@ -381,7 +384,34 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+@@ -381,7 +384,36 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
      let ItemPeerChatAutomationHelp = 15
      
      items[.help]!.append(PeerInfoScreenCommentItem(id: ItemNameHelp, text: presentationData.strings.EditProfile_NameAndPhotoOrVideoHelp))
@@ -114,7 +114,9 @@ index b89055a5..53fe0148 100644
 +        }))
 +        items[.lunagramDecor]!.append(PeerInfoScreenActionItem(id: 204, text: "Удалить все фотографии", color: .destructive, action: {
 +            lunagramDeleteProfilePhotos(context: context, keepMain: false, present: { c in
-+                (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(c, in: .window(.root))
++                // Показ ведём от самого NavigationController — он из Display и
++                // умеет present(_, in:), в отличие от UIKit-верхнего экрана.
++                (context.sharedContext.mainWindow?.viewController as? NavigationController)?.present(c, in: .window(.root))
 +            })
 +        }))
 +        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 205, text: "Рисует сам клиент, на сервер ничего не уходит. Видно только тебе."))
@@ -123,7 +125,7 @@ index b89055a5..53fe0148 100644
      if let cachedData = data.cachedData as? CachedUserData {
          let currentBio = state.updatingBio ?? (cachedData.about ?? "")
          items[.bio]!.append(PeerInfoScreenMultilineInputItem(id: ItemBio, text: currentBio, placeholder: presentationData.strings.UserInfo_About_Placeholder, textUpdated: { updatedText in
-@@ -453,7 +483,10 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+@@ -453,7 +485,10 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
      }
      
      if case let .user(user) = data.peer {
