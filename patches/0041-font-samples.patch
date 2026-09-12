@@ -1,8 +1,16 @@
 diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
-index 282f9a58..022b5e86 100644
+index 282f9a58..1a68ba38 100644
 --- a/submodules/Lunagram/Sources/LunagramSettings.swift
 +++ b/submodules/Lunagram/Sources/LunagramSettings.swift
-@@ -237,6 +237,12 @@ public final class LunagramSettings {
+@@ -1,6 +1,7 @@
+ import Foundation
+ import CoreGraphics
+ import ImageIO
++import UIKit
+ import LunagramFont
+ import LunagramGhost
+ 
+@@ -237,6 +238,12 @@ public final class LunagramSettings {
          return LunagramFontSettings.fileHasCyrillic
      }
  
