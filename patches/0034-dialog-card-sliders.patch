@@ -1,0 +1,142 @@
+diff --git a/submodules/Lunagram/Sources/LunagramDialogCard.swift b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+index a28ac3a7..c292a9f8 100644
+--- a/submodules/Lunagram/Sources/LunagramDialogCard.swift
++++ b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+@@ -141,8 +141,19 @@ public final class LunagramDialogCardView: UIView {
+         }
+     }
+ 
+-    /// Настройки поменялись: подложку перекрашиваем на месте.
++    /// Настройки поменялись: перекрашиваем подложку и обновляем скругление и
++    /// обводку на месте, не дожидаясь смены размера строки.
+     public func applySettings() {
++        let bounds = self.layer.bounds
++        let maxRadius = min(18.0, floor(bounds.height / 2.0))
++        let radius = maxRadius * CGFloat(LunagramSettings.dialogCardsRadius) / 100.0
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        self.layer.cornerRadius = radius
++        let lineWidth: CGFloat = 1.0
++        self.strokeMask.path = UIBezierPath(roundedRect: bounds.insetBy(dx: lineWidth / 2.0, dy: lineWidth / 2.0), cornerRadius: max(0.0, radius - lineWidth / 2.0)).cgPath
++        self.strokeGradient.opacity = Float(LunagramSettings.dialogCardsStroke) / 100.0
++        CATransaction.commit()
+         self.applyDim()
+     }
+ 
+@@ -157,7 +168,10 @@ public final class LunagramDialogCardView: UIView {
+         }
+         self.frame = frame
+         let bounds = CGRect(origin: CGPoint(), size: frame.size)
+-        let radius = min(18.0, floor(frame.height / 2.0))
++        // Скругление настраивается: 100 % — как было (18 или пол-высоты),
++        // 0 % — прямые углы.
++        let maxRadius = min(18.0, floor(frame.height / 2.0))
++        let radius = maxRadius * CGFloat(LunagramSettings.dialogCardsRadius) / 100.0
+         self.layer.cornerRadius = radius
+ 
+         // Аватарка квадратная, а плитка вытянута — растягиваем по большей
+@@ -173,6 +187,8 @@ public final class LunagramDialogCardView: UIView {
+         self.strokeMask.frame = bounds
+         self.strokeMask.lineWidth = lineWidth
+         self.strokeMask.path = UIBezierPath(roundedRect: bounds.insetBy(dx: lineWidth / 2.0, dy: lineWidth / 2.0), cornerRadius: max(0.0, radius - lineWidth / 2.0)).cgPath
++        // Заметность обводки — прозрачностью всего слоя обводки.
++        self.strokeGradient.opacity = Float(LunagramSettings.dialogCardsStroke) / 100.0
+         CATransaction.commit()
+     }
+ 
+@@ -180,9 +196,8 @@ public final class LunagramDialogCardView: UIView {
+         let index = max(0, min(LunagramDialogCardView.dimAlphas.count - 1, LunagramSettings.dialogCardsDim))
+         var alpha = LunagramDialogCardView.dimAlphas[index]
+         if self.isMuted && LunagramSettings.dialogCardsFadeMuted {
+-            // Приглушённые гасим сильнее: подложка закрывает аватарку почти
+-            // целиком, и такие переписки отступают на второй план.
+-            alpha += (1.0 - alpha) * 0.6
++            // Приглушённые гасим сильнее — насколько, задаёт ползунок.
++            alpha += (1.0 - alpha) * CGFloat(LunagramSettings.dialogCardsMuteOpacity) / 100.0
+         }
+         self.dimView.backgroundColor = self.themeBackgroundColor.withAlphaComponent(alpha)
+     }
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 2557b030..99271c77 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -44,6 +44,9 @@ public final class LunagramSettings {
+         static let dialogCardsEnabled = "lunagram.dialogCards.enabled"
+         static let dialogCardsDim = "lunagram.dialogCards.dim"
+         static let dialogCardsFadeMuted = "lunagram.dialogCards.fadeMuted"
++        static let dialogCardsRadius = "lunagram.dialogCards.radius"
++        static let dialogCardsStroke = "lunagram.dialogCards.stroke"
++        static let dialogCardsMuteOpacity = "lunagram.dialogCards.muteOpacity"
+         static let hideOwnPhone = "lunagram.privacy.hideOwnPhone"
+         static let deviceModelName = "lunagram.privacy.deviceModelName"
+         static let statusBaseName = "lunagram.status.baseName"
+@@ -524,6 +527,24 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Скругление плитки, 0…100 %. 100 — как было (сильно скруглено).
++    public static var dialogCardsRadius: Int {
++        get { return clamped(Key.dialogCardsRadius, 0, 100, 100) }
++        set { setClamped(newValue, Key.dialogCardsRadius, 0, 100) }
++    }
++
++    /// Заметность обводки плитки, 0…100 %. 0 — обводки нет.
++    public static var dialogCardsStroke: Int {
++        get { return clamped(Key.dialogCardsStroke, 0, 100, 60) }
++        set { setClamped(newValue, Key.dialogCardsStroke, 0, 100) }
++    }
++
++    /// Насколько сильнее гасить приглушённые, 0…100 %.
++    public static var dialogCardsMuteOpacity: Int {
++        get { return clamped(Key.dialogCardsMuteOpacity, 0, 100, 60) }
++        set { setClamped(newValue, Key.dialogCardsMuteOpacity, 0, 100) }
++    }
++
+     // MARK: Приватность
+ 
+     /// Прятать свой номер в шапке настроек и в своём профиле — для
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index e066a3d0..9acc4c78 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -629,9 +629,12 @@ private struct LunagramMediaState: Equatable {
+     var frameGlow: Int
+     var bannerPreset: Int
+     var deviceMask: Int
++    var cardsRadius: Int
++    var cardsStroke: Int
++    var cardsMuteOpacity: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity)
+     }
+ }
+ 
+@@ -839,9 +842,12 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.dialogCards, .dialogCards),
+             tgl(.dialogCards, .dialogCardsFadeMuted)
+         ]
+-        // Затемнение — ползунком, как на ПК. Подпись справа — словом.
++        // Ползунки, как на ПК. Подпись справа — процент или слово.
+         let cardsDim = max(0, min(lunagramCardsDimTitles.count - 1, media.cardsDim))
+         entries.append(.slider(.dialogCards, 0, "Затемнение фона", cardsDim, 0, lunagramCardsDimTitles.count - 1, 1, lunagramCardsDimTitles[cardsDim]))
++        entries.append(.slider(.dialogCards, 2, "Скругление плитки", media.cardsRadius, 0, 100, 10, "\(media.cardsRadius)%"))
++        entries.append(.slider(.dialogCards, 3, "Заметность обводки", media.cardsStroke, 0, 100, 10, "\(media.cardsStroke)%"))
++        entries.append(.slider(.dialogCards, 4, "Яркость приглушённых", media.cardsMuteOpacity, 0, 100, 10, "\(media.cardsMuteOpacity)%"))
+         entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
+         return entries
+     case .appearance:
+@@ -1090,6 +1096,12 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         switch id {
+         case 0:
+             LunagramSettings.dialogCardsDim = value
++        case 2:
++            LunagramSettings.dialogCardsRadius = value
++        case 3:
++            LunagramSettings.dialogCardsStroke = value
++        case 4:
++            LunagramSettings.dialogCardsMuteOpacity = value
+         default:
+             break
+         }
