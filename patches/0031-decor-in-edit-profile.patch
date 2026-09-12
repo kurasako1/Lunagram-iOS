@@ -1,0 +1,137 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 9130baf3..b5472aed 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -256,9 +256,12 @@ private enum LunagramSettingsCategory: Int32, CaseIterable {
+     var groups: [LunagramSettingsGroup] {
+         switch self {
+         case .functions:
+-            return [.ghost, .spy, .messages, .profile, .privacy, .font]
++            return [.ghost, .spy, .messages, .privacy, .font]
+         case .appearance:
+-            return [.banner, .avatarFrame, .liveWallpaper, .dialogCards, .particles]
++            // Баннер, рамка и всё про имя/статус переехали в «Изменить
++            // профиль» — как на ПК. Здесь остаётся то, что видно в переписке
++            // и в списке.
++            return [.liveWallpaper, .dialogCards, .particles]
+         }
+     }
+ }
+@@ -1082,6 +1085,48 @@ private func lunagramGroupController(context: AccountContext, group: LunagramSet
+     return ItemListController(context: context, state: signal)
+ }
+ 
++/// Отдельный экран из заданных разделов, со своим свежим состоянием. Нужен,
++/// чтобы открывать декор прямо из «Изменить профиль», как на ПК, а не только
++/// из настроек Lunagram.
++private func lunagramSectionsScreen(context: AccountContext, title: String, sections: [LunagramSettingsSection]) -> ViewController {
++    let shared = LunagramSharedState()
++    let arguments = lunagramMakeArguments(context: context, shared: shared)
++    shared.arguments = arguments
++
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, currentValues, media, ghostExpanded -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramSettingsEntry] = []
++        for section in sections {
++            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded))
++        }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    let controller = ItemListController(context: context, state: signal)
++    shared.push = { [weak controller] c in
++        controller?.push(c)
++    }
++    shared.present = { [weak controller] c in
++        controller?.present(c, in: .window(.root))
++    }
++    return controller
++}
++
++/// Экраны декора для блока «Оформление Lunagram» в «Изменить профиль».
++func lunagramBannerScreen(context: AccountContext) -> ViewController {
++    return lunagramSectionsScreen(context: context, title: "Баннер профиля", sections: [.banner, .bannerPhoto])
++}
++
++func lunagramAvatarFrameScreen(context: AccountContext) -> ViewController {
++    return lunagramSectionsScreen(context: context, title: "Рамка аватарки", sections: [.avatarFrame, .avatarFrameSize, .avatarFrameBright, .avatarFrameGlow])
++}
++
++func lunagramProfileNameScreen(context: AccountContext) -> ViewController {
++    return lunagramSectionsScreen(context: context, title: "Имя", sections: [.profileNameColor, .profileNameGlow])
++}
++
+ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     let shared = LunagramSharedState()
+     let arguments = lunagramMakeArguments(context: context, shared: shared)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index b89055a5..53fe0148 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -12,6 +12,7 @@ import ItemListPeerItem
+ import DeviceAccess
+ import TelegramStringFormatting
+ import PeerNameColorItem
++import Lunagram
+ 
+ enum SettingsSection: Int, CaseIterable {
+     case edit
+@@ -350,6 +351,8 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     }
+     
+     enum Section: Int, CaseIterable {
++        // Lunagram: блок оформления — сразу под фото, как на ПК.
++        case lunagramDecor
+         case help
+         case bio
+         case birthday
+@@ -381,7 +384,34 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     let ItemPeerChatAutomationHelp = 15
+     
+     items[.help]!.append(PeerInfoScreenCommentItem(id: ItemNameHelp, text: presentationData.strings.EditProfile_NameAndPhotoOrVideoHelp))
+-    
++
++    // Lunagram: блок «Оформление Lunagram» — как на ПК, прямо в «Изменить
++    // профиль». Каждая строка открывает свой экран. Всё рисует сам клиент,
++    // на сервер ничего не уходит, видно только тебе.
++    if case .user = data.peer {
++        let pushDecor: (ViewController) -> Void = { screen in
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(screen)
++        }
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 200, label: .text(""), text: "Баннер профиля", icon: PresentationResourcesSettings.appearance, action: {
++            pushDecor(lunagramBannerScreen(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 201, label: .text(""), text: "Рамка аватарки", icon: PresentationResourcesSettings.myProfile, action: {
++            pushDecor(lunagramAvatarFrameScreen(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 202, label: .text(""), text: "Статус в имени", icon: PresentationResourcesSettings.premium, action: {
++            pushDecor(lunagramStatusController(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Цвет и свечение имени", icon: PresentationResourcesSettings.yourColor, action: {
++            pushDecor(lunagramProfileNameScreen(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenActionItem(id: 204, text: "Удалить все фотографии", color: .destructive, action: {
++            lunagramDeleteProfilePhotos(context: context, keepMain: false, present: { c in
++                (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(c, in: .window(.root))
++            })
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 205, text: "Рисует сам клиент, на сервер ничего не уходит. Видно только тебе."))
++    }
++
+     if let cachedData = data.cachedData as? CachedUserData {
+         let currentBio = state.updatingBio ?? (cachedData.about ?? "")
+         items[.bio]!.append(PeerInfoScreenMultilineInputItem(id: ItemBio, text: currentBio, placeholder: presentationData.strings.UserInfo_About_Placeholder, textUpdated: { updatedText in
+@@ -453,7 +483,10 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     }
+     
+     if case let .user(user) = data.peer {
+-        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
++        // Lunagram: скрываем свой номер точками — для скриншотов. Сам номер
++        // не меняется, прячется только показ.
++        let phoneText = user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""
++        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(LunagramSettings.displayedOwnPhone(phoneText)), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
+             interaction.openSettings(.phoneNumber)
+         }))
+     }
