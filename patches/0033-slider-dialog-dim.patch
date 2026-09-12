@@ -1,0 +1,366 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index fc3f916f..e066a3d0 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -226,6 +226,7 @@ private final class LunagramSettingsControllerArguments {
+     let toggle: (LunagramToggle, Bool) -> Void
+     let pick: (LunagramSettingsSection) -> Void
+     let setDim: (LunagramSettingsSection, Int) -> Void
++    let setSlider: (Int32, Int) -> Void
+     let updateText: (LunagramSettingsSection, String) -> Void
+     let photoAction: (Int) -> Void
+     let openCategory: (LunagramSettingsCategory) -> Void
+@@ -235,10 +236,11 @@ private final class LunagramSettingsControllerArguments {
+     let toggleExpand: (LunagramToggle) -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
++        self.setSlider = setSlider
+         self.updateText = updateText
+         self.photoAction = photoAction
+         self.openCategory = openCategory
+@@ -383,6 +385,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case ghostRow(Bool, Bool, [Bool])
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
++    // Ползунок силы: раздел, номер, название, значение, мин, макс, шаг, подпись.
++    case slider(LunagramSettingsSection, Int32, String, Int, Int, Int, Int, String)
+     case input(LunagramSettingsSection, String, String, String)
+     case disclosure(LunagramSettingsSection, String)
+     case editor(LunagramSettingsSection, String)
+@@ -395,7 +399,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue
+-        case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
++        case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .slider(section, _, _, _, _, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+         }
+     }
+@@ -419,6 +423,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + 40 + index
+         case let .dim(section, index, _, _):
+             return section.rawValue * 100 + 60 + index
++        case let .slider(section, id, _, _, _, _, _, _):
++            return section.rawValue * 100 + 70 + id
+         case let .input(section, _, _, _):
+             return section.rawValue * 100 + 50
+         case let .disclosure(section, _):
+@@ -482,6 +488,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .slider(lhsSection, lhsId, lhsTitle, lhsValue, lhsMin, lhsMax, lhsStep, lhsLabel):
++            if case let .slider(rhsSection, rhsId, rhsTitle, rhsValue, rhsMin, rhsMax, rhsStep, rhsLabel) = rhs, lhsSection == rhsSection, lhsId == rhsId, lhsTitle == rhsTitle, lhsValue == rhsValue, lhsMin == rhsMin, lhsMax == rhsMax, lhsStep == rhsStep, lhsLabel == rhsLabel {
++                return true
++            } else {
++                return false
++            }
+         case let .disclosure(lhsSection, lhsTitle):
+             if case let .disclosure(rhsSection, rhsTitle) = rhs, lhsSection == rhsSection, lhsTitle == rhsTitle {
+                 return true
+@@ -566,6 +578,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                 arguments.setDim(section, Int(index))
+             })
++        case let .slider(_, id, title, value, minValue, maxValue, step, label):
++            return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in label }, sectionId: self.section, updated: { newValue in
++                arguments.setSlider(id, newValue)
++            })
+         case let .disclosure(section, title):
+             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.pick(section)
+@@ -823,9 +839,9 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.dialogCards, .dialogCards),
+             tgl(.dialogCards, .dialogCardsFadeMuted)
+         ]
+-        for (index, title) in lunagramCardsDimTitles.enumerated() {
+-            entries.append(.dim(.dialogCards, Int32(index), title, index == media.cardsDim))
+-        }
++        // Затемнение — ползунком, как на ПК. Подпись справа — словом.
++        let cardsDim = max(0, min(lunagramCardsDimTitles.count - 1, media.cardsDim))
++        entries.append(.slider(.dialogCards, 0, "Затемнение фона", cardsDim, 0, lunagramCardsDimTitles.count - 1, 1, lunagramCardsDimTitles[cardsDim]))
+         entries.append(.info(.dialogCards, 0, "Фон каждой переписки — её размытая аватарка. Подложка цвета темы: в тёмной затемняет, в светлой высветляет, чтобы текст читался."))
+         return entries
+     case .appearance:
+@@ -1069,6 +1085,15 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.liveWallpaperDim = dim
+         }
+         refreshMedia()
++    }, setSlider: { id, value in
++        // Номера ползунков раздела «Список переписок».
++        switch id {
++        case 0:
++            LunagramSettings.dialogCardsDim = value
++        default:
++            break
++        }
++        refreshMedia()
+     }, updateText: { _, _ in
+     }, photoAction: { index in
+         if index == 51 {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+new file mode 100644
+index 00000000..6e5a87c0
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+@@ -0,0 +1,255 @@
++import Foundation
++import UIKit
++import Display
++import AsyncDisplayKit
++import SwiftSignalKit
++import TelegramPresentationData
++import LegacyComponents
++import ItemListUI
++import PresentationDataUtils
++
++/// Ползунок «сила настройки» — как на ПК. Слева название, справа текущее
++/// значение, снизу сам ползунок. Значение идёт ступенями от `minValue` до
++/// `maxValue` с шагом `step`, но тянется плавно.
++///
++/// Свой, потому что готового ползунка-строки в наборе Telegram-iOS нет:
++/// единственный ползунок там — `TGPhotoEditorSliderView` из LegacyComponents,
++/// на нём и построено. Нужен сразу нескольким экранам (баннер, список, обои).
++final class LunagramSliderItem: ListViewItem, ItemListItem {
++    let presentationData: ItemListPresentationData
++    let title: String
++    let value: Int
++    let minValue: Int
++    let maxValue: Int
++    let step: Int
++    /// Как показать значение справа. По умолчанию — число.
++    let valueText: (Int) -> String
++    let sectionId: ItemListSectionId
++    let updated: (Int) -> Void
++
++    init(presentationData: ItemListPresentationData, title: String, value: Int, minValue: Int, maxValue: Int, step: Int = 1, valueText: @escaping (Int) -> String = { "\($0)" }, sectionId: ItemListSectionId, updated: @escaping (Int) -> Void) {
++        self.presentationData = presentationData
++        self.title = title
++        self.value = value
++        self.minValue = minValue
++        self.maxValue = maxValue
++        self.step = max(1, step)
++        self.valueText = valueText
++        self.sectionId = sectionId
++        self.updated = updated
++    }
++
++    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
++        async {
++            let node = LunagramSliderItemNode()
++            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++            node.contentSize = layout.contentSize
++            node.insets = layout.insets
++            Queue.mainQueue().async {
++                completion(node, {
++                    return (nil, { _ in apply() })
++                })
++            }
++        }
++    }
++
++    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
++        Queue.mainQueue().async {
++            if let node = node() as? LunagramSliderItemNode {
++                let makeLayout = node.asyncLayout()
++                async {
++                    let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++                    Queue.mainQueue().async {
++                        completion(layout, { _ in apply() })
++                    }
++                }
++            }
++        }
++    }
++}
++
++final class LunagramSliderItemNode: ListViewItemNode {
++    private let backgroundNode: ASDisplayNode
++    private let topStripeNode: ASDisplayNode
++    private let bottomStripeNode: ASDisplayNode
++    private let maskNode: ASImageNode
++
++    private let titleNode: TextNode
++    private let valueNode: TextNode
++    private var sliderView: TGPhotoEditorSliderView?
++
++    private var item: LunagramSliderItem?
++    private var layoutParams: ListViewItemLayoutParams?
++
++    init() {
++        self.backgroundNode = ASDisplayNode()
++        self.backgroundNode.isLayerBacked = true
++
++        self.topStripeNode = ASDisplayNode()
++        self.topStripeNode.isLayerBacked = true
++
++        self.bottomStripeNode = ASDisplayNode()
++        self.bottomStripeNode.isLayerBacked = true
++
++        self.maskNode = ASImageNode()
++
++        self.titleNode = TextNode()
++        self.titleNode.isUserInteractionEnabled = false
++
++        self.valueNode = TextNode()
++        self.valueNode.isUserInteractionEnabled = false
++
++        super.init(layerBacked: false)
++
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.valueNode)
++    }
++
++    /// Сколько ступеней у ползунка.
++    private func positions(_ item: LunagramSliderItem) -> Int {
++        return max(2, (item.maxValue - item.minValue) / item.step + 1)
++    }
++
++    private func sliderPosition(_ item: LunagramSliderItem) -> CGFloat {
++        return CGFloat((item.value - item.minValue) / item.step)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++
++        let sliderView = TGPhotoEditorSliderView()
++        sliderView.enablePanHandling = true
++        sliderView.trackCornerRadius = 2.0
++        sliderView.lineSize = 4.0
++        sliderView.dotSize = 5.0
++        sliderView.minimumValue = 0.0
++        sliderView.startValue = 0.0
++        sliderView.disablesInteractiveTransitionGestureRecognizer = true
++        sliderView.useLinesForPositions = true
++        if let item = self.item, let params = self.layoutParams {
++            sliderView.maximumValue = CGFloat(self.positions(item) - 1)
++            sliderView.positionsCount = self.positions(item)
++            sliderView.value = self.sliderPosition(item)
++            sliderView.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++            sliderView.backColor = item.presentationData.theme.list.itemSwitchColors.frameColor
++            sliderView.startColor = item.presentationData.theme.list.itemSwitchColors.frameColor
++            sliderView.trackColor = item.presentationData.theme.list.itemAccentColor
++            sliderView.knobImage = PresentationResourcesItemList.knobImage(item.presentationData.theme)
++            sliderView.frame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: 37.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 15.0 * 2.0, height: 44.0))
++        }
++        self.view.addSubview(sliderView)
++        sliderView.addTarget(self, action: #selector(self.sliderValueChanged), for: .valueChanged)
++        self.sliderView = sliderView
++    }
++
++    @objc private func sliderValueChanged() {
++        guard let item = self.item, let sliderView = self.sliderView else {
++            return
++        }
++        let newValue = item.minValue + Int(sliderView.value.rounded()) * item.step
++        let clamped = max(item.minValue, min(item.maxValue, newValue))
++        if clamped != item.value {
++            item.updated(clamped)
++        }
++    }
++
++    func asyncLayout() -> (_ item: LunagramSliderItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
++        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
++        let makeValueLayout = TextNode.asyncLayout(self.valueNode)
++        let currentItem = self.item
++
++        return { item, params, neighbors in
++            var themeUpdated = false
++            if currentItem?.presentationData.theme !== item.presentationData.theme {
++                themeUpdated = true
++            }
++
++            let separatorHeight = UIScreenPixel
++            let separatorRightInset: CGFloat = 16.0
++            let leftInset = 16.0 + params.leftInset
++
++            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.title, font: Font.regular(item.presentationData.fontSize.itemListBaseFontSize), textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 70.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++
++            let (valueLayout, valueApply) = makeValueLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.valueText(item.value), font: Font.regular(15.0), textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: 100.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++
++            let contentSize = CGSize(width: params.width, height: 88.0)
++            let insets = itemListNeighborsGroupedInsets(neighbors, params)
++            let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
++            let layoutSize = layout.size
++
++            return (layout, { [weak self] in
++                guard let strongSelf = self else {
++                    return
++                }
++                strongSelf.item = item
++                strongSelf.layoutParams = params
++
++                strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++                strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
++                strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemBlocksSeparatorColor
++
++                if strongSelf.backgroundNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.backgroundNode, at: 0)
++                }
++                if strongSelf.topStripeNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.topStripeNode, at: 1)
++                }
++                if strongSelf.bottomStripeNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.bottomStripeNode, at: 2)
++                }
++                if strongSelf.maskNode.supernode == nil {
++                    strongSelf.insertSubnode(strongSelf.maskNode, at: 3)
++                }
++                let hasCorners = itemListHasRoundedBlockLayout(params)
++                var hasTopCorners = false
++                var hasBottomCorners = false
++                switch neighbors.top {
++                case .sameSection(false):
++                    strongSelf.topStripeNode.isHidden = true
++                default:
++                    hasTopCorners = true
++                    strongSelf.topStripeNode.isHidden = hasCorners
++                }
++                let bottomStripeInset: CGFloat
++                switch neighbors.bottom {
++                case .sameSection(false):
++                    bottomStripeInset = leftInset
++                    strongSelf.bottomStripeNode.isHidden = false
++                default:
++                    bottomStripeInset = 0.0
++                    hasBottomCorners = true
++                    strongSelf.bottomStripeNode.isHidden = hasCorners
++                }
++
++                strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: false) : nil
++                strongSelf.backgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight)))
++                strongSelf.maskNode.frame = strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0)
++                strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
++                strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - bottomStripeInset - params.rightInset - separatorRightInset, height: separatorHeight))
++
++                let _ = titleApply()
++                strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 12.0), size: titleLayout.size)
++                let _ = valueApply()
++                strongSelf.valueNode.frame = CGRect(origin: CGPoint(x: params.width - params.rightInset - 15.0 - valueLayout.size.width, y: 12.0), size: valueLayout.size)
++
++                if let sliderView = strongSelf.sliderView {
++                    if themeUpdated {
++                        sliderView.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++                        sliderView.backColor = item.presentationData.theme.list.itemSwitchColors.frameColor
++                        sliderView.startColor = item.presentationData.theme.list.itemSwitchColors.frameColor
++                        sliderView.trackColor = item.presentationData.theme.list.itemAccentColor
++                        sliderView.knobImage = PresentationResourcesItemList.knobImage(item.presentationData.theme)
++                    }
++                    sliderView.maximumValue = CGFloat(strongSelf.positions(item) - 1)
++                    sliderView.positionsCount = strongSelf.positions(item)
++                    sliderView.frame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: 37.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 15.0 * 2.0, height: 44.0))
++                    sliderView.hitTestEdgeInsets = UIEdgeInsets(top: -sliderView.frame.minX, left: 0.0, bottom: 0.0, right: -sliderView.frame.minX)
++                    let position = strongSelf.sliderPosition(item)
++                    if abs(sliderView.value - position) > 0.001 {
++                        sliderView.value = position
++                    }
++                }
++            })
++        }
++    }
++}
