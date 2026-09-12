@@ -1,0 +1,148 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f828ff77..9130baf3 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -193,17 +193,19 @@ private final class LunagramSettingsControllerArguments {
+     let setDim: (LunagramSettingsSection, Int) -> Void
+     let updateText: (LunagramSettingsSection, String) -> Void
+     let photoAction: (Int) -> Void
++    let openCategory: (LunagramSettingsCategory) -> Void
+     let openGroup: (LunagramSettingsGroup) -> Void
+     let ghostMaster: (Bool) -> Void
+     let ghostExpand: () -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+         self.updateText = updateText
+         self.photoAction = photoAction
++        self.openCategory = openCategory
+         self.openGroup = openGroup
+         self.ghostMaster = ghostMaster
+         self.ghostExpand = ghostExpand
+@@ -235,6 +237,32 @@ private enum LunagramSettingsSection: Int32 {
+     case particlesSpeed
+ }
+ 
++/// Две категории главного экрана — как на ПК: Функции и Оформление. Внутри
++/// каждой — свои разделы. Так на первом экране всего две строки, а не
++/// длинный список.
++private enum LunagramSettingsCategory: Int32, CaseIterable {
++    case functions
++    case appearance
++
++    var title: String {
++        switch self {
++        case .functions:
++            return "Функции"
++        case .appearance:
++            return "Оформление"
++        }
++    }
++
++    var groups: [LunagramSettingsGroup] {
++        switch self {
++        case .functions:
++            return [.ghost, .spy, .messages, .profile, .privacy, .font]
++        case .appearance:
++            return [.banner, .avatarFrame, .liveWallpaper, .dialogCards, .particles]
++        }
++    }
++}
++
+ /// Разделы главного экрана — каждый открывается своим экраном.
+ private enum LunagramSettingsGroup: Int32, CaseIterable {
+     case ghost
+@@ -306,6 +334,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+ }
+ 
+ private enum LunagramSettingsEntry: ItemListNodeEntry {
++    case categoryItem(LunagramSettingsCategory)
+     case menuItem(LunagramSettingsGroup)
+     case header(LunagramSettingsSection, Int32, String)
+     case toggle(LunagramSettingsSection, LunagramToggle, Bool)
+@@ -320,7 +349,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case .menuItem:
++        case .categoryItem, .menuItem:
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue
+@@ -332,6 +361,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     // Порядок строк: по сотне на раздел, внутри — по порядку появления.
+     var stableId: Int32 {
+         switch self {
++        case let .categoryItem(category):
++            return category.rawValue
+         case let .menuItem(group):
+             return group.rawValue
+         case let .header(section, index, _):
+@@ -359,6 +390,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+ 
+     static func ==(lhs: LunagramSettingsEntry, rhs: LunagramSettingsEntry) -> Bool {
+         switch lhs {
++        case let .categoryItem(lhsCategory):
++            if case let .categoryItem(rhsCategory) = rhs, lhsCategory == rhsCategory {
++                return true
++            } else {
++                return false
++            }
+         case let .menuItem(lhsGroup):
+             if case let .menuItem(rhsGroup) = rhs, lhsGroup == rhsGroup {
+                 return true
+@@ -435,6 +472,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+         let arguments = arguments as! LunagramSettingsControllerArguments
+         switch self {
++        case let .categoryItem(category):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.openCategory(category)
++            })
+         case let .menuItem(group):
+             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.openGroup(group)
+@@ -976,6 +1017,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         lunagramDeleteProfilePhotos(context: context, keepMain: index == 1, present: { c in
+             shared.present?(c)
+         })
++    }, openCategory: { category in
++        shared.push?(lunagramCategoryController(context: context, category: category, shared: shared))
+     }, openGroup: { group in
+         shared.push?(lunagramGroupController(context: context, group: group, shared: shared))
+     }, ghostMaster: { value in
+@@ -1006,6 +1049,21 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     })
+ }
+ 
++/// Экран категории: список её разделов. Как на ПК — Функции и Оформление
++/// открывают каждый свой набор.
++private func lunagramCategoryController(context: AccountContext, category: LunagramSettingsCategory, shared: LunagramSharedState) -> ViewController {
++    let arguments = shared.arguments!
++    let signal = context.sharedContext.presentationData
++    |> deliverOnMainQueue
++    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let entries = category.groups.map { LunagramSettingsEntry.menuItem($0) }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
++
+ /// Экран одной группы: те же строки, что были в общей простыне, но только
+ /// свои. Делит состояние с остальными экранами.
+ private func lunagramGroupController(context: AccountContext, group: LunagramSettingsGroup, shared: LunagramSharedState) -> ViewController {
+@@ -1032,7 +1090,7 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     let signal = context.sharedContext.presentationData
+     |> deliverOnMainQueue
+     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+-        let entries = LunagramSettingsGroup.allCases.map { LunagramSettingsEntry.menuItem($0) }
++        let entries = LunagramSettingsCategory.allCases.map { LunagramSettingsEntry.categoryItem($0) }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Lunagram"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
+         return (controllerState, (listState, arguments))
