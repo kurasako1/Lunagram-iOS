@@ -1,0 +1,162 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1a68ba38..266e7d99 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -59,6 +59,7 @@ public final class LunagramSettings {
+         static let showPeerId = "lunagram.messages.showPeerId"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
++        static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -296,8 +297,30 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Свой цвет имени, выбранный палитрой. Пусто — палитрой не пользовались.
++    /// Свой цвет главнее готового: выбрал палитрой — значит хочешь именно его.
++    public static var profileNameCustomColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileNameCustomColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileNameCustomColor))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileNameCustomColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileNameCustomColor)
++            }
++            changed()
++        }
++    }
++
+     /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
+     public static func profileNameTint() -> CGColor? {
++        if let custom = profileNameCustomColor {
++            return color(from: custom, alpha: 1.0)
++        }
+         let index = profileNameColor
+         guard index > 0, index <= profileNameColors.count else {
+             return nil
+@@ -312,8 +335,13 @@ public final class LunagramSettings {
+         guard glow > 0 else {
+             return nil
+         }
+-        let index = profileNameColor
+-        let rgb = index > 0 && index <= profileNameColors.count ? profileNameColors[index - 1].rgb : 0xFFFFFF
++        let rgb: UInt32
++        if let custom = profileNameCustomColor {
++            rgb = custom
++        } else {
++            let index = profileNameColor
++            rgb = index > 0 && index <= profileNameColors.count ? profileNameColors[index - 1].rgb : 0xFFFFFF
++        }
+         return color(from: rgb, alpha: glow == 1 ? 0.5 : 0.9)
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f202e1f5..29bc1456 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -787,14 +787,17 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя.")
+         ]
+     case .profileNameColor:
++        let customColor = LunagramSettings.profileNameCustomColor
+         var entries: [LunagramSettingsEntry] = [
+-            .preview(.profileNameColor, .name, media.nameColor &* 100 &+ media.nameGlow),
++            .preview(.profileNameColor, .name, media.nameColor &* 1_000_000 &+ media.nameGlow &* 1000 &+ Int(customColor.map { $0 % 997 } ?? 998)),
+             .header(.profileNameColor, 0, "ЦВЕТ ИМЕНИ"),
+-            .dim(.profileNameColor, 0, "Обычный", media.nameColor == 0)
++            .dim(.profileNameColor, 0, "Обычный", media.nameColor == 0 && customColor == nil)
+         ]
+         for (index, item) in LunagramSettings.profileNameColors.enumerated() {
+-            entries.append(.dim(.profileNameColor, Int32(index + 1), item.title, media.nameColor == index + 1))
++            entries.append(.dim(.profileNameColor, Int32(index + 1), item.title, customColor == nil && media.nameColor == index + 1))
+         }
++        // Палитра: любой цвет, а не только готовые.
++        entries.append(.action(.profileNameColor, 30, customColor == nil ? "Выбрать свой цвет" : "Поменять свой цвет"))
+         return entries
+     case .profileNameGlow:
+         var entries: [LunagramSettingsEntry] = [.header(.profileNameGlow, 0, "СВЕЧЕНИЕ ИМЕНИ")]
+@@ -989,6 +992,39 @@ private final class LunagramPickerHolder {
+     var delegate: AnyObject?
+ }
+ 
++/// Палитра выбора цвета имени — системная, как в самом айфоне.
++@available(iOS 14.0, *)
++private final class LunagramColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
++    private let changed: (UIColor) -> Void
++    private let finished: () -> Void
++
++    init(changed: @escaping (UIColor) -> Void, finished: @escaping () -> Void) {
++        self.changed = changed
++        self.finished = finished
++    }
++
++    func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
++        self.changed(color)
++    }
++
++    func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
++        self.finished()
++    }
++}
++
++/// Цвет в одно число, как его хранят настройки.
++private func lunagramPackColor(_ color: UIColor) -> UInt32 {
++    var red: CGFloat = 0.0
++    var green: CGFloat = 0.0
++    var blue: CGFloat = 0.0
++    var alpha: CGFloat = 0.0
++    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
++    let r = UInt32(max(0.0, min(1.0, red)) * 255.0)
++    let g = UInt32(max(0.0, min(1.0, green)) * 255.0)
++    let b = UInt32(max(0.0, min(1.0, blue)) * 255.0)
++    return (r << 16) | (g << 8) | b
++}
++
+ /// Выбор файла шрифта в «Файлах».
+ private final class LunagramFontPickerDelegate: NSObject, UIDocumentPickerDelegate {
+     private let completion: (Bool) -> Void
+@@ -1102,6 +1138,27 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.push?(lunagramStatusController(context: context))
+             return
+         }
++        if section == .profileNameColor {
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            // Системная палитра: любой цвет, и имя перекрашивается на ходу.
++            let picker = UIColorPickerViewController()
++            picker.supportsAlpha = false
++            if let current = LunagramSettings.profileNameTint() {
++                picker.selectedColor = UIColor(cgColor: current)
++            }
++            let delegate = LunagramColorPickerDelegate(changed: { color in
++                LunagramSettings.profileNameCustomColor = lunagramPackColor(color)
++                refreshMedia()
++            }, finished: {
++                shared.pickerHolder.delegate = nil
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++            return
++        }
+         if section == .font {
+             guard #available(iOS 14.0, *) else {
+                 return
+@@ -1188,6 +1245,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case .font:
+             LunagramSettings.fontStyle = dim == lunagramOwnFontRow ? LunagramSettings.ownFontStyle : dim
+         case .profileNameColor:
++            // Выбрал готовый — свой из палитры больше не нужен, иначе он бы
++            // перебивал выбор.
++            LunagramSettings.profileNameCustomColor = nil
+             LunagramSettings.profileNameColor = dim
+         case .profileNameGlow:
+             LunagramSettings.profileNameGlow = dim
