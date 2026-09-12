@@ -1,0 +1,51 @@
+diff --git a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+index ba095983..716a26b8 100644
+--- a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
++++ b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+@@ -9,17 +9,27 @@ import LunagramGhost
+ // Свои удаления с этого телефона сюда не доходят: Telegram стирает их у себя
+ // сразу, и к приходу команды от сервера стирать уже нечего.
+ 
+-/// Отсекает входящие от заглушённых людей — их не сохраняем вовсе. Свои
+-/// (исходящие) и всё от остальных проходит как обычно.
++/// Входящие от заглушённых людей помечаем удалёнными — как на ПК: сообщение
++/// не пропадает, а показывается с метлой 🧹. Свои (исходящие) и всё от
++/// остальных проходит как обычно.
++///
++/// На ПК заглушённое ещё и стирается у собеседника на сервере — на iOS чужие
++/// сообщения на сервере не удалить, поэтому «у него исчезает» не повторить,
++/// только «у тебя с пометкой».
+ func lunagramFilterMutedMessages(_ messages: [StoreMessage]) -> [StoreMessage] {
+     guard !LunagramSpySettings.mutedIsEmpty else {
+         return messages
+     }
+-    return messages.filter { message in
+-        guard message.flags.contains(.Incoming) else {
+-            return true
++    return messages.map { message in
++        guard message.flags.contains(.Incoming), LunagramSpySettings.isMuted(message.id.peerId.toInt64()) else {
++            return message
++        }
++        if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
++            return message
+         }
+-        return !LunagramSpySettings.isMuted(message.id.peerId.toInt64())
++        var attributes = message.attributes
++        attributes.append(LunagramDeletedMessageAttribute(date: message.timestamp))
++        return StoreMessage(id: message.id, customStableId: message.customStableId, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, threadId: message.threadId, timestamp: message.timestamp, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, forwardInfo: message.forwardInfo, authorId: message.authorId, text: message.text, attributes: attributes, media: message.media)
+     }
+ }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 229e462c..a1fe4ed4 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -669,7 +669,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .header(.spy, 0, "УДАЛЁННЫЕ И ИЗМЕНЁННЫЕ"),
+             tgl(.spy, .keepDeleted),
+             tgl(.spy, .keepEditHistory),
+-            .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Новые входящие от него перестанут приходить, уже полученные останутся. Снять — там же.")
++            .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с метлой 🧹, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
+         ]
+     case .messages:
+         return [
