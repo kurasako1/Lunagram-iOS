@@ -1,0 +1,180 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index a1fe4ed4..d29cc80d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -155,6 +155,39 @@ private enum LunagramToggle: Int32 {
+         }
+     }
+ 
++    /// Свой значок у каждой строки — чтобы список читался глазами, а не
++    /// вчитыванием. Берём готовые значки настроек Telegram.
++    var icon: UIImage? {
++        switch self {
++        case .ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories:
++            return PresentationResourcesSettings.security
++        case .keepDeleted:
++            return PresentationResourcesSettings.savedMessages
++        case .keepEditHistory:
++            return PresentationResourcesSettings.faq
++        case .showRoundSource:
++            return PresentationResourcesSettings.recentCalls
++        case .roundFromVideo:
++            return PresentationResourcesSettings.channels
++        case .showPeerId:
++            return PresentationResourcesSettings.email
++        case .hideOwnPhone:
++            return PresentationResourcesSettings.devices
++        case .liveWallpaper, .profileBanner:
++            return PresentationResourcesSettings.appearance
++        case .particles:
++            return PresentationResourcesSettings.premium
++        case .dialogCards:
++            return PresentationResourcesSettings.chatFolders
++        case .dialogCardsFadeMuted:
++            return PresentationResourcesSettings.powerSaving
++        case .avatarFrame:
++            return PresentationResourcesSettings.myProfile
++        case .avatarFrameSparkle:
++            return PresentationResourcesSettings.stars
++        }
++    }
++
+     /// Короткое описание — прячется под стрелкой у названия, как на ПК.
+     /// Если пусто, стрелки нет.
+     var descriptionText: String? {
+@@ -292,6 +325,15 @@ private enum LunagramSettingsCategory: Int32, CaseIterable {
+         }
+     }
+ 
++    var icon: UIImage? {
++        switch self {
++        case .functions:
++            return PresentationResourcesSettings.security
++        case .appearance:
++            return PresentationResourcesSettings.appearance
++        }
++    }
++
+     var groups: [LunagramSettingsGroup] {
+         switch self {
+         case .functions:
+@@ -346,6 +388,33 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         }
+     }
+ 
++    var icon: UIImage? {
++        switch self {
++        case .ghost:
++            return PresentationResourcesSettings.security
++        case .spy:
++            return PresentationResourcesSettings.savedMessages
++        case .messages:
++            return PresentationResourcesSettings.recentCalls
++        case .profile:
++            return PresentationResourcesSettings.myProfile
++        case .privacy:
++            return PresentationResourcesSettings.devices
++        case .banner:
++            return PresentationResourcesSettings.appearance
++        case .avatarFrame:
++            return PresentationResourcesSettings.myProfile
++        case .liveWallpaper:
++            return PresentationResourcesSettings.appearance
++        case .dialogCards:
++            return PresentationResourcesSettings.chatFolders
++        case .particles:
++            return PresentationResourcesSettings.premium
++        case .font:
++            return PresentationResourcesSettings.language
++        }
++    }
++
+     /// Из каких разделов-строк состоит экран группы.
+     var sections: [LunagramSettingsSection] {
+         switch self {
+@@ -535,23 +604,23 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+         let arguments = arguments as! LunagramSettingsControllerArguments
+         switch self {
+         case let .categoryItem(category):
+-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: category.icon, title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.openCategory(category)
+             })
+         case let .menuItem(group):
+-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: group.icon, title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.openGroup(group)
+             })
+         case let .header(_, _, text):
+             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+         case let .toggle(_, toggle, value):
+-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: toggle.icon, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             })
+         case let .toggleDesc(_, toggle, value, expanded):
+             // Переключатель справа работает сам; стрелка у названия раскрывает
+             // описание. Под-переключателей нет — вместо них текст.
+-            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: toggle.title, value: value, isExpanded: expanded, subItems: [], expandedText: toggle.descriptionText, sectionId: self.section, style: .blocks, updated: { value in
++            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: toggle.icon, title: toggle.title, value: value, isExpanded: expanded, subItems: [], expandedText: toggle.descriptionText, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             }, selectAction: {
+                 arguments.toggleExpand(toggle)
+@@ -717,17 +786,12 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         entries.append(.info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Начнёт действовать после перезапуска Lunagram."))
+         return entries
+     case .banner:
+-        var entries: [LunagramSettingsEntry] = [
++        // Нарисованные баннеры убраны по просьбе хозяина — только своё фото
++        // или видео.
++        return [
+             .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+             tgl(.banner, .profileBanner)
+         ]
+-        // Нарисованные — с нуля до девяти, своё фото — десятое.
+-        for preset in LunagramBannerPreset.allCases {
+-            entries.append(.dim(.banner, Int32(preset.rawValue - 1), preset.title, preset.rawValue == media.bannerPreset))
+-        }
+-        entries.append(.dim(.banner, 10, "Своё фото или видео", media.bannerPreset == 0))
+-        entries.append(.info(.banner, 0, "Картинка в шапке твоего профиля — видишь её только ты. Нарисованные — те же десять, что на ПК."))
+-        return entries
+     case .bannerPhoto:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
+@@ -1233,6 +1297,11 @@ private func lunagramSectionsScreen(context: AccountContext, title: String, sect
+ 
+ /// Экраны декора для блока «Оформление Lunagram» в «Изменить профиль».
+ func lunagramBannerScreen(context: AccountContext) -> ViewController {
++    // Нарисованных баннеров больше нет — если раньше был выбран один из них,
++    // переводим на своё фото, иначе баннер остался бы нарисованным.
++    if LunagramSettings.profileBannerPreset != 0 {
++        LunagramSettings.profileBannerPreset = 0
++    }
+     return lunagramSectionsScreen(context: context, title: "Баннер профиля", sections: [.banner, .bannerPhoto])
+ }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 1b5b92e0..d717cc60 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -351,9 +351,10 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     }
+     
+     enum Section: Int, CaseIterable {
+-        // Lunagram: блок оформления — сразу под фото, как на ПК.
+-        case lunagramDecor
++        // Lunagram: блок оформления — после родной подсказки про имя и фото,
++        // чтобы не слипался с полем имени.
+         case help
++        case lunagramDecor
+         case bio
+         case birthday
+         case info
+@@ -412,7 +413,6 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+                 context.sharedContext.mainWindow?.present(c, on: .root)
+             })
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 205, text: "Рисует сам клиент, на сервер ничего не уходит. Видно только тебе."))
+     }
+ 
+     if let cachedData = data.cachedData as? CachedUserData {
