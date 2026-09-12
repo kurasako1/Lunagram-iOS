@@ -1,0 +1,116 @@
+diff --git a/submodules/ChatListUI/Sources/ChatContextMenus.swift b/submodules/ChatListUI/Sources/ChatContextMenus.swift
+index 018a9f21..5b801a0b 100644
+--- a/submodules/ChatListUI/Sources/ChatContextMenus.swift
++++ b/submodules/ChatListUI/Sources/ChatContextMenus.swift
+@@ -139,6 +139,21 @@ func chatContextMenuItems(context: AccountContext, peerId: EnginePeer.Id, promoI
+ 
+                     var items: [ContextMenuItem] = []
+ 
++                    // Lunagram: быстрая реакция теперь у переписки, а не у
++                    // сообщения — зажал чат в списке и выбрал. Только для личных.
++                    if case .chatList = source, peerId.namespace == Namespaces.Peer.CloudUser, peerId != context.account.peerId {
++                        items.append(.action(ContextMenuActionItem(text: "Быстрая реакция", icon: { theme in
++                            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Reactions"), color: theme.contextMenu.primaryColor)
++                        }, action: { [weak chatListController] c, _ in
++                            c?.dismiss(completion: {
++                                lunagramPresentChatReactionSheet(context: context, peerId: peerId, present: { controller in
++                                    chatListController?.present(controller, in: .window(.root))
++                                })
++                            })
++                        })))
++                        items.append(.separator)
++                    }
++
+                     if case let .search(search) = source {
+                         switch search {
+                         case .recentPeers:
+diff --git a/submodules/ChatListUI/Sources/LunagramChatReaction.swift b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+new file mode 100644
+index 00000000..b3791483
+--- /dev/null
++++ b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+@@ -0,0 +1,58 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import AccountContext
++import Lunagram
++
++/// Окно выбора быстрой реакции для переписки — вызывается из меню чата в
++/// списке (зажать переписку). Раньше жило в меню сообщения; перенесено сюда,
++/// потому что быстрая реакция относится к переписке целиком, а не к одному
++/// сообщению.
++///
++/// Это обычный ActionSheet, поэтому легко живёт в модуле списка, без
++/// зависимости от переписки.
++func lunagramPresentChatReactionSheet(context: AccountContext, peerId: EnginePeer.Id, present: @escaping (ViewController) -> Void) {
++    let _ = (context.engine.stickers.availableReactions()
++    |> take(1)
++    |> deliverOnMainQueue).startStandalone(next: { availableReactions in
++        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        let current = LunagramSettings.personalReaction(peerId: peerId.toInt64())
++        var choices: [(emoji: String, title: String)] = []
++        for reaction in availableReactions?.reactions ?? [] {
++            guard reaction.isEnabled, !reaction.isPremium, case let .builtin(emoji) = reaction.value else {
++                continue
++            }
++            choices.append((emoji, reaction.title))
++            if choices.count == 12 {
++                break
++            }
++        }
++
++        let actionSheet = ActionSheetController(presentationData: presentationData)
++        var items: [ActionSheetItem] = []
++        items.append(ActionSheetTextItem(title: "Двойное касание по сообщению в этой переписке будет ставить выбранную реакцию. В остальных останется общая."))
++        items.append(ActionSheetButtonItem(title: current == nil ? "Как обычно ✓" : "Как обычно", color: .accent, action: { [weak actionSheet] in
++            actionSheet?.dismissAnimated()
++            LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: nil)
++        }))
++        for choice in choices {
++            let title = "\(choice.emoji)  \(choice.title)" + (choice.emoji == current ? "  ✓" : "")
++            items.append(ActionSheetButtonItem(title: title, color: .accent, action: { [weak actionSheet] in
++                actionSheet?.dismissAnimated()
++                LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: choice.emoji)
++            }))
++        }
++        actionSheet.setItemGroups([
++            ActionSheetItemGroup(items: items),
++            ActionSheetItemGroup(items: [
++                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
++                    actionSheet?.dismissAnimated()
++                })
++            ])
++        ])
++        present(actionSheet)
++    })
++}
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index 62ec4d55..67d50022 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1320,19 +1320,8 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             })))
+         }
+ 
+-        // Lunagram: своя быстрая реакция для этой переписки.
+-        if message.id.namespace == Namespaces.Message.Cloud {
+-            let reactionPeerId = message.id.peerId
+-            actions.append(.action(ContextMenuActionItem(text: "Быстрая реакция здесь", icon: { theme in
+-                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Reactions"), color: theme.actionSheet.primaryTextColor)
+-            }, action: { c, _ in
+-                c?.dismiss(completion: {
+-                    lunagramPresentPersonalReactionSheet(context: context, peerId: reactionPeerId, present: { controller in
+-                        controllerInteraction.presentController(controller, nil)
+-                    })
+-                })
+-            })))
+-        }
++        // Lunagram: быстрая реакция переехала в меню чата в списке (зажать
++        // переписку) — она относится к переписке целиком, а не к сообщению.
+ 
+         var messageText: String = ""
+         for message in messages {
