@@ -1,0 +1,126 @@
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBanner.swift b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+index c515c763..153385db 100644
+--- a/submodules/Lunagram/Sources/LunagramProfileBanner.swift
++++ b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+@@ -51,6 +51,9 @@ public final class LunagramProfileBannerView: UIView {
+     private let contentView = UIView()
+     private let imageView = UIImageView()
+     private var playerView: LunagramBannerPlayerView?
++    // Размытие поверх картинки/видео. Прозрачность = сила размытия: дёшево и
++    // работает и для фото, и для ролика.
++    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+     private let dimView = UIView()
+     private var restHeight: CGFloat
+     private var shownURL: URL?
+@@ -74,6 +77,10 @@ public final class LunagramProfileBannerView: UIView {
+         self.imageView.clipsToBounds = true
+         self.contentView.addSubview(self.imageView)
+ 
++        self.blurView.isUserInteractionEnabled = false
++        self.blurView.alpha = 0.0
++        self.contentView.addSubview(self.blurView)
++
+         self.dimView.backgroundColor = .black
+         self.contentView.addSubview(self.dimView)
+ 
+@@ -120,6 +127,7 @@ public final class LunagramProfileBannerView: UIView {
+         self.contentView.frame = frame
+         let bounds = CGRect(origin: CGPoint(), size: frame.size)
+         self.dimView.frame = bounds
++        self.blurView.frame = bounds
+         // Нарисованный баннер закрывает всё сам — кадр не двигаем. Своё фото
+         // или видео кладём с подгонкой: сдвиг и приближение из настроек.
+         if self.shownPreset != nil || self.mediaSize.width < 1.0 {
+@@ -156,9 +164,12 @@ public final class LunagramProfileBannerView: UIView {
+         let preset = LunagramBannerPreset(rawValue: LunagramSettings.profileBannerPreset)
+         if let preset = preset {
+             self.dimView.alpha = preset.dim
++            self.blurView.alpha = 0.0
+         } else {
+             let dim = max(0, min(LunagramProfileBannerView.dimAlphas.count - 1, LunagramSettings.profileBannerDim))
+             self.dimView.alpha = LunagramProfileBannerView.dimAlphas[dim]
++            // Размытие своё картинки/видео — нарисованным пресетам не нужно.
++            self.blurView.alpha = CGFloat(LunagramSettings.profileBannerBlur) / 100.0
+         }
+ 
+         if let preset = preset {
+@@ -192,7 +203,8 @@ public final class LunagramProfileBannerView: UIView {
+                     // ровно свой прямоугольник — пропорции в нём уже верные.
+                     playerView.playerLayer.videoGravity = .resize
+                     playerView.frame = self.imageView.frame
+-                    self.contentView.insertSubview(playerView, belowSubview: self.dimView)
++                    // Под размытием, чтобы размывались и видео, и фото.
++                    self.contentView.insertSubview(playerView, belowSubview: self.blurView)
+                     self.playerView = playerView
+                 }
+             } else {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 99271c77..282f9a58 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -26,6 +26,7 @@ public final class LunagramSettings {
+         static let liveWallpaperFile = "lunagram.liveWallpaper.file"
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
++        static let profileBannerBlur = "lunagram.banner.blur"
+         static let profileBannerFile = "lunagram.banner.file"
+         static let profileBannerPreset = "lunagram.banner.preset"
+         static let profileBannerOffsetX = "lunagram.banner.offsetX"
+@@ -409,6 +410,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Размытие баннера, 0…100 %. 0 — резко.
++    public static var profileBannerBlur: Int {
++        get { return clamped(Key.profileBannerBlur, 0, 100, 0) }
++        set { setClamped(newValue, Key.profileBannerBlur, 0, 100) }
++    }
++
+     /// Где лежит выбранный баннер. Пусто, если не выбран или файл пропал.
+     public static var profileBannerURL: URL? {
+         return storedURL(forKey: Key.profileBannerFile)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 9acc4c78..1cc08dd7 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -632,9 +632,10 @@ private struct LunagramMediaState: Equatable {
+     var cardsRadius: Int
+     var cardsStroke: Int
+     var cardsMuteOpacity: Int
++    var bannerBlur: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur)
+     }
+ }
+ 
+@@ -734,12 +735,13 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         ]
+         if media.hasBanner {
+             entries.append(.editor(.bannerPhoto, "Подогнать кадр"))
+-        }
+-        for (index, title) in lunagramBannerDimTitles.enumerated() {
+-            entries.append(.dim(.bannerPhoto, Int32(index), title, index == media.bannerDim))
++            // Затемнение и размытие — ползунками, как на ПК.
++            let bannerDim = max(0, min(lunagramBannerDimTitles.count - 1, media.bannerDim))
++            entries.append(.slider(.bannerPhoto, 10, "Затемнение", bannerDim, 0, lunagramBannerDimTitles.count - 1, 1, lunagramBannerDimTitles[bannerDim]))
++            entries.append(.slider(.bannerPhoto, 11, "Размытие", media.bannerBlur, 0, 100, 10, "\(media.bannerBlur)%"))
+         }
+         entries.append(.info(.bannerPhoto, 0, media.hasBanner
+-            ? "«Подогнать кадр» — двигай пальцем и приближай щипком, как на ПК. Затемнение нужно, чтобы на светлом фото читались имя и статус."
++            ? "«Подогнать кадр» — двигай пальцем и приближай щипком, как на ПК. Затемнение — чтобы на светлом фото читались имя и статус. Размытие смягчает пёстрый фон."
+             : "Выбери фото или ролик из галереи — он встанет в шапку твоего профиля."))
+         return entries
+     case .avatarFrame:
+@@ -1102,6 +1104,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.dialogCardsStroke = value
+         case 4:
+             LunagramSettings.dialogCardsMuteOpacity = value
++        case 10:
++            LunagramSettings.profileBannerDim = value
++        case 11:
++            LunagramSettings.profileBannerBlur = value
+         default:
+             break
+         }
