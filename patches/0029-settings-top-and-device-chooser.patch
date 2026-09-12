@@ -1,0 +1,130 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b9de10ec..2557b030 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -544,11 +544,42 @@ public final class LunagramSettings {
+         return hideOwnPhone ? "+•• ••• ••• ••" : formatted
+     }
+ 
++    /// Готовые маски устройства — тот же список, что на ПК. Пустая строка —
++    /// настоящее устройство, ничего не подменяет.
++    public static let deviceMaskPresets: [(title: String, device: String)] = [
++        ("Настоящее устройство", ""),
++        ("iPhone 15 Pro", "iPhone 15 Pro"),
++        ("iPhone 14", "iPhone 14"),
++        ("iPad Pro", "iPad Pro"),
++        ("Samsung Galaxy S24", "Samsung Galaxy S24"),
++        ("Google Pixel 8", "Google Pixel 8"),
++        ("Xiaomi 14", "Xiaomi 14"),
++        ("MacBook Pro", "MacBook Pro")
++    ]
++
++    /// Какая маска выбрана: 0 — настоящее, дальше по списку. Считается по
++    /// сохранённому имени, чтобы старое имя из прошлой версии тоже подхватилось.
++    public static var deviceMaskIndex: Int {
++        let current = deviceModelName ?? ""
++        for (index, preset) in deviceMaskPresets.enumerated() where preset.device == current {
++            return index
++        }
++        return 0
++    }
++
++    /// Ставит маску по номеру из списка.
++    public static func setDeviceMask(_ index: Int) {
++        guard index >= 0, index < deviceMaskPresets.count else {
++            return
++        }
++        deviceModelName = deviceMaskPresets[index].device
++    }
++
+     /// Имя устройства для списка активных сеансов. Пусто — настоящее.
+     ///
+     /// Telegram сообщает его серверу при подключении, поэтому новое имя
+     /// начинает действовать после перезапуска. Рассылку о смене не делаем:
+-    /// поле ввода сохраняет каждую букву, а на лету это имя никому не нужно.
++    /// на лету это имя никому не нужно.
+     public static var deviceModelName: String? {
+         get {
+             guard let value = defaults.string(forKey: Key.deviceModelName), !value.isEmpty else {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 7af2d468..f828ff77 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -512,9 +512,10 @@ private struct LunagramMediaState: Equatable {
+     var frameBright: Int
+     var frameGlow: Int
+     var bannerPreset: Int
++    var deviceMask: Int
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex)
+     }
+ }
+ 
+@@ -576,12 +577,19 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         entries.append(.info(.profileNameGlow, 0, "Имя в шапке твоего профиля — цвет и свечение, как на ПК. Светится тем же цветом, каким написано имя.\n\nМеняется только твой профиль: чужие остаются телеграмовскими, и видишь это только ты."))
+         return entries
+     case .privacy:
+-        return [
++        var entries: [LunagramSettingsEntry] = [
+             .header(.privacy, 0, "ПРИВАТНОСТЬ"),
+             .toggle(.privacy, .hideOwnPhone, value(.hideOwnPhone)),
+-            .input(.privacy, "Устройство", "как есть", LunagramSettings.deviceModelName ?? ""),
+-            .info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Пусто — настоящее имя. Начнёт действовать после перезапуска Lunagram.")
++            // Индекс 55 — чтобы заголовок встал после переключателя (там +10…)
++            // и перед списком масок (там +60…): строки сортируются по номеру.
++            .header(.privacy, 55, "УСТРОЙСТВО В СЕАНСАХ")
+         ]
++        // Готовый список масок, как на ПК: тык — и выбрал.
++        for (index, preset) in LunagramSettings.deviceMaskPresets.enumerated() {
++            entries.append(.dim(.privacy, Int32(index), preset.title, index == media.deviceMask))
++        }
++        entries.append(.info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Начнёт действовать после перезапуска Lunagram."))
++        return entries
+     case .banner:
+         var entries: [LunagramSettingsEntry] = [
+             .header(.banner, 0, "БАННЕР ПРОФИЛЯ"),
+@@ -946,12 +954,13 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileNameColor = dim
+         case .profileNameGlow:
+             LunagramSettings.profileNameGlow = dim
++        case .privacy:
++            LunagramSettings.setDeviceMask(dim)
+         default:
+             LunagramSettings.liveWallpaperDim = dim
+         }
+         refreshMedia()
+-    }, updateText: { _, text in
+-        LunagramSettings.deviceModelName = text
++    }, updateText: { _, _ in
+     }, photoAction: { index in
+         if index == 51 {
+             LunagramSettings.clearCustomFont()
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index ba241d5d..b89055a5 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -17,6 +17,9 @@ enum SettingsSection: Int, CaseIterable {
+     case edit
+     case phone
+     case accounts
++    // Lunagram: свой раздел — самой первой строкой, выше «Мой аккаунт», как на
++    // ПК. Порядок разделов задаётся этим перечнем, поэтому и стоит здесь.
++    case lunagram
+     case myProfile
+     case proxy
+     case apps
+@@ -303,9 +306,9 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+         }
+     }
+     
+-    // Lunagram: свой раздел настроек. В отличие от соседних «Паспорта» и
+-    // «Apple Watch», стоит всегда, без условий.
+-    items[.extra]!.append(PeerInfoScreenDisclosureItem(id: 100, text: "Lunagram", icon: PresentationResourcesSettings.appearance, action: {
++    // Lunagram: свой раздел настроек — первой строкой, выше «Мой аккаунт».
++    // Стоит всегда, без условий, в отличие от «Паспорта» и «Apple Watch».
++    items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, text: "Lunagram", icon: PresentationResourcesSettings.appearance, action: {
+         interaction.openSettings(.lunagram)
+     }))
+ 
