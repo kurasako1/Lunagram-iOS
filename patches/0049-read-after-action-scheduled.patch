@@ -1,0 +1,472 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 822da9d2..8927239f 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -62,6 +62,7 @@ public final class LunagramSettings {
+         static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+         static let sendFontStyle = "lunagram.other.sendFontStyle"
+         static let streamerMode = "lunagram.other.streamerMode"
++        static let useScheduledSend = "lunagram.ghost.useScheduledSend"
+         static let showMessageSeconds = "lunagram.other.showMessageSeconds"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+@@ -181,6 +182,51 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Прочитать переписку, когда сам написал в неё.
++    public static var markReadAfterSend: Bool {
++        get {
++            return LunagramGhostSettings.markReadAfterSend
++        }
++        set {
++            LunagramGhostSettings.markReadAfterSend = newValue
++            changed()
++        }
++    }
++
++    /// Прочитать переписку, когда поставил реакцию.
++    public static var markReadAfterReaction: Bool {
++        get {
++            return LunagramGhostSettings.markReadAfterReaction
++        }
++        set {
++            LunagramGhostSettings.markReadAfterReaction = newValue
++            changed()
++        }
++    }
++
++    /// Прочитать переписку, когда проголосовал в опросе.
++    public static var markReadAfterPoll: Bool {
++        get {
++            return LunagramGhostSettings.markReadAfterPoll
++        }
++        set {
++            LunagramGhostSettings.markReadAfterPoll = newValue
++            changed()
++        }
++    }
++
++    /// Отправлять через отложку: сообщение уходит с задержкой, и в сеть ты при
++    /// этом не выходишь — отправляет сервер.
++    public static var useScheduledSend: Bool {
++        get {
++            return defaults.bool(forKey: Key.useScheduledSend)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.useScheduledSend)
++            changed()
++        }
++    }
++
+     // MARK: Сохранение удалённых
+ 
+     /// Удалённое собеседником не стирать, а оставлять с метлой возле
+diff --git a/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+index bc7e7367..4af9e82f 100644
+--- a/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+@@ -18,6 +18,9 @@ public enum LunagramGhostSettings {
+         static let dontType = "lunagram.ghost.dontType"
+         static let stayOffline = "lunagram.ghost.stayOffline"
+         static let dontViewStories = "lunagram.ghost.dontViewStories"
++        static let markReadAfterSend = "lunagram.ghost.markReadAfterSend"
++        static let markReadAfterReaction = "lunagram.ghost.markReadAfterReaction"
++        static let markReadAfterPoll = "lunagram.ghost.markReadAfterPoll"
+     }
+ 
+     /// Не отправлять отметку о прочтении. Собеседник видит одну галочку, пока
+@@ -60,4 +63,61 @@ public enum LunagramGhostSettings {
+             defaults.set(newValue, forKey: Key.dontViewStories)
+         }
+     }
++
++    /// Прочитать переписку, когда сам написал в неё.
++    public static var markReadAfterSend: Bool {
++        get {
++            return defaults.bool(forKey: Key.markReadAfterSend)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.markReadAfterSend)
++        }
++    }
++
++    /// Прочитать переписку, когда поставил реакцию.
++    public static var markReadAfterReaction: Bool {
++        get {
++            return defaults.bool(forKey: Key.markReadAfterReaction)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.markReadAfterReaction)
++        }
++    }
++
++    /// Прочитать переписку, когда проголосовал в опросе.
++    public static var markReadAfterPoll: Bool {
++        get {
++            return defaults.bool(forKey: Key.markReadAfterPoll)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.markReadAfterPoll)
++        }
++    }
++
++    /// Разовый пропуск для одной переписки.
++    ///
++    /// Призрак глушит отправку отметки о прочтении на уровне сети. «Читать при
++    /// действиях» не выключает призрака целиком — оно кладёт сюда номер
++    /// переписки, и ближайшая отметка по ней уходит на сервер. Дальше всё
++    /// снова молчит.
++    ///
++    /// Список живёт только в памяти: пропуск — про «прямо сейчас», после
++    /// перезапуска он не нужен. Замок нужен потому, что кладёт сюда
++    /// переписку главный поток, а забирает сетевая очередь.
++    private static let forceReadLock = NSLock()
++    private static var forceReadPeers = Set<Int64>()
++
++    public static func setForceRead(_ peerId: Int64) {
++        forceReadLock.lock()
++        forceReadPeers.insert(peerId)
++        forceReadLock.unlock()
++    }
++
++    /// Забирает пропуск: второй раз по той же переписке он уже не сработает.
++    public static func consumeForceRead(_ peerId: Int64) -> Bool {
++        forceReadLock.lock()
++        let had = forceReadPeers.remove(peerId) != nil
++        forceReadLock.unlock()
++        return had
++    }
+ }
+diff --git a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+index 7999ecbb..be6d051a 100644
+--- a/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
++++ b/submodules/TelegramCore/Sources/State/SynchronizePeerReadState.swift
+@@ -242,7 +242,10 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
+     // Lunagram Ghost: отметку о прочтении не отправляем. Возвращаем состояние
+     // как есть — для приложения это «отправлено успешно», и повторять оно
+     // не станет. Сюда сходятся личка, группы, каналы и секретные чаты.
+-    if LunagramGhostSettings.dontRead {
++    //
++    // Исключение — разовый пропуск от «Читать при действиях»: по этой
++    // переписке отметка уходит один раз и призрак снова замолкает.
++    if LunagramGhostSettings.dontRead && !LunagramGhostSettings.consumeForceRead(peerId.toInt64()) {
+         return .single(readState)
+     }
+     if peerId.namespace == Namespaces.Peer.SecretChat {
+@@ -393,6 +396,24 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
+     return verifiedState
+ }
+ 
++/// Lunagram, «Читать при действиях».
++///
++/// Призрак глушит отправку отметки о прочтении прямо в сетевой части, и очередь
++/// синхронизации после него пуста: для приложения всё уже отправлено, повторять
++/// ему нечего. Поэтому разбудить отметку обычным способом нельзя — здесь мы
++/// кладём разовый пропуск и сами отправляем то, что у нас уже прочитано.
++///
++/// Лежит в этом файле, а не в своём, потому что отправка читается отсюда:
++/// в Swift private — это «видно только в своём файле».
++public func lunagramMarkPeerReadAfterAction(account: Account, peerId: PeerId) -> Signal<Never, NoError> {
++    LunagramGhostSettings.setForceRead(peerId.toInt64())
++    return pushPeerReadState(network: account.network, postbox: account.postbox, stateManager: account.stateManager, peerId: peerId)
++    |> `catch` { _ -> Signal<Never, NoError> in
++        // Не ушло — останемся непрочитанными, как и были. Ругаться не на что.
++        return .complete()
++    }
++}
++
+ func synchronizePeerReadState(network: Network, postbox: Postbox, stateManager: AccountStateManager, peerId: PeerId, push: Bool, validate: Bool) -> Signal<Never, PeerReadStateValidationError> {
+     var signal: Signal<Never, PeerReadStateValidationError> = .complete()
+     if push {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 36d45533..7763faca 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -42,6 +42,10 @@ private enum LunagramToggle: Int32 {
+     case showMessageSeconds
+     case suggestGhostForStories
+     case streamerMode
++    case markReadAfterSend
++    case markReadAfterReaction
++    case markReadAfterPoll
++    case useScheduledSend
+ 
+     var value: Bool {
+         switch self {
+@@ -89,6 +93,14 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.suggestGhostForStories
+         case .streamerMode:
+             return LunagramSettings.streamerMode
++        case .markReadAfterSend:
++            return LunagramSettings.markReadAfterSend
++        case .markReadAfterReaction:
++            return LunagramSettings.markReadAfterReaction
++        case .markReadAfterPoll:
++            return LunagramSettings.markReadAfterPoll
++        case .useScheduledSend:
++            return LunagramSettings.useScheduledSend
+         }
+     }
+ 
+@@ -138,6 +150,14 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.suggestGhostForStories = value
+         case .streamerMode:
+             LunagramSettings.streamerMode = value
++        case .markReadAfterSend:
++            LunagramSettings.markReadAfterSend = value
++        case .markReadAfterReaction:
++            LunagramSettings.markReadAfterReaction = value
++        case .markReadAfterPoll:
++            LunagramSettings.markReadAfterPoll = value
++        case .useScheduledSend:
++            LunagramSettings.useScheduledSend = value
+         }
+     }
+ 
+@@ -187,6 +207,14 @@ private enum LunagramToggle: Int32 {
+             return "Предлагать призрака для сторис"
+         case .streamerMode:
+             return "Режим стримера"
++        case .markReadAfterSend:
++            return "При отправке"
++        case .markReadAfterReaction:
++            return "При реакции"
++        case .markReadAfterPoll:
++            return "При голосе"
++        case .useScheduledSend:
++            return "Использовать отложку"
+         }
+     }
+ 
+@@ -230,6 +258,11 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.stories
+         case .streamerMode:
+             return PresentationResourcesSettings.security
++        case .markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll:
++            // Показываются под стрелкой, своего значка у них нет.
++            return nil
++        case .useScheduledSend:
++            return PresentationResourcesSettings.notifications
+         }
+     }
+ 
+@@ -273,6 +306,8 @@ private enum LunagramToggle: Int32 {
+             return "Перед открытием историй спросим, включить ли призрака, — чтобы не попасть в список зрителей случайно."
+         case .streamerMode:
+             return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
++        case .useScheduledSend:
++            return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
+         default:
+             return nil
+         }
+@@ -283,6 +318,10 @@ private enum LunagramToggle: Int32 {
+ /// разом, а под стрелкой они настраиваются по отдельности.
+ private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories]
+ 
++/// «Читать при действиях» — тот же приём: мастер сверху, три под стрелкой.
++/// Раскрытие этой строки храним под номером первого из них.
++private let lunagramMarkReadToggles: [LunagramToggle] = [.markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll]
++
+ /// Варианты затемнения — по номеру, как их хранят настройки.
+ private let lunagramWallpaperDimTitles = ["Без затемнения", "Слегка затемнить", "Сильно затемнить"]
+ private let lunagramBannerDimTitles = ["Без затемнения", "Слегка затемнить", "Затемнить", "Сильно затемнить"]
+@@ -321,10 +360,11 @@ private final class LunagramSettingsControllerArguments {
+     let openGroup: (LunagramSettingsGroup) -> Void
+     let ghostMaster: (Bool) -> Void
+     let ghostExpand: () -> Void
++    let readMaster: (Bool) -> Void
+     let toggleExpand: (LunagramToggle) -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+@@ -335,6 +375,7 @@ private final class LunagramSettingsControllerArguments {
+         self.openGroup = openGroup
+         self.ghostMaster = ghostMaster
+         self.ghostExpand = ghostExpand
++        self.readMaster = readMaster
+         self.toggleExpand = toggleExpand
+         self.openEditor = openEditor
+     }
+@@ -509,6 +550,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     // Переключатель с описанием под стрелкой: раскрыт или нет.
+     case toggleDesc(LunagramSettingsSection, LunagramToggle, Bool, Bool)
+     case ghostRow(Bool, Bool, [Bool])
++    // «Читать при действиях»: один переключатель и три под стрелкой.
++    case readRow(Bool, Bool, [Bool])
+     case action(LunagramSettingsSection, Int32, String)
+     case dim(LunagramSettingsSection, Int32, String, Bool)
+     // Ползунок силы: раздел, номер, название, значение, мин, макс, шаг, подпись.
+@@ -527,7 +570,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+         switch self {
+         case .categoryItem, .menuItem:
+             return LunagramSettingsSection.menu.rawValue
+-        case .ghostRow:
++        case .ghostRow, .readRow:
+             return LunagramSettingsSection.ghost.rawValue
+         case let .header(section, _, _), let .toggle(section, _, _), let .toggleDesc(section, _, _, _), let .action(section, _, _), let .dim(section, _, _, _), let .slider(section, _, _, _, _, _, _, _), let .preview(section, _, _), let .fontChoice(section, _, _, _), let .input(section, _, _, _), let .disclosure(section, _), let .editor(section, _), let .photoAction(section, _, _), let .info(section, _, _):
+             return section.rawValue
+@@ -545,6 +588,8 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             return section.rawValue * 100 + index
+         case .ghostRow:
+             return LunagramSettingsSection.ghost.rawValue * 100 + 1
++        case .readRow:
++            return LunagramSettingsSection.ghost.rawValue * 100 + 2
+         case let .toggle(section, toggle, _):
+             return section.rawValue * 100 + 10 + toggle.rawValue
+         case let .toggleDesc(section, toggle, _, _):
+@@ -554,7 +599,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+         case let .dim(section, index, _, _):
+             return section.rawValue * 100 + 60 + index
+         case let .slider(section, id, _, _, _, _, _, _):
+-            return section.rawValue * 100 + 70 + id
++            // Номера ползунков сквозные по всем разделам, а место в списке
++            // должно оставаться внутри своей сотни — иначе строка уезжает в
++            // чужой раздел и порядок перестаёт совпадать с порядком показа.
++            // В одном разделе ползунки с одинаковой последней цифрой не
++            // встречаются, так что берём её.
++            return section.rawValue * 100 + 70 + id % 10
+         case let .preview(section, _, _):
+             // Образец всегда самой первой строкой раздела.
+             return section.rawValue * 100 - 1
+@@ -611,6 +661,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .readRow(lhsExpanded, lhsMaster, lhsSubs):
++            if case let .readRow(rhsExpanded, rhsMaster, rhsSubs) = rhs, lhsExpanded == rhsExpanded, lhsMaster == rhsMaster, lhsSubs == rhsSubs {
++                return true
++            } else {
++                return false
++            }
+         case let .action(lhsSection, lhsIndex, lhsText):
+             if case let .action(rhsSection, rhsIndex, rhsText) = rhs, lhsSection == rhsSection, lhsIndex == rhsIndex, lhsText == rhsText {
+                 return true
+@@ -717,6 +773,19 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+                     arguments.toggle(toggle, !toggle.value)
+                 }
+             })
++        case let .readRow(expanded, master, subs):
++            let subItems = zip(lunagramMarkReadToggles, subs).map { toggle, isOn in
++                return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++            }
++            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Читать при действиях", value: master, isExpanded: expanded, subItems: subItems, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.readMaster(value)
++            }, selectAction: {
++                arguments.toggleExpand(.markReadAfterSend)
++            }, subAction: { sub in
++                if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
++                    arguments.toggle(toggle, !toggle.value)
++                }
++            })
+         case let .action(section, _, text):
+             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                 arguments.pick(section)
+@@ -821,12 +890,15 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .ghost:
+         let subs = lunagramGhostToggles.map { value($0) }
+         let master = subs.contains(true)
++        let readSubs = lunagramMarkReadToggles.map { value($0) }
+         return [
+             .header(.ghost, 0, "GHOST"),
+             .ghostRow(ghostExpanded, master, subs),
++            .readRow(expandedToggles.contains(LunagramToggle.markReadAfterSend.rawValue), readSubs.contains(true), readSubs),
+             tgl(.ghost, .suggestGhostForStories),
++            tgl(.ghost, .useScheduledSend),
+             .slider(.ghost, 50, "Отправлять без звука", media.sendWithoutSound, 0, LunagramSettings.sendWithoutSoundTitles.count - 1, 1, LunagramSettings.sendWithoutSoundTitles[max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))]),
+-            .info(.ghost, 0, "Один переключатель — и собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети, а истории можно смотреть, не попадая в список зрителей. Стрелка справа раскрывает всё по отдельности.")
++            .info(.ghost, 0, "Один переключатель — и собеседник не увидит, что ты прочитал(а) сообщение или прослушал(а) голосовое, что печатаешь и что ты в сети, а истории можно смотреть, не попадая в список зрителей. Стрелка справа раскрывает всё по отдельности.\n\n«Читать при действиях» — про обратное: если ты сам написал в переписку, поставил реакцию или проголосовал, прятать прочтение уже незачем. Призрак при этом остаётся включённым: отметка уходит один раз и только по этой переписке.")
+         ]
+     case .spy:
+         return [
+@@ -1422,6 +1494,12 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, ghostExpand: {
+         shared.ghostExpanded.toggle()
+         shared.ghostExpandedPromise.set(shared.ghostExpanded)
++    }, readMaster: { value in
++        for toggle in lunagramMarkReadToggles {
++            toggle.set(value)
++            shared.values[toggle] = value
++        }
++        shared.valuesPromise.set(shared.values)
+     }, toggleExpand: { toggle in
+         if shared.expandedToggles.contains(toggle.rawValue) {
+             shared.expandedToggles.remove(toggle.rawValue)
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index b8dbbde6..5f67c87f 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -1714,6 +1714,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             if Namespaces.Message.allEphemeral.contains(message.id.namespace) {
+                 return
+             }
++            // Lunagram: «Читать при действиях» — поставил реакцию, значит видел.
++            if LunagramSettings.markReadAfterReaction {
++                strongSelf.lunagramMarkReadAfterAction()
++            }
+             if case .default = reaction, strongSelf.chatLocation.peerId == strongSelf.context.account.peerId {
+                 return
+             }
+@@ -3971,6 +3975,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 return
+             }
+             
++            // Lunagram: «Читать при действиях» — проголосовал, значит видел.
++            if LunagramSettings.markReadAfterPoll {
++                strongSelf.lunagramMarkReadAfterAction()
++            }
++
+             if let message = strongSelf.chatDisplayNode.historyNode.messageInCurrentHistoryView(id)?._asMessage(), controllerInteraction.pollActionState.pollMessageIdsInProgress[id] == nil {
+                 controllerInteraction.pollActionState.pollMessageIdsInProgress[id] = opaqueIdentifiers
+                 strongSelf.chatDisplayNode.historyNode.requestMessageUpdate(id)
+@@ -8849,6 +8858,16 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+         }
+     }
+         
++    /// Lunagram, «Читать при действиях»: выпустить одну отметку о прочтении по
++    /// этой переписке, не трогая сам переключатель призрака. Если призрак не
++    /// глушит чтение, делать нечего — отметка и так ушла.
++    func lunagramMarkReadAfterAction() {
++        guard LunagramSettings.ghostDontRead, let peerId = self.chatLocation.peerId else {
++            return
++        }
++        let _ = lunagramMarkPeerReadAfterAction(account: self.context.account, peerId: peerId).startStandalone()
++    }
++
+     func transformEnqueueMessages(_ messages: [EnqueueMessage], silentPosting: Bool, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false) -> [EnqueueMessage] {
+         // Lunagram: «Отправлять без звука» — как на ПК. Никогда / только в
+         // режиме призрака / всегда. Здесь сходятся все исходящие, поэтому
+@@ -8864,6 +8883,29 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+         default:
+             break
+         }
++
++        // Lunagram: «Читать при действиях» — написал в переписку, значит
++        // прочитал. Призрака не выключаем, просто выпускаем одну отметку.
++        if LunagramSettings.markReadAfterSend {
++            self.lunagramMarkReadAfterAction()
++        }
++
++        // Lunagram: «Использовать отложку» — как на ПК. Сообщение уходит не
++        // сразу, а с задержкой, через отложенную отправку: в сеть ты при этом
++        // не выходишь, отправляет сервер. Задержка больше у вложений — их
++        // сначала надо успеть закачать, иначе сервер отправит пустое время.
++        var scheduleTime = scheduleTime
++        if LunagramSettings.useScheduledSend, scheduleTime == nil, repeatPeriod == nil, self.presentationInterfaceState.subject != .scheduledMessages, let peerId = self.chatLocation.peerId, peerId.namespace != Namespaces.Peer.SecretChat {
++            var hasMedia = false
++            for message in messages {
++                if case let .message(_, _, _, mediaReference, _, _, _, _, _, _) = message, mediaReference != nil {
++                    hasMedia = true
++                    break
++                }
++            }
++            scheduleTime = Int32(Date().timeIntervalSince1970) + (hasMedia ? 30 : 12)
++        }
++
+         var defaultThreadId: Int64?
+         var defaultReplyMessageSubject: EngineMessageReplySubject?
+         switch self.chatLocation {
