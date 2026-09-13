@@ -1,0 +1,322 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index d88c7c79..93576319 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -60,6 +60,8 @@ public final class LunagramSettings {
+         static let dialogCardsMuteOpacity = "lunagram.dialogCards.muteOpacity"
+         static let hideOwnPhone = "lunagram.privacy.hideOwnPhone"
+         static let deviceModelName = "lunagram.privacy.deviceModelName"
++        // Этот ключ читает и MtProtoKit (MTApiEnvironment.m) — не переименовывать.
++        static let deviceSystemVersion = "lunagram.privacy.systemVersion"
+         static let statusBaseName = "lunagram.status.baseName"
+         static let statusTemplates = "lunagram.status.templates"
+         static let personalReactions = "lunagram.reactions.personal"
+@@ -211,6 +213,28 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// «Автоматический офлайн»: отметился — и сразу «меня нет».
++    public static var ghostAutoOffline: Bool {
++        get {
++            return LunagramGhostSettings.autoOffline
++        }
++        set {
++            LunagramGhostSettings.autoOffline = newValue
++            changed()
++        }
++    }
++
++    /// Заглушённое показывать с пометкой (да) или прятать совсем (нет).
++    public static var showMutedDeleted: Bool {
++        get {
++            return LunagramSpySettings.showMutedDeleted
++        }
++        set {
++            LunagramSpySettings.showMutedDeleted = newValue
++            changed()
++        }
++    }
++
+     /// Прочитать переписку, когда сам написал в неё.
+     public static var markReadAfterSend: Bool {
+         get {
+@@ -894,15 +918,19 @@ public final class LunagramSettings {
+ 
+     /// Готовые маски устройства — тот же список, что на ПК. Пустая строка —
+     /// настоящее устройство, ничего не подменяет.
+-    public static let deviceMaskPresets: [(title: String, device: String)] = [
+-        ("Настоящее устройство", ""),
+-        ("iPhone 15 Pro", "iPhone 15 Pro"),
+-        ("iPhone 14", "iPhone 14"),
+-        ("iPad Pro", "iPad Pro"),
+-        ("Samsung Galaxy S24", "Samsung Galaxy S24"),
+-        ("Google Pixel 8", "Google Pixel 8"),
+-        ("Xiaomi 14", "Xiaomi 14"),
+-        ("MacBook Pro", "MacBook Pro")
++    /// Третье поле — версия системы в паре с моделью, как на ПК: значок в
++    /// списке сеансов сервер выбирает по системе, а не по имени устройства.
++    /// «SDK 34» — так её пишет Telegram для Android, «macOS 14.5» — для Mac.
++    /// Пусто — настоящая версия айфона: для айфона и айпада она и так своя.
++    public static let deviceMaskPresets: [(title: String, device: String, system: String)] = [
++        ("Настоящее устройство", "", ""),
++        ("iPhone 15 Pro", "iPhone 15 Pro", ""),
++        ("iPhone 14", "iPhone 14", ""),
++        ("iPad Pro", "iPad Pro", ""),
++        ("Samsung Galaxy S24", "Samsung Galaxy S24", "SDK 34"),
++        ("Google Pixel 8", "Google Pixel 8", "SDK 34"),
++        ("Xiaomi 14", "Xiaomi 14", "SDK 34"),
++        ("MacBook Pro", "MacBook Pro", "macOS 14.5")
+     ]
+ 
+     /// Какая маска выбрана: 0 — настоящее, дальше по списку. Считается по
+@@ -921,6 +949,14 @@ public final class LunagramSettings {
+             return
+         }
+         deviceModelName = deviceMaskPresets[index].device
++        // Версию системы читает сетевой слой Telegram прямо из настроек, по
++        // этому ключу, — у него нет доступа к нашему модулю. См. MTApiEnvironment.
++        let system = deviceMaskPresets[index].system
++        if system.isEmpty {
++            defaults.removeObject(forKey: Key.deviceSystemVersion)
++        } else {
++            defaults.set(system, forKey: Key.deviceSystemVersion)
++        }
+     }
+ 
+     /// Имя устройства для списка активных сеансов. Пусто — настоящее.
+diff --git a/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+index 4af9e82f..c6af60aa 100644
+--- a/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramGhostSettings.swift
+@@ -21,6 +21,17 @@ public enum LunagramGhostSettings {
+         static let markReadAfterSend = "lunagram.ghost.markReadAfterSend"
+         static let markReadAfterReaction = "lunagram.ghost.markReadAfterReaction"
+         static let markReadAfterPoll = "lunagram.ghost.markReadAfterPoll"
++        static let autoOffline = "lunagram.ghost.autoOffline"
++    }
++
++    /// «Автоматический офлайн», как на ПК: после «я здесь» сразу «меня нет».
++    public static var autoOffline: Bool {
++        get {
++            return defaults.bool(forKey: Key.autoOffline)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.autoOffline)
++        }
+     }
+ 
+     /// Не отправлять отметку о прочтении. Собеседник видит одну галочку, пока
+diff --git a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+index bcbfa22f..cc32de09 100644
+--- a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+@@ -12,6 +12,22 @@ public enum LunagramSpySettings {
+         static let keepEditHistory = "lunagram.spy.keepEditHistory"
+         static let saveForBots = "lunagram.spy.saveForBots"
+         static let mutedPeers = "lunagram.spy.mutedPeers"
++        static let showMutedDeleted = "lunagram.spy.showMutedDeleted"
++    }
++
++    /// Заглушённое — показывать с пометкой удалённого (так с 1.38) или
++    /// прятать совсем (как было в 1.22). Как «Мут → Показывать удалённые в
++    /// чате» на ПК. По умолчанию показываем.
++    public static var showMutedDeleted: Bool {
++        get {
++            guard defaults.object(forKey: Key.showMutedDeleted) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.showMutedDeleted)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.showMutedDeleted)
++        }
+     }
+ 
+     /// Удалённое собеседником не стирать, а оставлять с пометкой.
+diff --git a/submodules/MtProtoKit/Sources/MTApiEnvironment.m b/submodules/MtProtoKit/Sources/MTApiEnvironment.m
+index 36da8822..6561c6eb 100644
+--- a/submodules/MtProtoKit/Sources/MTApiEnvironment.m
++++ b/submodules/MtProtoKit/Sources/MTApiEnvironment.m
+@@ -380,7 +380,17 @@ static NSData *base64_decode(NSString *str) {
+         NSProcessInfo *pInfo = [NSProcessInfo processInfo];
+         _systemVersion = [[[pInfo operatingSystemVersionString] componentsSeparatedByString:@" "] objectAtIndex:1];
+ #endif
+-        
++        // Lunagram: версия системы в паре с подменённой моделью — как на ПК:
++        // значок в списке сеансов сервер выбирает по системе. Только когда
++        // модель подменена: без маски всё настоящее. Ключ пишет модуль
++        // Lunagram (LunagramSettings.setDeviceMask).
++        if (deviceModelName != nil) {
++            NSString *lunagramSystemVersion = [[NSUserDefaults standardUserDefaults] stringForKey:@"lunagram.privacy.systemVersion"];
++            if (lunagramSystemVersion.length != 0) {
++                _systemVersion = lunagramSystemVersion;
++            }
++        }
++
+ NSString *suffix = @"";
+ #if TARGET_OS_OSX
+         NSString *value = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"SOURCE"];
+diff --git a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+index e54b4975..c08e5fc4 100644
+--- a/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
++++ b/submodules/TelegramCore/Sources/State/LunagramKeepDeletedMessages.swift
+@@ -10,20 +10,26 @@ import LunagramGhost
+ // сразу, и к приходу команды от сервера стирать уже нечего.
+ 
+ /// Входящие от заглушённых людей помечаем удалёнными — как на ПК: сообщение
+-/// не пропадает, а показывается с метлой 🧹. Свои (исходящие) и всё от
+-/// остальных проходит как обычно.
++/// не пропадает, а показывается с корзинкой. Свои (исходящие) и всё от
++/// остальных проходит как обычно. Или, если так выбрано, прячем совсем.
+ ///
+ /// На ПК заглушённое ещё и стирается у собеседника на сервере — на iOS чужие
+ /// сообщения на сервере не удалить, поэтому «у него исчезает» не повторить,
+-/// только «у тебя с пометкой».
++/// только «у тебя с пометкой» или «у тебя нет».
+ func lunagramFilterMutedMessages(_ messages: [StoreMessage]) -> [StoreMessage] {
+     guard !LunagramSpySettings.mutedIsEmpty else {
+         return messages
+     }
+-    return messages.map { message in
++    // Спрашиваем один раз на всю пачку, а не на каждое сообщение.
++    let showMarked = LunagramSpySettings.showMutedDeleted
++    return messages.compactMap { message -> StoreMessage? in
+         guard message.flags.contains(.Incoming), LunagramSpySettings.isMuted(message.id.peerId.toInt64()) else {
+             return message
+         }
++        // «Прятать совсем» — сообщение к нам не попадает вовсе, как в 1.22.
++        if !showMarked {
++            return nil
++        }
+         if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
+             return message
+         }
+diff --git a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+index af5beea3..2ebb795b 100644
+--- a/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedAccountPresence.swift
+@@ -49,7 +49,31 @@ private final class AccountPresenceManagerImpl {
+         // не заводится.
+         let goOnline = isOnline && !LunagramGhostSettings.stayOffline
+         let request: Signal<Api.Bool, MTRpcError>
+-        if goOnline {
++        if isOnline && LunagramGhostSettings.autoOffline {
++            // Lunagram, «Автоматический офлайн», как на ПК: отметился — и тут
++            // же «меня нет». «Был(а) только что» обновляется, а зелёного «в
++            // сети» у тебя не видно. Сервер ставит «в сети» и сам, после
++            // отправки сообщения, поэтому стучимся с «меня нет» раз в 20
++            // секунд, пока приложение открыто. На ПК раз в 3, но там клиент
++            // сначала смотрит, не в сети ли ты; здесь смотреть не на что —
++            // приложение само пишет себе «в сети навсегда». Для сравнения:
++            // обычный Telegram отмечается раз в 30 секунд.
++            let timer = SignalKitTimer(timeout: 20.0, repeat: false, completion: { [weak self] in
++                guard let strongSelf = self else {
++                    return
++                }
++                strongSelf.updatePresence(true)
++            }, queue: self.queue)
++            self.onlineTimer = timer
++            timer.start()
++            let offline = self.network.request(Api.functions.account.updateStatus(offline: .boolTrue))
++            if goOnline {
++                request = self.network.request(Api.functions.account.updateStatus(offline: .boolFalse))
++                |> then(offline)
++            } else {
++                request = offline
++            }
++        } else if goOnline {
+             let timer = SignalKitTimer(timeout: 30.0, repeat: false, completion: { [weak self] in
+                 guard let strongSelf = self else {
+                     return
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d3617fe9..71a5d4f8 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -52,6 +52,8 @@ private enum LunagramToggle: Int32 {
+     case giftTheSame
+     case sendSoldOutGifts
+     case replyToDeleted
++    case ghostAutoOffline
++    case showMutedDeleted
+ 
+     var value: Bool {
+         switch self {
+@@ -119,6 +121,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.sendSoldOutGifts
+         case .replyToDeleted:
+             return LunagramSettings.replyToDeleted
++        case .ghostAutoOffline:
++            return LunagramSettings.ghostAutoOffline
++        case .showMutedDeleted:
++            return LunagramSettings.showMutedDeleted
+         }
+     }
+ 
+@@ -188,6 +194,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.sendSoldOutGifts = value
+         case .replyToDeleted:
+             LunagramSettings.replyToDeleted = value
++        case .ghostAutoOffline:
++            LunagramSettings.ghostAutoOffline = value
++        case .showMutedDeleted:
++            LunagramSettings.showMutedDeleted = value
+         }
+     }
+ 
+@@ -257,6 +267,10 @@ private enum LunagramToggle: Int32 {
+             return "Отправлять распроданные"
+         case .replyToDeleted:
+             return "Ответ на удалённое"
++        case .ghostAutoOffline:
++            return "Автоматический «офлайн»"
++        case .showMutedDeleted:
++            return "Показывать заглушённое"
+         }
+     }
+ 
+@@ -317,6 +331,10 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.stars
+         case .replyToDeleted:
+             return PresentationResourcesSettings.savedMessages
++        case .ghostAutoOffline:
++            return PresentationResourcesSettings.security
++        case .showMutedDeleted:
++            return PresentationResourcesSettings.notifications
+         }
+     }
+ 
+@@ -362,6 +380,8 @@ private enum LunagramToggle: Int32 {
+             return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
+         case .useScheduledSend:
+             return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
++        case .showMutedDeleted:
++            return "Сообщения заглушённых приходят с корзинкой, как удалённые, — не отвлекают, но видны. Выключи — и они не будут появляться у тебя вовсе. Уже пришедшие останутся."
+         case .replyToDeleted:
+             return "Удалённое у сервера уже не существует, и сослаться на него в ответе нельзя. Поэтому, как в AyuGram, в начало твоего сообщения ставится цитата: имя автора ссылкой (он получит уведомление) и начало его текста. В личке имени нет — и так понятно, чья это цитата."
+         case .giftTheSame:
+@@ -382,7 +402,7 @@ private enum LunagramToggle: Int32 {
+ 
+ /// Четыре выключателя Ghost — мастер-переключатель включает и выключает
+ /// разом, а под стрелкой они настраиваются по отдельности.
+-private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories]
++private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories, .ghostAutoOffline]
+ 
+ /// «Читать при действиях» — тот же приём: мастер сверху, три под стрелкой.
+ /// Раскрытие этой строки храним под номером первого из них.
+@@ -985,6 +1005,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.spy, .keepEditHistory),
+             tgl(.spy, .saveForBots),
+             tgl(.spy, .replyToDeleted),
++            tgl(.spy, .showMutedDeleted),
+             .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с корзинкой, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
+         ]
+     case .messages:
+@@ -1067,7 +1088,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         for (index, preset) in LunagramSettings.deviceMaskPresets.enumerated() {
+             entries.append(.dim(.privacy, Int32(index), preset.title, index == media.deviceMask))
+         }
+-        entries.append(.info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. Начнёт действовать после перезапуска Lunagram."))
++        entries.append(.info(.privacy, 0, "Вместо твоего номера в шапке настроек и в профиле — точки. Для скриншотов: сам номер никуда не девается, меняется только показ.\n\nУстройство — как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. У масок Android и Mac подменяется и версия системы, как на ПК: по ней сервер выбирает значок. Начнёт действовать после перезапуска Lunagram."))
+         return entries
+     case .banner:
+         // Нарисованные баннеры убраны по просьбе хозяина — только своё фото
