@@ -259,10 +259,10 @@ index 00000000..40b74997
 +    }
 +}
 diff --git a/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift b/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift
-index fe1f4bc6..3fe13ead 100644
+index fe1f4bc6..401afd63 100644
 --- a/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift
 +++ b/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift
-@@ -89,8 +89,21 @@ func lunagramUpdateListWallpaper(state: LunagramListWallpaperState, container: A
+@@ -89,8 +89,24 @@ func lunagramUpdateListWallpaper(state: LunagramListWallpaperState, container: A
      }
  
      let frame = CGRect(origin: CGPoint(), size: size)
@@ -277,7 +277,10 @@ index fe1f4bc6..3fe13ead 100644
 +    let wallpaperFrame = blurRadius > 0.0 ? frame.insetBy(dx: -blurRadius, dy: -blurRadius) : frame
 +    transition.updateFrame(node: node, frame: wallpaperFrame)
 +    node.updateLayout(size: wallpaperFrame.size, displayMode: .aspectFill, transition: transition)
-+    if blurRadius > 0.0, let filter = makeBlurFilter() {
++    // Через обёртку из Display: сама makeBlurFilter живёт в модуле
++    // UIKitRuntimeUtils, которого этот модуль не видит (на этом упала
++    // сборка №56).
++    if blurRadius > 0.0, let filter = CALayer.blur() {
 +        filter.setValue(blurRadius as NSNumber, forKey: "inputRadius")
 +        node.layer.filters = [filter]
 +    } else if node.layer.filters != nil {
@@ -286,7 +289,7 @@ index fe1f4bc6..3fe13ead 100644
  
      if let dimNode = state.dimNode {
          transition.updateFrame(node: dimNode, frame: frame)
-@@ -112,7 +125,12 @@ func lunagramObserveListWallpaper(state: LunagramListWallpaperState, update: @es
+@@ -112,7 +128,12 @@ func lunagramObserveListWallpaper(state: LunagramListWallpaperState, update: @es
          return
      }
      state.appliedSnapshot = lunagramListWallpaperSnapshot()
@@ -300,7 +303,7 @@ index fe1f4bc6..3fe13ead 100644
          let snapshot = lunagramListWallpaperSnapshot()
          guard snapshot != state.appliedSnapshot else {
              return
-@@ -124,5 +142,5 @@ func lunagramObserveListWallpaper(state: LunagramListWallpaperState, update: @es
+@@ -124,5 +145,5 @@ func lunagramObserveListWallpaper(state: LunagramListWallpaperState, update: @es
  
  /// Слепок настроек, которые здесь что-то меняют.
  private func lunagramListWallpaperSnapshot() -> Int {
