@@ -1,0 +1,557 @@
+diff --git a/submodules/Lunagram/Sources/LunagramDeletedGifts.swift b/submodules/Lunagram/Sources/LunagramDeletedGifts.swift
+new file mode 100644
+index 00000000..76778299
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramDeletedGifts.swift
+@@ -0,0 +1,192 @@
++import Foundation
++
++/// Снятые с продажи подарки: номера и цены.
++///
++/// Сервер таких подарков в каталоге не присылает вовсе, но принимает их по
++/// номеру — на ПК это проверено 29 августа 2026. Поэтому номера берутся со
++/// стороны, из того же списка, что читает ПК-версия (и плагин Deleted Gift
++/// Sender для exteraGram). Список чужой: если он пропадёт или сломается, в
++/// окне подарков просто останутся штатные.
++///
++/// Здесь только сам список — без Telegram. Картинки из стикерпака и запасной
++/// путь через канал живут в модуле окна подарков: им нужна сеть Telegram, а
++/// этому модулю её не положено, иначе правка здесь пересобирала бы всё.
++public enum LunagramDeletedGifts {
++    public struct Entry: Equatable {
++        public let id: Int64
++        public let stars: Int64
++        /// Номер картинки в стикерпаке. Нулевая картинка пака — заглушка.
++        public let sticker: Int
++    }
++
++    /// Рассылается, когда пришёл свежий список.
++    public static let didUpdateNotification = Notification.Name("LunagramDeletedGiftsDidUpdate")
++
++    public static let stickerPackName = "DeletedGiftsStickers"
++    public static let channelUsername = "DeletedGiftsChannel"
++    private static let listURL = URL(string: "https://raw.githubusercontent.com/binbash-0/DeletedGifts-Plugin/refs/heads/main/gift_list.json")!
++
++    private static let cacheKey = "lunagram.deletedGifts.listText"
++
++    private static let lock = NSLock()
++    private static var loadedEntries: [Entry]?
++    private static var injectedIds = Set<Int64>()
++    private static var webRequested = false
++
++    /// Зашитая копия — на самый первый запуск, пока ничего не скачано, и на
++    /// случай, когда недоступны и сайт, и канал. Сверена с файлом 13.09.2026.
++    private static let builtIn: [Entry] = [
++        Entry(id: 5956217000635139069, stars: 50, sticker: 1),
++        Entry(id: 5922558454332916696, stars: 50, sticker: 2),
++        Entry(id: 5800655655995968830, stars: 50, sticker: 3),
++        Entry(id: 5866352046986232958, stars: 50, sticker: 4),
++        Entry(id: 5801108895304779062, stars: 50, sticker: 5),
++        Entry(id: 5893356958802511476, stars: 50, sticker: 6),
++        Entry(id: 5935895822435615975, stars: 50, sticker: 7),
++        Entry(id: 5969796561943660080, stars: 50, sticker: 8),
++        Entry(id: 6026193266406327981, stars: 50, sticker: 9),
++        Entry(id: 5974210632977745012, stars: 50, sticker: 10),
++        Entry(id: 6046178578163303744, stars: 50, sticker: 11)
++    ]
++
++    /// Что показывать прямо сейчас: свежий список, сохранённый или зашитый.
++    public static var entries: [Entry] {
++        lock.lock()
++        defer { lock.unlock() }
++        if let loadedEntries {
++            return loadedEntries
++        }
++        if let text = UserDefaults.standard.string(forKey: cacheKey), let parsed = parse(text), !parsed.isEmpty {
++            loadedEntries = parsed
++            return parsed
++        }
++        return builtIn
++    }
++
++    /// Принять текст списка — с сайта или из канала, формат один.
++    /// Правда, если в нём нашлись подарки.
++    @discardableResult
++    public static func apply(text: String) -> Bool {
++        guard let parsed = parse(text), !parsed.isEmpty else {
++            return false
++        }
++        lock.lock()
++        let changed = loadedEntries != parsed
++        loadedEntries = parsed
++        lock.unlock()
++        UserDefaults.standard.set(text, forKey: cacheKey)
++        if changed {
++            NotificationCenter.default.post(name: didUpdateNotification, object: nil)
++        }
++        return true
++    }
++
++    /// Раз за запуск скачать свежий список с сайта. Ответ — получилось ли;
++    /// на повторные вызовы — сразу «да», второй раз не качаем.
++    public static func refreshFromWeb(completion: @escaping (Bool) -> Void) {
++        lock.lock()
++        let already = webRequested
++        webRequested = true
++        lock.unlock()
++        if already {
++            completion(true)
++            return
++        }
++
++        var request = URLRequest(url: listURL)
++        // Обязательно короткое ожидание: у заблокированного адреса запрос не
++        // отвергается, а молча висит, и запасной путь через канал никогда
++        // бы не включился. На ПК ровно на этом когда-то и споткнулись.
++        request.timeoutInterval = 5.0
++        request.cachePolicy = .reloadIgnoringLocalCacheData
++        URLSession.shared.dataTask(with: request, completionHandler: { data, response, _ in
++            // Постоянная, а не переменная: её забирает другая очередь.
++            let ok: Bool
++            if let data, let http = response as? HTTPURLResponse, http.statusCode == 200, let text = String(data: data, encoding: .utf8) {
++                ok = apply(text: text)
++            } else {
++                ok = false
++            }
++            DispatchQueue.main.async {
++                completion(ok)
++            }
++        }).resume()
++    }
++
++    /// Какие номера мы сами дописали в каталог. По ним окно отправки
++    /// понимает, что это наш подарок и цену надо сверить.
++    public static func markInjected(_ ids: [Int64]) {
++        lock.lock()
++        injectedIds.formUnion(ids)
++        lock.unlock()
++    }
++
++    public static func isInjected(_ id: Int64) -> Bool {
++        lock.lock()
++        defer { lock.unlock() }
++        return injectedIds.contains(id)
++    }
++
++    /// Разбор. Числа достаём прямо из текста, а не разбором JSON в числа:
++    /// номера девятнадцатизначные, и любой путь через дробное число портит
++    /// последние цифры — на ПК из-за этого сервер отвечал STARGIFT_INVALID.
++    /// Здесь разбирается каждый подарок по отдельности, так что сбитый
++    /// порядок полей номер с чужой ценой не склеит.
++    private static func parse(_ text: String) -> [Entry]? {
++        guard text.contains("\"gifts\"") else {
++            return nil
++        }
++        guard let objectRegex = try? NSRegularExpression(pattern: "\\{[^{}]*\\}", options: []) else {
++            return nil
++        }
++        let range = NSRange(text.startIndex..., in: text)
++        var result: [Entry] = []
++        for match in objectRegex.matches(in: text, options: [], range: range) {
++            guard let objectRange = Range(match.range, in: text) else {
++                continue
++            }
++            let object = String(text[objectRange])
++            guard let idText = number(named: "id", in: object), let rawId = UInt64(idText) else {
++                continue
++            }
++            // Номер в Telegram — знаковое 64-битное число; большие беззнаковые
++            // сервер понимает так же, как их двоичная запись.
++            let id = Int64(bitPattern: rawId)
++            guard id != 0 else {
++                continue
++            }
++            let stars = number(named: "price", in: object).flatMap { Int64($0) } ?? 0
++            // Цена без звёзд или заоблачная — значит, в файле что-то не то.
++            guard stars > 0, stars <= 100_000 else {
++                continue
++            }
++            let sticker = number(named: "sticker_number", in: object).flatMap { Int($0) } ?? 0
++            result.append(Entry(id: id, stars: stars, sticker: max(0, sticker)))
++        }
++        return result
++    }
++
++    private static func number(named name: String, in object: String) -> String? {
++        guard let regex = try? NSRegularExpression(pattern: "\"\(name)\"\\s*:\\s*(\\d+)", options: []) else {
++            return nil
++        }
++        let range = NSRange(object.startIndex..., in: object)
++        guard let match = regex.firstMatch(in: object, options: [], range: range), match.numberOfRanges > 1, let valueRange = Range(match.range(at: 1), in: object) else {
++            return nil
++        }
++        return String(object[valueRange])
++    }
++}
++
++/// Сверка цены перед оплатой снятого подарка.
++///
++/// На айфоне кнопка «Отправить за 50 ⭐» платит сразу, без второго окна с
++/// ценой. Цена на кнопке — из нашего списка, а списывает сервер свою. Если
++/// они разошлись, лучше не отправить, чем списать больше, чем было написано.
++public final class LunagramGiftPriceGuard {
++    /// Сколько попросил сервер, если отказались платить.
++    public var askedPrice: Int64?
++
++    public init() {
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 0f11383e..94a392c5 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -60,6 +60,7 @@ public final class LunagramSettings {
+         static let roundFromVideo = "lunagram.messages.roundFromVideo"
+         static let showPeerId = "lunagram.messages.showPeerId"
+         static let showMessageShot = "lunagram.messages.showMessageShot"
++        static let showDeletedGifts = "lunagram.other.showDeletedGifts"
+         static let disableAds = "lunagram.other.disableAds"
+         static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
+         static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+@@ -935,6 +936,22 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Снятые с продажи подарки наверху окна «Подарить». Включено сразу — так
++    /// договорились с хозяином: сами по себе они ничего не тратят, платить
++    /// всё равно надо нажать.
++    public static var showDeletedGifts: Bool {
++        get {
++            guard defaults.object(forKey: Key.showDeletedGifts) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.showDeletedGifts)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.showDeletedGifts)
++            changed()
++        }
++    }
++
+     /// Показывать в меню сообщения строку «Снимок сообщения».
+     public static var showMessageShot: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
+index 429cf39c..02cb752b 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
++++ b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
+@@ -1783,7 +1783,8 @@ final class GiftOptionsScreenComponent: Component {
+                     TelegramEngine.EngineData.Item.Peer.DisallowedGifts(id: peerId)
+                 ),
+                 availableProducts,
+-                context.engine.payments.cachedStarGifts(),
++                // Lunagram: снятые с продажи подарки — наверх списка, как на ПК.
++                lunagramCatalogWithDeletedGifts(context: context, catalog: context.engine.payments.cachedStarGifts()),
+                 self.starGiftsContext.state
+             ).start(next: { [weak self] peer, disallowedGifts, availableProducts, starGifts, profileGiftsState in
+                 guard let self else {
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/BUILD b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/BUILD
+index 7e874b3f..b18eedda 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/BUILD
++++ b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/BUILD
+@@ -52,6 +52,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/GlassBackgroundComponent",
+         "//submodules/TelegramUI/Components/MessageInputPanelComponent",
+         "//submodules/TelegramUI/Components/Gifts/GiftRemainingCountComponent",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
+index 0db09aed..9e51f29c 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
++++ b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
+@@ -39,6 +39,7 @@ import GlassBarButtonComponent
+ import MessageInputPanelComponent
+ import GiftRemainingCountComponent
+ import GlassBackgroundComponent
++import Lunagram
+ 
+ private final class GiftSetupScreenComponent: Component {
+     typealias EnvironmentType = ViewControllerComponentContainer.Environment
+@@ -525,7 +526,18 @@ private final class GiftSetupScreenComponent: Component {
+                 self.state?.updated()
+                 
+                 let completion = component.completion
+-                
++
++                // Lunagram: у снятого подарка цена на кнопке — из нашего списка,
++                // а списывает сервер свою. Разошлись — не платим.
++                let lunagramPriceGuard = LunagramGiftPriceGuard()
++                let lunagramCheckPrice: Bool
++                if case let .starGift(starGift, _) = component.subject {
++                    lunagramCheckPrice = LunagramDeletedGifts.isInjected(starGift.id)
++                } else {
++                    lunagramCheckPrice = false
++                }
++                let lunagramExpectedPrice = finalPrice
++
+                 let signal = BotCheckoutController.InputData.fetch(context: component.context, source: source)
+                 |> `catch` { error -> Signal<BotCheckoutController.InputData, SendBotPaymentFormError> in
+                     switch error {
+@@ -538,6 +550,14 @@ private final class GiftSetupScreenComponent: Component {
+                     }
+                 }
+                 |> mapToSignal { inputData -> Signal<SendBotPaymentResult, SendBotPaymentFormError> in
++                    if lunagramCheckPrice {
++                        let invoice = inputData.form.invoice
++                        let asked = invoice.prices.reduce(Int64(0), { $0 + $1.amount })
++                        if invoice.currency != "XTR" || asked > lunagramExpectedPrice {
++                            lunagramPriceGuard.askedPrice = asked
++                            return .fail(.generic)
++                        }
++                    }
+                     return component.context.engine.payments.sendStarsPaymentForm(formId: inputData.form.id, source: source)
+                 }
+                 |> deliverOnMainQueue
+@@ -655,7 +675,12 @@ private final class GiftSetupScreenComponent: Component {
+                     default:
+                         errorText = presentationData.strings.Gift_Send_ErrorUnknown
+                     }
+-                    
++
++                    // Lunagram: отказались сами, из-за цены — так и говорим.
++                    if let asked = lunagramPriceGuard.askedPrice {
++                        errorText = "Сервер попросил за этот подарок \(asked) ⭐, а на кнопке было \(lunagramExpectedPrice) ⭐. Не отправили — звёзды не списаны."
++                    }
++
+                     if let errorText = errorText {
+                         let alertController = textAlertController(context: component.context, title: nil, text: errorText, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})], parseMarkdown: true)
+                         controller.present(alertController, in: .window(.root))
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/LunagramDeletedGiftsCatalog.swift b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/LunagramDeletedGiftsCatalog.swift
+new file mode 100644
+index 00000000..f5521bb2
+--- /dev/null
++++ b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/LunagramDeletedGiftsCatalog.swift
+@@ -0,0 +1,166 @@
++import Foundation
++import SwiftSignalKit
++import TelegramCore
++import AccountContext
++import Lunagram
++
++// Lunagram: снятые с продажи подарки в окне «Подарить».
++//
++// Каталог Telegram не трогаем — ни в базе, ни на диске. Подарки дописываются
++// только при показе окна, поверх того, что пришло с сервера. Выключили
++// настройку — окно снова штатное, стирать нечего.
++//
++// Живёт в модуле окна отправки, а не в самом окне подарков: отправке нужно
++// знать, что подарок наш (чтобы сверить цену), а окно подарков этот модуль и
++// так видит.
++
++/// Каталог подарков с дописанными наверх снятыми.
++public func lunagramCatalogWithDeletedGifts(context: AccountContext, catalog: Signal<[StarGift]?, NoError>) -> Signal<[StarGift]?, NoError> {
++    guard LunagramSettings.showDeletedGifts else {
++        return catalog
++    }
++    return combineLatest(catalog, lunagramDeletedGiftEntries(context: context), lunagramDeletedGiftFiles(context: context))
++    |> map { catalog, entries, files -> [StarGift]? in
++        guard let catalog else {
++            return nil
++        }
++        if entries.isEmpty {
++            return catalog
++        }
++
++        var existing = Set<Int64>()
++        // Образец — первый обычный подарок каталога. С него берём картинку,
++        // пока не пришёл стикерпак, и соотношение «цена → во сколько звёзд
++        // его можно обменять» для образца в чате.
++        var donor: StarGift.Gift?
++        for gift in catalog {
++            if case let .generic(gift) = gift {
++                existing.insert(gift.id)
++                if donor == nil {
++                    donor = gift
++                }
++            }
++        }
++
++        var added: [StarGift] = []
++        for entry in entries where !existing.contains(entry.id) {
++            // Картинка из стикерпака по номеру из списка. Нулевая картинка
++            // пака — заглушка, поэтому номер берём как есть, не вычитая единицу.
++            let file: TelegramMediaFile?
++            if !files.isEmpty {
++                file = files[min(entry.sticker, files.count - 1)]
++            } else {
++                // Пак ещё не пришёл — пока картинка образца. Подарок при этом
++                // уже рабочий, просто выглядит чужим; через миг подменится.
++                file = donor?.file
++            }
++            guard let file else {
++                continue
++            }
++            // «Обменять на звёзды» — это решает сервер, когда подарок придёт.
++            // Для образца в чате берём ту же долю, что у настоящего подарка
++            // каталога, а не выдумываем число.
++            var convertStars: Int64 = 0
++            if let donor, donor.price > 0 {
++                convertStars = donor.convertStars * entry.stars / donor.price
++            }
++            added.append(.generic(StarGift.Gift(
++                id: entry.id,
++                title: nil,
++                file: file,
++                price: entry.stars,
++                convertStars: convertStars,
++                // Без ограничений и без перепродажи: иначе окно нарисует
++                // «осталось столько-то», и цифры будут враньём.
++                availability: nil,
++                soldOut: nil,
++                flags: [],
++                upgradeStars: nil,
++                releasedBy: nil,
++                perUserLimit: nil,
++                lockedUntilDate: nil,
++                auctionSlug: nil,
++                auctionGiftsPerRound: nil,
++                auctionStartDate: nil,
++                upgradeVariantsCount: nil,
++                background: nil
++            )))
++        }
++        if added.isEmpty {
++            return catalog
++        }
++        LunagramDeletedGifts.markInjected(added.compactMap { gift -> Int64? in
++            if case let .generic(gift) = gift {
++                return gift.id
++            }
++            return nil
++        })
++        // Наверх, как на ПК: их видно сразу при открытии.
++        return added + catalog
++    }
++}
++
++/// Список: сразу то, что уже есть (сохранённый или зашитый), потом свежий.
++private func lunagramDeletedGiftEntries(context: AccountContext) -> Signal<[LunagramDeletedGifts.Entry], NoError> {
++    return Signal { subscriber in
++        subscriber.putNext(LunagramDeletedGifts.entries)
++        let observer = NotificationCenter.default.addObserver(forName: LunagramDeletedGifts.didUpdateNotification, object: nil, queue: nil, using: { _ in
++            subscriber.putNext(LunagramDeletedGifts.entries)
++        })
++        LunagramDeletedGifts.refreshFromWeb(completion: { ok in
++            if !ok {
++                lunagramRefreshDeletedGiftsFromChannel(context: context)
++            }
++        })
++        return ActionDisposable {
++            NotificationCenter.default.removeObserver(observer)
++        }
++    }
++}
++
++/// Запасной путь: тот же список лежит в канале Telegram. Нужен потому, что
++/// у части людей GitHub не открывается, а Telegram работает по определению.
++/// Ищем в канале запись со словом из списка — имя стикерпака там есть всегда.
++private func lunagramRefreshDeletedGiftsFromChannel(context: AccountContext) {
++    let _ = (context.engine.peers.resolvePeerByName(name: LunagramDeletedGifts.channelUsername, referrer: nil)
++    |> mapToSignal { result -> Signal<EnginePeer?, NoError> in
++        guard case let .result(peer) = result else {
++            return .complete()
++        }
++        return .single(peer)
++    }
++    |> take(1)
++    |> mapToSignal { peer -> Signal<[String], NoError> in
++        guard let peer else {
++            return .single([])
++        }
++        return context.engine.messages.searchMessages(location: .peer(peerId: peer.id, fromId: nil, tags: nil, reactions: nil, threadId: nil, minDate: nil, maxDate: nil), query: LunagramDeletedGifts.stickerPackName, state: nil, limit: 10)
++        |> take(1)
++        |> map { result, _ -> [String] in
++            return result.messages.map { $0.text }
++        }
++    }
++    |> deliverOnMainQueue).startStandalone(next: { texts in
++        // Свежие записи идут первыми — первая разобранная и есть нужная.
++        for text in texts {
++            if LunagramDeletedGifts.apply(text: text) {
++                break
++            }
++        }
++    })
++}
++
++/// Картинки подарков — стикеры того же пака, что у ПК. Сначала пусто, чтобы
++/// окно не ждало пак, потом сами стикеры.
++private func lunagramDeletedGiftFiles(context: AccountContext) -> Signal<[TelegramMediaFile], NoError> {
++    return .single([])
++    |> then(
++        context.engine.stickers.loadedStickerPack(reference: .name(LunagramDeletedGifts.stickerPackName), forceActualized: false)
++        |> map { pack -> [TelegramMediaFile] in
++            if case let .result(_, items, _) = pack {
++                return items.map { $0.file._parse() }
++            }
++            return []
++        }
++    )
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index bc67b70a..aceb5774 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -48,6 +48,7 @@ private enum LunagramToggle: Int32 {
+     case useScheduledSend
+     case showMessageShot
+     case wallpaperEverywhere
++    case showDeletedGifts
+ 
+     var value: Bool {
+         switch self {
+@@ -107,6 +108,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showMessageShot
+         case .wallpaperEverywhere:
+             return LunagramSettings.wallpaperEverywhere
++        case .showDeletedGifts:
++            return LunagramSettings.showDeletedGifts
+         }
+     }
+ 
+@@ -168,6 +171,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showMessageShot = value
+         case .wallpaperEverywhere:
+             LunagramSettings.wallpaperEverywhere = value
++        case .showDeletedGifts:
++            LunagramSettings.showDeletedGifts = value
+         }
+     }
+ 
+@@ -229,6 +234,8 @@ private enum LunagramToggle: Int32 {
+             return "Показывать снимок сообщений"
+         case .wallpaperEverywhere:
+             return "Обои на всё окно"
++        case .showDeletedGifts:
++            return "Снятые с продажи подарки"
+         }
+     }
+ 
+@@ -281,6 +288,8 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.appearance
+         case .wallpaperEverywhere:
+             return PresentationResourcesSettings.appearance
++        case .showDeletedGifts:
++            return PresentationResourcesSettings.premiumGift
+         }
+     }
+ 
+@@ -326,6 +335,8 @@ private enum LunagramToggle: Int32 {
+             return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
+         case .useScheduledSend:
+             return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
++        case .showDeletedGifts:
++            return "Подарки, которых больше нет в продаже, — наверху окна «Подарить», как на ПК. Выбираются и отправляются как обычные: серверу нужен только номер подарка.\n\nСписок номеров — тот же, что у ПК; если сайт не открывается, берём его из канала Telegram, а на крайний случай есть копия в самом приложении.\n\nПеред оплатой сверяем цену: если сервер попросит больше, чем написано на кнопке, подарок не уйдёт и звёзды не спишутся."
+         case .wallpaperEverywhere:
+             return "Обои видно не только в переписке, но и за списком переписок — как на ПК. Показываются твои нынешние обои: и однотонные, и узорчатые, и выбранное видео.\n\nЗатемнение за списком по умолчанию заметное: там текст мельче, чем в переписке, и на пёстрых обоях без него не прочитать."
+         case .showMessageShot:
+@@ -946,6 +957,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.other, .disableAds),
+             tgl(.other, .showMessageSeconds),
+             tgl(.other, .streamerMode),
++            tgl(.other, .showDeletedGifts),
+             .header(.other, 55, "ШРИФТ ОТПРАВКИ")
+         ]
+         // Каждый стиль написан собой же — видно, как уйдёт сообщение.
