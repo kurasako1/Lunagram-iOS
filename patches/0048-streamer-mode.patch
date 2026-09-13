@@ -1,0 +1,187 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 8424ea5c..822da9d2 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -61,6 +61,7 @@ public final class LunagramSettings {
+         static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
+         static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+         static let sendFontStyle = "lunagram.other.sendFontStyle"
++        static let streamerMode = "lunagram.other.streamerMode"
+         static let showMessageSeconds = "lunagram.other.showMessageSeconds"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+@@ -241,6 +242,17 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Режим стримера: при записи экрана закрывать содержимое пеленой.
++    public static var streamerMode: Bool {
++        get {
++            return defaults.bool(forKey: Key.streamerMode)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.streamerMode)
++            changed()
++        }
++    }
++
+     /// Каким стилем уходят сообщения. Ноль — обычным.
+     public static var sendFontStyle: Int {
+         get { return clamped(Key.sendFontStyle, 0, LunagramSendFont.allCases.count - 1, 0) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index a1bd9904..36d45533 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -41,6 +41,7 @@ private enum LunagramToggle: Int32 {
+     case disableAds
+     case showMessageSeconds
+     case suggestGhostForStories
++    case streamerMode
+ 
+     var value: Bool {
+         switch self {
+@@ -86,6 +87,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showMessageSeconds
+         case .suggestGhostForStories:
+             return LunagramSettings.suggestGhostForStories
++        case .streamerMode:
++            return LunagramSettings.streamerMode
+         }
+     }
+ 
+@@ -133,6 +136,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showMessageSeconds = value
+         case .suggestGhostForStories:
+             LunagramSettings.suggestGhostForStories = value
++        case .streamerMode:
++            LunagramSettings.streamerMode = value
+         }
+     }
+ 
+@@ -180,6 +185,8 @@ private enum LunagramToggle: Int32 {
+             return "Время с секундами"
+         case .suggestGhostForStories:
+             return "Предлагать призрака для сторис"
++        case .streamerMode:
++            return "Режим стримера"
+         }
+     }
+ 
+@@ -221,6 +228,8 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.notifications
+         case .suggestGhostForStories:
+             return PresentationResourcesSettings.stories
++        case .streamerMode:
++            return PresentationResourcesSettings.security
+         }
+     }
+ 
+@@ -262,6 +271,8 @@ private enum LunagramToggle: Int32 {
+             return "У сообщений будет видно не только час и минуту, но и секунды."
+         case .suggestGhostForStories:
+             return "Перед открытием историй спросим, включить ли призрака, — чтобы не попасть в список зрителей случайно."
++        case .streamerMode:
++            return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
+         default:
+             return nil
+         }
+@@ -838,6 +849,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .header(.other, 0, "ДРУГОЕ"),
+             tgl(.other, .disableAds),
+             tgl(.other, .showMessageSeconds),
++            tgl(.other, .streamerMode),
+             .header(.other, 55, "ШРИФТ ОТПРАВКИ")
+         ]
+         // Каждый стиль написан собой же — видно, как уйдёт сообщение.
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index cf610524..9f992e88 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -325,7 +325,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+         precondition(!testIsLaunched)
+         testIsLaunched = true
+-        
++
++        // Lunagram: следим за записью экрана для режима стримера.
++        LunagramStreamerMode.shared.start()
++
+         let _ = voipTokenPromise.get().start(next: { token in
+             self.voipDeviceToken.set(.single(token))
+         })
+diff --git a/submodules/TelegramUI/Sources/LunagramStreamerMode.swift b/submodules/TelegramUI/Sources/LunagramStreamerMode.swift
+new file mode 100644
+index 00000000..dc36f3ad
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramStreamerMode.swift
+@@ -0,0 +1,70 @@
++import Foundation
++import UIKit
++import Lunagram
++
++/// Режим стримера: когда идёт запись экрана или трансляция, содержимое
++/// закрывается матовой пеленой. На ПК это кнопка в меню, но там запись ведёт
++/// сторонняя программа и заметить её нельзя. Айфон сам говорит, что экран
++/// пишется, поэтому здесь оно срабатывает само — так надёжнее: не забудешь
++/// нажать перед записью.
++final class LunagramStreamerMode {
++    static let shared = LunagramStreamerMode()
++
++    private var coverView: UIView?
++    private var started = false
++
++    /// Включаем слежение один раз при запуске приложения.
++    func start() {
++        guard !self.started else {
++            return
++        }
++        self.started = true
++        NotificationCenter.default.addObserver(self, selector: #selector(self.update), name: UIScreen.capturedDidChangeNotification, object: nil)
++        NotificationCenter.default.addObserver(self, selector: #selector(self.update), name: LunagramSettings.didChangeNotification, object: nil)
++        self.update()
++    }
++
++    @objc private func update() {
++        let shouldCover = LunagramSettings.streamerMode && UIScreen.main.isCaptured
++        if shouldCover {
++            self.showCover()
++        } else {
++            self.coverView?.removeFromSuperview()
++            self.coverView = nil
++        }
++    }
++
++    private func showCover() {
++        guard self.coverView == nil else {
++            return
++        }
++        // Ищем окно, которое сейчас на экране: приложение может держать
++        // несколько, и класть пелену надо поверх видимого.
++        let window = UIApplication.shared.windows.first(where: { $0.isKeyWindow }) ?? UIApplication.shared.windows.last
++        guard let window = window else {
++            return
++        }
++        let cover = UIView(frame: window.bounds)
++        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++        cover.backgroundColor = UIColor.black
++        cover.isUserInteractionEnabled = false
++
++        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
++        blur.frame = cover.bounds
++        blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++        cover.addSubview(blur)
++
++        let label = UILabel()
++        label.text = "Идёт запись экрана.\nСодержимое скрыто."
++        label.numberOfLines = 2
++        label.textAlignment = .center
++        label.textColor = UIColor(white: 1.0, alpha: 0.85)
++        label.font = UIFont.systemFont(ofSize: 16.0)
++        label.frame = cover.bounds
++        label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++        cover.addSubview(label)
++
++        window.addSubview(cover)
++        self.coverView = cover
++    }
++}
