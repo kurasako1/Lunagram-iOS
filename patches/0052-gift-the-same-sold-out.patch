@@ -1,0 +1,236 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 94a392c5..284b79e7 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -61,6 +61,8 @@ public final class LunagramSettings {
+         static let showPeerId = "lunagram.messages.showPeerId"
+         static let showMessageShot = "lunagram.messages.showMessageShot"
+         static let showDeletedGifts = "lunagram.other.showDeletedGifts"
++        static let giftTheSame = "lunagram.other.giftTheSame"
++        static let sendSoldOutGifts = "lunagram.other.sendSoldOutGifts"
+         static let disableAds = "lunagram.other.disableAds"
+         static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
+         static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+@@ -952,6 +954,36 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// «Подарить такой же» в меню подарка в чужом профиле. Включено сразу,
++    /// как на ПК: пункт сам ничего не тратит, дальше обычное окно отправки.
++    public static var giftTheSame: Bool {
++        get {
++            guard defaults.object(forKey: Key.giftTheSame) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.giftTheSame)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.giftTheSame)
++            changed()
++        }
++    }
++
++    /// Распроданный подарок — открывать окно отправки, а не справку
++    /// «распродано». Решает сервер: кончился тираж — откажет без списания.
++    public static var sendSoldOutGifts: Bool {
++        get {
++            guard defaults.object(forKey: Key.sendSoldOutGifts) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.sendSoldOutGifts)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.sendSoldOutGifts)
++            changed()
++        }
++    }
++
+     /// Показывать в меню сообщения строку «Снимок сообщения».
+     public static var showMessageShot: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/BUILD b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/BUILD
+index 1820be66..8f4b810b 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/BUILD
++++ b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/BUILD
+@@ -48,6 +48,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/AlertComponent",
+         "//submodules/TelegramUI/Components/AlertComponent/AlertTransferHeaderComponent",
+         "//submodules/TelegramUI/Components/AvatarComponent",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
+index 02cb752b..4a6cc01b 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
++++ b/submodules/TelegramUI/Components/Gifts/GiftOptionsScreen/Sources/GiftOptionsScreen.swift
+@@ -28,6 +28,7 @@ import GiftViewScreen
+ import UndoUI
+ import EdgeEffect
+ import GlassBarButtonComponent
++import Lunagram
+ 
+ final class GiftOptionsScreenComponent: Component {
+     typealias EnvironmentType = ViewControllerComponentContainer.Environment
+@@ -466,7 +467,16 @@ final class GiftOptionsScreenComponent: Component {
+                             }
+                         }))
+                     } else {
+-                        if let availability = gift.availability, availability.remains == 0 || gift.perUserLimit?.remains == 0 || component.peerId.namespace == Namespaces.Peer.CloudChannel {
++                        // Lunagram: здесь официальный клиент на распроданный
++                        // подарок показывал справку «распродано» и до сервера
++                        // вообще не доходил. Ограничение нарисовано в окне, а не
++                        // в протоколе: список на экране бывает устаревшим, а
++                        // решает сервер. С настройкой идём в обычное окно
++                        // отправки — если тираж и правда кончился, сервер
++                        // откажет, и звёзды не спишутся. Перепродажу, лимит «на
++                        // одного» и каналы не трогаем — там своя логика.
++                        let lunagramSendSoldOut = LunagramSettings.sendSoldOutGifts && gift.availability.flatMap { $0.remains == 0 && $0.resale == 0 } == true && gift.perUserLimit?.remains != 0 && component.peerId.namespace != Namespaces.Peer.CloudChannel
++                        if !lunagramSendSoldOut, let availability = gift.availability, availability.remains == 0 || gift.perUserLimit?.remains == 0 || component.peerId.namespace == Namespaces.Peer.CloudChannel {
+                             if availability.resale > 0 {
+                                 let storeController = component.context.sharedContext.makeGiftStoreController(
+                                     context: component.context,
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index aceb5774..d71a0346 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -49,6 +49,8 @@ private enum LunagramToggle: Int32 {
+     case showMessageShot
+     case wallpaperEverywhere
+     case showDeletedGifts
++    case giftTheSame
++    case sendSoldOutGifts
+ 
+     var value: Bool {
+         switch self {
+@@ -110,6 +112,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.wallpaperEverywhere
+         case .showDeletedGifts:
+             return LunagramSettings.showDeletedGifts
++        case .giftTheSame:
++            return LunagramSettings.giftTheSame
++        case .sendSoldOutGifts:
++            return LunagramSettings.sendSoldOutGifts
+         }
+     }
+ 
+@@ -173,6 +179,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.wallpaperEverywhere = value
+         case .showDeletedGifts:
+             LunagramSettings.showDeletedGifts = value
++        case .giftTheSame:
++            LunagramSettings.giftTheSame = value
++        case .sendSoldOutGifts:
++            LunagramSettings.sendSoldOutGifts = value
+         }
+     }
+ 
+@@ -236,6 +246,10 @@ private enum LunagramToggle: Int32 {
+             return "Обои на всё окно"
+         case .showDeletedGifts:
+             return "Снятые с продажи подарки"
++        case .giftTheSame:
++            return "«Подарить такой же»"
++        case .sendSoldOutGifts:
++            return "Отправлять распроданные"
+         }
+     }
+ 
+@@ -290,6 +304,10 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.appearance
+         case .showDeletedGifts:
+             return PresentationResourcesSettings.premiumGift
++        case .giftTheSame:
++            return PresentationResourcesSettings.premiumGift
++        case .sendSoldOutGifts:
++            return PresentationResourcesSettings.stars
+         }
+     }
+ 
+@@ -335,6 +353,10 @@ private enum LunagramToggle: Int32 {
+             return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
+         case .useScheduledSend:
+             return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
++        case .giftTheSame:
++            return "Зажми подарок в чужом профиле → «Подарить такой же». Откроется обычное окно отправки этому же человеку — с ценой на кнопке. Так можно подарить и снятый с продажи: его номер у получателя сохранился.\n\nКоллекционные повторить нельзя — они в одном экземпляре, для них пункта нет."
++        case .sendSoldOutGifts:
++            return "Родной Telegram на распроданный подарок показывает справку и до сервера не доходит. С этой настройкой открывается обычное окно отправки: список на экране бывает устаревшим, а решает сервер. Если тираж и правда кончился — он откажет, и звёзды не спишутся."
+         case .showDeletedGifts:
+             return "Подарки, которых больше нет в продаже, — наверху окна «Подарить», как на ПК. Выбираются и отправляются как обычные: серверу нужен только номер подарка.\n\nСписок номеров — тот же, что у ПК; если сайт не открывается, берём его из канала Telegram, а на крайний случай есть копия в самом приложении.\n\nПеред оплатой сверяем цену: если сервер попросит больше, чем написано на кнопке, подарок не уйдёт и звёзды не спишутся."
+         case .wallpaperEverywhere:
+@@ -958,6 +980,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.other, .showMessageSeconds),
+             tgl(.other, .streamerMode),
+             tgl(.other, .showDeletedGifts),
++            tgl(.other, .giftTheSame),
++            tgl(.other, .sendSoldOutGifts),
+             .header(.other, 55, "ШРИФТ ОТПРАВКИ")
+         ]
+         // Каждый стиль написан собой же — видно, как уйдёт сообщение.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
+index ef6fe4b4..d51207e6 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
+@@ -61,6 +61,8 @@ swift_library(
+         "//submodules/TelegramUI/Components/EmojiTextAttachmentView",
+         "//submodules/TelegramUI/Components/PeerInfo/CollectionTabItemComponent",
+         "//submodules/TelegramUI/Components/EdgeEffect",
++        "//submodules/TelegramUI/Components/Gifts/GiftSetupScreen",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+index ee9ea2d9..76621f0f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+@@ -36,6 +36,8 @@ import TextFormat
+ import PromptUI
+ import CollectionTabItemComponent
+ import EdgeEffect
++import GiftSetupScreen
++import Lunagram
+ 
+ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScrollViewDelegate {
+     public enum GiftCollection: Equatable {
+@@ -1420,11 +1422,38 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+                 }
+             })))
+         }
+-        
++
++        // Lunagram: «Подарить такой же», как на ПК.
++        //
++        // Серверу для отправки нужен только номер подарка — каталог в окне
++        // выбора нужен лишь затем, чтобы этот номер получить нажатием. Снятые
++        // с продажи в каталог не попадают, но у того, кому их уже вручили,
++        // номер сохранился. Берём его отсюда и открываем обычное окно отправки
++        // этому же человеку: там цена на кнопке, текст и «скрыть имя».
++        //
++        // Коллекционные существуют в одном экземпляре — повторить нельзя,
++        // поэтому для них пункта нет.
++        if LunagramSettings.giftTheSame, case let .generic(genericGift) = gift.gift {
++            let peerId = self.peerId
++            items.append(.action(ContextMenuActionItem(text: "Подарить такой же", icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Gift"), color: theme.contextMenu.primaryColor) }, action: { [weak self] c, _ in
++                c?.dismiss(completion: { [weak self] in
++                    guard let self else {
++                        return
++                    }
++                    // Цена такого подарка — из чужого профиля, а не из
++                    // каталога, поэтому перед оплатой её тоже сверяем с тем,
++                    // что попросит сервер.
++                    LunagramDeletedGifts.markInjected([genericGift.id])
++                    let screen = GiftSetupScreen(context: self.context, peerId: peerId, subject: .starGift(genericGift, nil))
++                    self.parentController?.push(screen)
++                })
++            })))
++        }
++
+         guard !items.isEmpty else {
+             return
+         }
+-        
++
+         let previewController = GiftContextPreviewController(context: self.context, gift: gift)
+         let contextController = makeContextController(
+             context: self.context,
