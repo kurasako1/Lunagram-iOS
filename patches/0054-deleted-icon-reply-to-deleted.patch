@@ -1,0 +1,341 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index e8c7ab6d..1b685e37 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -65,6 +65,7 @@ public final class LunagramSettings {
+         static let showMessageShot = "lunagram.messages.showMessageShot"
+         static let showDeletedGifts = "lunagram.other.showDeletedGifts"
+         static let giftTheSame = "lunagram.other.giftTheSame"
++        static let replyToDeleted = "lunagram.spy.replyToDeleted"
+         static let sendSoldOutGifts = "lunagram.other.sendSoldOutGifts"
+         static let disableAds = "lunagram.other.disableAds"
+         static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
+@@ -996,6 +997,21 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Ответ на сохранённое удалённое — цитатой с именем автора, как в
++    /// AyuGram. Включено сразу — так договорились с хозяином.
++    public static var replyToDeleted: Bool {
++        get {
++            guard defaults.object(forKey: Key.replyToDeleted) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.replyToDeleted)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.replyToDeleted)
++            changed()
++        }
++    }
++
+     /// «Подарить такой же» в меню подарка в чужом профиле. Включено сразу,
+     /// как на ПК: пункт сам ничего не тратит, дальше обычное окно отправки.
+     public static var giftTheSame: Bool {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+index ffb7e154..6d73e17f 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+@@ -538,13 +538,22 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
+             }
+             
+             var updatedDateText = arguments.dateText
++            // Lunagram: удалённое — корзинка перед временем, как в AyuGram.
++            // Встаёт на место «глаза» просмотров: у удалённого поста число
++            // просмотров всё равно больше не меняется, и показывать его рядом
++            // с корзинкой значило бы путать, что это за цифра.
++            let lunagramDeleted = updatedDateText.hasPrefix(lunagramDeletedDateMarker)
++            if lunagramDeleted {
++                updatedDateText = updatedDateText.replacingOccurrences(of: lunagramDeletedDateMarker, with: "")
++                impressionImage = lunagramDeletedIcon(color: dateColor, baseFontSize: arguments.presentationData.fontSize.baseDisplaySize)
++            }
+             if arguments.edited {
+                 if let useEditedTimestamp = arguments.context.getAppConfigValue("message_primary_edited_date") as? Bool, useEditedTimestamp {
+                 } else {
+                     updatedDateText = "\(arguments.presentationData.strings.Conversation_MessageEditedLabel) \(updatedDateText)"
+                 }
+             }
+-            if let impressionCount = arguments.impressionCount {
++            if !lunagramDeleted, let impressionCount = arguments.impressionCount {
+                 updatedDateText = compactNumericCountString(impressionCount, decimalSeparator: arguments.presentationData.dateTimeFormat.decimalSeparator) + " " + updatedDateText
+             }
+             
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+new file mode 100644
+index 00000000..efa1bc63
+--- /dev/null
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+@@ -0,0 +1,43 @@
++import Foundation
++import UIKit
++
++// Lunagram: значок удалённого — корзинка, как в AyuGram.
++//
++// Картинку AyuGram не берём: их настольная версия под GPLv3, а Telegram для
++// iOS — под GPLv2, и смешивать их нельзя. Рисуем системной корзинкой iOS:
++// она почти такая же — залитый бак с крышкой, — а разрешение на неё даёт
++// сама Apple всем приложениям.
++//
++// Цвет — цвет времени рядом, размер — от шрифта времени. Готовые картинки
++// запоминаются: сообщений с корзинкой на экране может быть много, а цветов
++// и размеров — пара штук.
++
++private let lunagramDeletedIconLock = NSLock()
++private var lunagramDeletedIconCache: [String: UIImage] = [:]
++
++func lunagramDeletedIcon(color: UIColor, baseFontSize: CGFloat) -> UIImage? {
++    // Шрифт времени — 11/17 от основного; корзинка чуть мельче букв.
++    let pointSize = floor(baseFontSize * 10.0 / 17.0)
++    var red: CGFloat = 0.0
++    var green: CGFloat = 0.0
++    var blue: CGFloat = 0.0
++    var alpha: CGFloat = 0.0
++    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
++    let key = "\(Int(red * 255.0))-\(Int(green * 255.0))-\(Int(blue * 255.0))-\(Int(alpha * 255.0))-\(Int(pointSize))"
++
++    // Узел времени раскладывается и не на главном потоке — отсюда замок.
++    lunagramDeletedIconLock.lock()
++    defer {
++        lunagramDeletedIconLock.unlock()
++    }
++    if let cached = lunagramDeletedIconCache[key] {
++        return cached
++    }
++    let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
++    guard let symbol = UIImage(systemName: "trash.fill", withConfiguration: configuration) else {
++        return nil
++    }
++    let image = symbol.withTintColor(color, renderingMode: .alwaysOriginal)
++    lunagramDeletedIconCache[key] = image
++    return image
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+index 74b67e1a..cfd0415d 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+@@ -62,9 +62,16 @@ private func monthAtIndex(_ index: Int, strings: PresentationStrings) -> String
+     }
+ }
+ 
+-// Lunagram: удалённое собеседником, но сохранённое у нас, помечаем метлой
+-// возле времени — как на ПК. Обёрткой, чтобы саму функцию Telegram не
++// Lunagram: удалённое собеседником, но сохранённое у нас, помечаем корзинкой
++// возле времени — как в AyuGram. Обёрткой, чтобы саму функцию Telegram не
+ // трогать: время, «изменено» и прочее она считает как раньше.
++//
++// Корзинка — картинка, а сюда можно вернуть только строку. Поэтому строка
++// несёт невидимую метку, а узел времени, увидев её, рисует значок на месте
++// «глаза» просмотров. Метка из двух невидимых знаков: если строка попадёт
++// куда-то ещё, там ничего не появится — ни метлы, ни квадратика.
++let lunagramDeletedDateMarker = "\u{2060}\u{2063}"
++
+ public func stringForMessageTimestampStatus(
+     context: AccountContext,
+     message: EngineMessage,
+@@ -81,7 +88,7 @@ public func stringForMessageTimestampStatus(
+         text = "\(badge) · \(text)"
+     }
+     if message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute }) {
+-        return "🧹 " + text
++        return lunagramDeletedDateMarker + text
+     }
+     return text
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index b7ccd603..2ea15ffe 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -51,6 +51,7 @@ private enum LunagramToggle: Int32 {
+     case showDeletedGifts
+     case giftTheSame
+     case sendSoldOutGifts
++    case replyToDeleted
+ 
+     var value: Bool {
+         switch self {
+@@ -116,6 +117,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.giftTheSame
+         case .sendSoldOutGifts:
+             return LunagramSettings.sendSoldOutGifts
++        case .replyToDeleted:
++            return LunagramSettings.replyToDeleted
+         }
+     }
+ 
+@@ -183,6 +186,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.giftTheSame = value
+         case .sendSoldOutGifts:
+             LunagramSettings.sendSoldOutGifts = value
++        case .replyToDeleted:
++            LunagramSettings.replyToDeleted = value
+         }
+     }
+ 
+@@ -250,6 +255,8 @@ private enum LunagramToggle: Int32 {
+             return "«Подарить такой же»"
+         case .sendSoldOutGifts:
+             return "Отправлять распроданные"
++        case .replyToDeleted:
++            return "Ответ на удалённое"
+         }
+     }
+ 
+@@ -308,6 +315,8 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.premiumGift
+         case .sendSoldOutGifts:
+             return PresentationResourcesSettings.stars
++        case .replyToDeleted:
++            return PresentationResourcesSettings.savedMessages
+         }
+     }
+ 
+@@ -316,7 +325,7 @@ private enum LunagramToggle: Int32 {
+     var descriptionText: String? {
+         switch self {
+         case .keepDeleted:
+-            return "Если собеседник удалит сообщение, у тебя оно останется — с метлой 🧹 возле времени. Твои удаления работают как обычно. Сообщения ботов не сохраняются."
++            return "Если собеседник удалит сообщение, у тебя оно останется — с корзинкой возле времени, как в AyuGram. Твои удаления работают как обычно. Сообщения ботов не сохраняются."
+         case .keepEditHistory:
+             return "Поправил сообщение — прежний текст остаётся. Зажми сообщение, «История изменений»."
+         case .showRoundSource:
+@@ -353,6 +362,8 @@ private enum LunagramToggle: Int32 {
+             return "Айфон сам говорит приложению, что экран пишется. Пока идёт запись или трансляция, содержимое закрывается пеленой — нажимать ничего не надо."
+         case .useScheduledSend:
+             return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
++        case .replyToDeleted:
++            return "Удалённое у сервера уже не существует, и сослаться на него в ответе нельзя. Поэтому, как в AyuGram, в начало твоего сообщения ставится цитата: имя автора ссылкой (он получит уведомление) и начало его текста. В личке имени нет — и так понятно, чья это цитата."
+         case .giftTheSame:
+             return "Зажми подарок в чужом профиле → «Подарить такой же». Откроется обычное окно отправки этому же человеку — с ценой на кнопке. Так можно подарить и снятый с продажи: его номер у получателя сохранился.\n\nКоллекционные повторить нельзя — они в одном экземпляре, для них пункта нет."
+         case .sendSoldOutGifts:
+@@ -969,7 +980,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.spy, .keepDeleted),
+             tgl(.spy, .keepEditHistory),
+             tgl(.spy, .saveForBots),
+-            .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с метлой 🧹, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
++            tgl(.spy, .replyToDeleted),
++            .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с корзинкой, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
+         ]
+     case .messages:
+         return [
+diff --git a/submodules/TelegramUI/Sources/Chat/ChatControllerLunagramReplyToDeleted.swift b/submodules/TelegramUI/Sources/Chat/ChatControllerLunagramReplyToDeleted.swift
+new file mode 100644
+index 00000000..89016c9c
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/Chat/ChatControllerLunagramReplyToDeleted.swift
+@@ -0,0 +1,86 @@
++import Foundation
++import Postbox
++import TelegramCore
++import AccountContext
++import TelegramStringFormatting
++
++// Lunagram: ответ на удалённое сообщение, как в AyuGram.
++//
++// Удалённое собеседником у нас сохранено, а у сервера его уже нет — и
++// сослаться на него в ответе нельзя: сервер такого номера не знает. Поэтому
++// обычная ссылка на ответ снимается, а в начало своего сообщения ставится
++// цитата: имя автора и начало его текста. Имя — упоминанием, чтобы автор
++// получил уведомление, как при обычном ответе. В личке имени нет — и так
++// понятно, чья это цитата.
++
++extension ChatControllerImpl {
++    /// Сообщение, на которое отвечают, — если это сохранённое у нас удалённое.
++    /// Ищем сначала в панели ответа, потом в загруженной ленте: пока человек
++    /// пишет ответ, сообщение наверняка там.
++    func lunagramDeletedReplyTarget(_ id: MessageId) -> Message? {
++        let isDeleted: (Message) -> Bool = { message in
++            return message.attributes.contains(where: { $0 is LunagramDeletedMessageAttribute })
++        }
++        if let reply = self.presentationInterfaceState.replyMessage, reply.id == id {
++            return isDeleted(reply) ? reply : nil
++        }
++        if let message = self.chatDisplayNode.historyNode.messageInCurrentHistoryView(id)?._asMessage() {
++            return isDeleted(message) ? message : nil
++        }
++        return nil
++    }
++
++    /// Текст и атрибуты сообщения с цитатой удалённого в начале.
++    func lunagramPseudoReply(text: String, attributes: [MessageAttribute], replied: Message, quote: String?) -> (String, [MessageAttribute]) {
++        // Имя — везде, кроме лички с тем же человеком.
++        let chatPeerId = self.chatLocation.peerId
++        let isSamePrivateChat = chatPeerId?.namespace == Namespaces.Peer.CloudUser && replied.id.peerId == chatPeerId
++        var name = ""
++        if !isSamePrivateChat, let author = replied.author {
++            name = EnginePeer(author).displayTitle(strings: self.presentationData.strings, displayOrder: self.presentationData.nameDisplayOrder)
++        }
++
++        // Цитата — выделенный кусок, если отвечали на него, иначе текст
++        // сообщения; у вложения без подписи — его описание («Фотография»).
++        var quoted = quote ?? replied.text
++        if quoted.isEmpty {
++            quoted = descriptionStringForMessage(contentSettings: self.context.currentContentSettings.with { $0 }, message: EngineMessage(replied), strings: self.presentationData.strings, nameDisplayOrder: self.presentationData.nameDisplayOrder, dateTimeFormat: self.presentationData.dateTimeFormat, accountPeerId: self.context.account.peerId).0.string
++        }
++        // Как в AyuGram — не длиннее ста знаков.
++        if quoted.count >= 100 {
++            quoted = String(quoted.prefix(99)) + "\u{2026}"
++        }
++
++        let prefix = name.isEmpty ? quoted : name + "\n" + quoted
++        let newText = text.isEmpty ? prefix : prefix + "\n" + text
++
++        // Отметки в тексте считаются в знаках UTF-16, и все свои сдвигаем на
++        // длину цитаты — иначе жирное и ссылки уехали бы на чужие буквы.
++        let prefixLength = (prefix as NSString).length
++        let shift = prefixLength + (text.isEmpty ? 0 : 1)
++        var entities: [MessageTextEntity] = []
++        var otherAttributes: [MessageAttribute] = []
++        for attribute in attributes {
++            if let textEntities = attribute as? TextEntitiesMessageAttribute {
++                entities = textEntities.entities.map { entity -> MessageTextEntity in
++                    var entity = entity
++                    entity.range = (entity.range.lowerBound + shift) ..< (entity.range.upperBound + shift)
++                    return entity
++                }
++            } else {
++                otherAttributes.append(attribute)
++            }
++        }
++        entities.insert(MessageTextEntity(range: 0 ..< prefixLength, type: .BlockQuote(isCollapsed: false)), at: 0)
++        if !name.isEmpty {
++            let nameLength = (name as NSString).length
++            entities.append(MessageTextEntity(range: 0 ..< nameLength, type: .Bold))
++            // Упоминание — только у людей: у канала уведомлений нет.
++            if let author = replied.author, author is TelegramUser {
++                entities.append(MessageTextEntity(range: 0 ..< nameLength, type: .TextMention(peerId: author.id)))
++            }
++        }
++        otherAttributes.append(TextEntitiesMessageAttribute(entities: entities))
++        return (newText, otherAttributes)
++    }
++}
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 5f67c87f..b1ffd762 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8930,13 +8930,24 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             // Lunagram: «Шрифт отправки» — буквы подменяются похожими знаками
+             // Юникода, поэтому стиль виден в любом клиенте. Трогаем только
+             // обычный текст; пересылки и вложения без подписи не меняем.
+-            if LunagramSettings.sendFontStyle != 0, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty {
++            //
++            // Текст с отметками (жирное, ссылки, свои эмодзи) не трогаем:
++            // стилизованная буква бывает длиннее обычной, и отметки уехали бы
++            // на чужие буквы. Нашлось при работе над ответом на удалённое.
++            if LunagramSettings.sendFontStyle != 0, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty, !attributes.contains(where: { ($0 as? TextEntitiesMessageAttribute)?.entities.isEmpty == false }) {
+                 let styled = LunagramSettings.styledForSending(text)
+                 if styled != text {
+                     message = .message(text: styled, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
+                 }
+             }
+ 
++            // Lunagram: ответ на удалённое — вместо ссылки, которую сервер не
++            // примет, цитата в начале. Подробности — в файле про это.
++            if LunagramSettings.replyToDeleted, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, let replySubject = replyToMessageId, let replied = self.lunagramDeletedReplyTarget(replySubject.messageId) {
++                let (quotedText, quotedAttributes) = self.lunagramPseudoReply(text: text, attributes: attributes, replied: replied, quote: replySubject.quote?.text)
++                message = .message(text: quotedText, attributes: quotedAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: nil, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
++            }
++
+             if let defaultReplyMessageSubject = defaultReplyMessageSubject {
+                 switch message {
+                 case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets):
