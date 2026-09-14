@@ -1,0 +1,570 @@
+diff --git a/submodules/Lunagram/Sources/LunagramCropEditor.swift b/submodules/Lunagram/Sources/LunagramCropEditor.swift
+index 638e5ca2..52570df0 100644
+--- a/submodules/Lunagram/Sources/LunagramCropEditor.swift
++++ b/submodules/Lunagram/Sources/LunagramCropEditor.swift
+@@ -229,21 +229,17 @@ private final class LunagramCropEditorViewController: UIViewController {
+     }
+ 
+     private func applyDim() {
+-        let index: Int
+-        let alphas: [CGFloat]
++        // Все затемнения — ползунки в процентах, как на ПК.
++        let percent: Int
+         switch self.kind {
+         case .banner:
+-            index = LunagramSettings.profileBannerDim
+-            alphas = [0.0, 0.3, 0.55, 0.75]
++            percent = LunagramSettings.profileBannerDimPercent
+         case .wallpaper:
+-            index = LunagramSettings.liveWallpaperDim
+-            alphas = [0.0, 0.25, 0.5]
++            percent = LunagramSettings.liveWallpaperDimPercent
+         case .profileBackground:
+-            // У фона профиля затемнение — ползунок в процентах, не ступени.
+-            self.dimView.alpha = CGFloat(LunagramSettings.profileBackgroundDim) / 100.0
+-            return
++            percent = LunagramSettings.profileBackgroundDim
+         }
+-        self.dimView.alpha = alphas[max(0, min(alphas.count - 1, index))]
++        self.dimView.alpha = CGFloat(percent) / 100.0
+     }
+ 
+     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+diff --git a/submodules/Lunagram/Sources/LunagramDialogCard.swift b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+index 7f7b2c35..18f1174f 100644
+--- a/submodules/Lunagram/Sources/LunagramDialogCard.swift
++++ b/submodules/Lunagram/Sources/LunagramDialogCard.swift
+@@ -15,9 +15,6 @@ public final class LunagramDialogCardView: UIView {
+         return LunagramSettings.dialogCardsEnabled
+     }
+ 
+-    /// Плотность подложки по номеру из настроек.
+-    private static let dimAlphas: [CGFloat] = [0.4, 0.55, 0.7]
+-
+     /// Готовые размытые аватарки. Размывать дорого, а список при прокрутке
+     /// показывает одни и те же переписки снова и снова.
+     private static let cache: NSCache<NSString, UIImage> = {
+@@ -212,8 +209,8 @@ public final class LunagramDialogCardView: UIView {
+     }
+ 
+     private func applyDim() {
+-        let index = max(0, min(LunagramDialogCardView.dimAlphas.count - 1, LunagramSettings.dialogCardsDim))
+-        var alpha = LunagramDialogCardView.dimAlphas[index]
++        // Плотность подложки — ползунок в процентах, как на ПК.
++        var alpha = CGFloat(LunagramSettings.dialogCardsDimPercent) / 100.0
+         if self.isMuted && LunagramSettings.dialogCardsFadeMuted {
+             // Приглушённые гасим сильнее — насколько, задаёт ползунок.
+             alpha += (1.0 - alpha) * CGFloat(LunagramSettings.dialogCardsMuteOpacity) / 100.0
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBanner.swift b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+index 153385db..515d684b 100644
+--- a/submodules/Lunagram/Sources/LunagramProfileBanner.swift
++++ b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+@@ -45,9 +45,6 @@ public final class LunagramProfileBannerView: UIView {
+         banner.layoutContent()
+     }
+ 
+-    /// Затемнение по номеру из настроек.
+-    private static let dimAlphas: [CGFloat] = [0.0, 0.3, 0.55, 0.75]
+-
+     private let contentView = UIView()
+     private let imageView = UIImageView()
+     private var playerView: LunagramBannerPlayerView?
+@@ -166,8 +163,8 @@ public final class LunagramProfileBannerView: UIView {
+             self.dimView.alpha = preset.dim
+             self.blurView.alpha = 0.0
+         } else {
+-            let dim = max(0, min(LunagramProfileBannerView.dimAlphas.count - 1, LunagramSettings.profileBannerDim))
+-            self.dimView.alpha = LunagramProfileBannerView.dimAlphas[dim]
++            // Затемнение — ползунок в процентах, как на ПК.
++            self.dimView.alpha = CGFloat(LunagramSettings.profileBannerDimPercent) / 100.0
+             // Размытие своё картинки/видео — нарисованным пресетам не нужно.
+             self.blurView.alpha = CGFloat(LunagramSettings.profileBannerBlur) / 100.0
+         }
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 93576319..85252f90 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -28,6 +28,10 @@ public final class LunagramSettings {
+         static let dialogCardsStrokeWidth = "lunagram.dialogCards.strokeWidth"
+         static let liveWallpaperEnabled = "lunagram.liveWallpaper.enabled"
+         static let liveWallpaperDim = "lunagram.liveWallpaper.dim"
++        // Затемнения в процентах — ползунками, как на ПК (раньше ступени).
++        static let liveWallpaperDimPercent = "lunagram.liveWallpaper.dimPercent"
++        static let profileBannerDimPercent = "lunagram.banner.dimPercent"
++        static let dialogCardsDimPercent = "lunagram.dialogCards.dimPercent"
+         static let liveWallpaperFile = "lunagram.liveWallpaper.file"
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
+@@ -158,8 +162,9 @@ public final class LunagramSettings {
+ 
+     /// Как быстро частицы крутятся, 0…200 % от обычного. Ноль — не крутятся.
+     public static var particlesRotation: Int {
+-        get { return clamped(Key.particlesRotation, 0, 200, 100) }
+-        set { setClamped(newValue, Key.particlesRotation, 0, 200) }
++        // До 300 %: на ПК есть «3x».
++        get { return clamped(Key.particlesRotation, 0, 300, 100) }
++        set { setClamped(newValue, Key.particlesRotation, 0, 300) }
+     }
+ 
+     // MARK: Ghost
+@@ -630,6 +635,50 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Затемнение живых обоев в процентах — ползунком, как на ПК. Пока новый
++    /// ключ не записан, берём прежнюю ступень: у кого было «слегка», тот и
++    /// после обновления увидит те же 25 %.
++    public static var liveWallpaperDimPercent: Int {
++        get {
++            if defaults.object(forKey: Key.liveWallpaperDimPercent) != nil {
++                return max(0, min(100, defaults.integer(forKey: Key.liveWallpaperDimPercent)))
++            }
++            return [0, 25, 50][max(0, min(2, liveWallpaperDim))]
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.liveWallpaperDimPercent)
++            changed()
++        }
++    }
++
++    /// Затемнение своего баннера в процентах — как ползунок на ПК.
++    public static var profileBannerDimPercent: Int {
++        get {
++            if defaults.object(forKey: Key.profileBannerDimPercent) != nil {
++                return max(0, min(100, defaults.integer(forKey: Key.profileBannerDimPercent)))
++            }
++            return [0, 30, 55, 75][max(0, min(3, profileBannerDim))]
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.profileBannerDimPercent)
++            changed()
++        }
++    }
++
++    /// Затемнение фона плиток в процентах — как ползунок на ПК.
++    public static var dialogCardsDimPercent: Int {
++        get {
++            if defaults.object(forKey: Key.dialogCardsDimPercent) != nil {
++                return max(0, min(100, defaults.integer(forKey: Key.dialogCardsDimPercent)))
++            }
++            return [40, 55, 70][max(0, min(2, dialogCardsDim))]
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.dialogCardsDimPercent)
++            changed()
++        }
++    }
++
+     /// Обои не только в переписке, но и за списком переписок — как на ПК.
+     public static var wallpaperEverywhere: Bool {
+         get {
+@@ -711,6 +760,16 @@ public final class LunagramSettings {
+         store(name, forKey: Key.liveWallpaperFile, in: folder)
+     }
+ 
++    /// «Убрать обои», как на ПК: ролик удаляется, и обои становятся обычными.
++    public static func clearLiveWallpaper() {
++        if let folder = try? lunagramFolder(), let name = defaults.string(forKey: Key.liveWallpaperFile) {
++            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
++        }
++        defaults.removeObject(forKey: Key.liveWallpaperFile)
++        defaults.set(false, forKey: Key.liveWallpaperEnabled)
++        changed()
++    }
++
+     // MARK: Баннер профиля
+ 
+     /// Фото или ролик в шапке своего профиля.
+diff --git a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+index 431cd778..c079c9fa 100644
+--- a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
++++ b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+@@ -190,15 +190,7 @@ public final class LunagramVideoWallpaperLayer: CALayer {
+     }
+ 
+     public func applyDim() {
+-        let opacity: Float
+-        switch LunagramSettings.liveWallpaperDim {
+-        case 0:
+-            opacity = 0.0
+-        case 2:
+-            opacity = 0.5
+-        default:
+-            opacity = 0.25
+-        }
+-        self.dimLayer?.opacity = opacity
++        // Затемнение — ползунок в процентах, как на ПК.
++        self.dimLayer?.opacity = Float(LunagramSettings.liveWallpaperDimPercent) / 100.0
+     }
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 2e05accb..4b8b3974 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -371,11 +371,11 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+         switch kind {
+         case .banner:
+             url = LunagramSettings.profileBannerURL
+-            dimAlpha = [0.0, 0.3, 0.55, 0.75][max(0, min(3, LunagramSettings.profileBannerDim))]
++            dimAlpha = CGFloat(LunagramSettings.profileBannerDimPercent) / 100.0
+             blurAlpha = CGFloat(LunagramSettings.profileBannerBlur) / 100.0
+         default:
+             url = LunagramSettings.liveWallpaperURL
+-            dimAlpha = [0.0, 0.25, 0.5][max(0, min(2, LunagramSettings.liveWallpaperDim))]
++            dimAlpha = CGFloat(LunagramSettings.liveWallpaperDimPercent) / 100.0
+             blurAlpha = 0.0
+         }
+         dimView.alpha = dimAlpha
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 4b9a3e35..6b390623 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -529,6 +529,14 @@ private enum LunagramRow: Equatable {
+     // Строка со значением справа, как на ПК: что открыть, название,
+     // значение, значок. Нажатие открывает выбор.
+     case value(Int32, String, String, String?)
++    // Строка-действие со значком, без стрелки: номер (как у выбора),
++    // название, значок.
++    case action(Int32, String, String?)
++    // Живой образец: вид и слепок настроек — сменился, значит перерисовать.
++    case preview(LunagramPreviewKind, Int)
++    // Ползунок, как на ПК — без числа справа: номер, название, значение,
++    // от, до, шаг.
++    case slider(Int32, String, Int, Int, Int, Int)
+     case info(String)
+ }
+ 
+@@ -744,11 +752,11 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         case .avatarFrame:
+             return "Рамка вокруг аватарки"
+         case .liveWallpaper:
+-            return "Живые обои"
++            return "Обои"
+         case .dialogCards:
+-            return "Плитки в списке"
++            return "Список переписок"
+         case .particles:
+-            return "Частицы в переписке"
++            return "Частицы"
+         case .font:
+             return "Шрифт и надписи"
+         }
+@@ -1158,9 +1166,23 @@ private struct LunagramMediaState: Equatable {
+     var cardsStrokeWidth: Int
+     var particlesOpacity: Int
+     var particlesRotation: Int
++    // Затемнения в процентах и приближение обоев — ползунки, как на ПК.
++    var wallpaperDimPercent: Int = 0
++    var wallpaperZoom: Int = 100
++    var cardsDimPercent: Int = 0
++    var bannerDimPercent: Int = 0
+ 
+     static func current() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim, hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, sendWithoutSound: LunagramSettings.sendWithoutSound, sendFontStyle: LunagramSettings.sendFontStyle, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur, listWallpaperDim: LunagramSettings.listWallpaperDim, listWallpaperBlur: LunagramSettings.listWallpaperBlur, listTextMode: LunagramSettings.listTextMode, listTextColor: LunagramSettings.listTextColor, cardsBlur: LunagramSettings.dialogCardsBlur, cardsStrokeWidth: LunagramSettings.dialogCardsStrokeWidth, particlesOpacity: LunagramSettings.particlesOpacity, particlesRotation: LunagramSettings.particlesRotation)
++        var state = LunagramMediaState.legacyCurrent()
++        state.wallpaperDimPercent = LunagramSettings.liveWallpaperDimPercent
++        state.wallpaperZoom = LunagramSettings.wallpaperCrop.zoom
++        state.cardsDimPercent = LunagramSettings.dialogCardsDimPercent
++        state.bannerDimPercent = LunagramSettings.profileBannerDimPercent
++        return state
++    }
++
++    private static func legacyCurrent() -> LunagramMediaState {
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim,hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, sendWithoutSound: LunagramSettings.sendWithoutSound, sendFontStyle: LunagramSettings.sendFontStyle, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur, listWallpaperDim: LunagramSettings.listWallpaperDim, listWallpaperBlur: LunagramSettings.listWallpaperBlur, listTextMode: LunagramSettings.listTextMode, listTextColor: LunagramSettings.listTextColor, cardsBlur: LunagramSettings.dialogCardsBlur, cardsStrokeWidth: LunagramSettings.dialogCardsStrokeWidth, particlesOpacity: LunagramSettings.particlesOpacity, particlesRotation: LunagramSettings.particlesRotation)
+     }
+ }
+ 
+@@ -1295,15 +1317,14 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         ]
+     case .bannerPhoto:
+         var entries: [LunagramSettingsEntry] = [
+-            .preview(.bannerPhoto, .banner, media.bannerDim &* 10_000 &+ media.bannerBlur &* 10 &+ (media.hasBanner ? 1 : 0)),
++            .preview(.bannerPhoto, .banner, media.bannerDimPercent &* 10_000 &+ media.bannerBlur &* 10 &+ (media.hasBanner ? 1 : 0)),
+             .header(.bannerPhoto, 0, "СВОЁ ФОТО ИЛИ ВИДЕО"),
+             .action(.bannerPhoto, 0, media.hasBanner ? "Заменить фото или видео" : "Выбрать фото или видео")
+         ]
+         if media.hasBanner {
+             entries.append(.editor(.bannerPhoto, "Подогнать кадр"))
+             // Затемнение и размытие — ползунками, как на ПК.
+-            let bannerDim = max(0, min(lunagramBannerDimTitles.count - 1, media.bannerDim))
+-            entries.append(.slider(.bannerPhoto, 10, "Затемнение", bannerDim, 0, lunagramBannerDimTitles.count - 1, 1, lunagramBannerDimTitles[bannerDim]))
++            entries.append(.slider(.bannerPhoto, 10, "Затемнение", media.bannerDimPercent, 0, 100, 5, "\(media.bannerDimPercent)%"))
+             entries.append(.slider(.bannerPhoto, 11, "Размытие", media.bannerBlur, 0, 100, 10, "\(media.bannerBlur)%"))
+         }
+         entries.append(.info(.bannerPhoto, 0, media.hasBanner
+@@ -1396,7 +1417,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return entries
+     case .liveWallpaper:
+         var entries: [LunagramSettingsEntry] = [
+-            .preview(.liveWallpaper, .wallpaper, media.wallpaperDim &* 10 &+ (media.hasWallpaper ? 1 : 0)),
++            .preview(.liveWallpaper, .wallpaper, media.wallpaperDimPercent &* 10 &+ (media.hasWallpaper ? 1 : 0)),
+             .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+             tgl(.liveWallpaper, .liveWallpaper),
+             tgl(.liveWallpaper, .wallpaperEverywhere),
+@@ -1405,8 +1426,7 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         if media.hasWallpaper {
+             entries.append(.editor(.liveWallpaper, "Подогнать кадр"))
+             // Затемнение — ползунком, как на ПК.
+-            let wallDim = max(0, min(lunagramWallpaperDimTitles.count - 1, media.wallpaperDim))
+-            entries.append(.slider(.liveWallpaper, 20, "Затемнение", wallDim, 0, lunagramWallpaperDimTitles.count - 1, 1, lunagramWallpaperDimTitles[wallDim]))
++            entries.append(.slider(.liveWallpaper, 20, "Затемнение", media.wallpaperDimPercent, 0, 100, 5, "\(media.wallpaperDimPercent)%"))
+         }
+         if value(.wallpaperEverywhere) {
+             entries.append(.slider(.liveWallpaper, 21, "Затемнение за списком", media.listWallpaperDim, 0, 100, 10, "\(media.listWallpaperDim)%"))
+@@ -1419,14 +1439,13 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+     case .dialogCards:
+         var entries: [LunagramSettingsEntry] = [
+             // Образец сверху: видно сразу, что делают ползунки.
+-            .preview(.dialogCards, .dialogCard, media.cardsDim &* 1_000_000 &+ media.cardsRadius &* 10_000 &+ media.cardsStroke &* 100 &+ media.cardsMuteOpacity &+ media.cardsBlur &* 100_000_000 &+ media.cardsStrokeWidth &* 1_000_000_000_000),
++            .preview(.dialogCards, .dialogCard, media.cardsDimPercent &* 1_000_000 &+ media.cardsRadius &* 10_000 &+ media.cardsStroke &* 100 &+ media.cardsMuteOpacity &+ media.cardsBlur &* 100_000_000 &+ media.cardsStrokeWidth &* 1_000_000_000_000),
+             .header(.dialogCards, 0, "ПЛИТКИ В СПИСКЕ ПЕРЕПИСОК"),
+             tgl(.dialogCards, .dialogCards),
+             tgl(.dialogCards, .dialogCardsFadeMuted)
+         ]
+         // Ползунки, как на ПК. Подпись справа — процент или слово.
+-        let cardsDim = max(0, min(lunagramCardsDimTitles.count - 1, media.cardsDim))
+-        entries.append(.slider(.dialogCards, 0, "Затемнение фона", cardsDim, 0, lunagramCardsDimTitles.count - 1, 1, lunagramCardsDimTitles[cardsDim]))
++        entries.append(.slider(.dialogCards, 0, "Затемнение фона", media.cardsDimPercent, 0, 100, 5, "\(media.cardsDimPercent)%"))
+         entries.append(.slider(.dialogCards, 1, "Размытие фона", media.cardsBlur, 0, 100, 10, "\(media.cardsBlur)%"))
+         entries.append(.slider(.dialogCards, 2, "Скругление плитки", media.cardsRadius, 0, 100, 10, "\(media.cardsRadius)%"))
+         entries.append(.slider(.dialogCards, 3, "Заметность обводки", media.cardsStroke, 0, 100, 10, "\(media.cardsStroke)%"))
+@@ -1790,7 +1809,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         // Номера ползунков раздела «Список переписок».
+         switch id {
+         case 0:
+-            LunagramSettings.dialogCardsDim = value
++            // Затемнения теперь в процентах — как ползунки на ПК.
++            LunagramSettings.dialogCardsDimPercent = value
+         case 2:
+             LunagramSettings.dialogCardsRadius = value
+         case 3:
+@@ -1806,11 +1826,16 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case 31:
+             LunagramSettings.particlesRotation = value
+         case 10:
+-            LunagramSettings.profileBannerDim = value
++            LunagramSettings.profileBannerDimPercent = value
+         case 11:
+             LunagramSettings.profileBannerBlur = value
+         case 20:
+-            LunagramSettings.liveWallpaperDim = value
++            LunagramSettings.liveWallpaperDimPercent = value
++        case 23:
++            // Приближение обоев — тот же кадр, что в окне подгонки.
++            var crop = LunagramSettings.wallpaperCrop
++            crop.zoom = value
++            LunagramSettings.wallpaperCrop = crop
+         case 21:
+             LunagramSettings.listWallpaperDim = value
+         case 22:
+@@ -1920,16 +1945,79 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             }))
+         case .fontAndWording:
+             shared.push?(lunagramGroupController(context: context, group: .font, shared: shared))
++        case .listTextMode:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Вид текста поверх обоев", options: lunagramListTextModeTitles, selected: LunagramSettings.listTextMode, info: "Как писать имена и отрывки в списке переписок поверх обоев. Подложка — тёмная плашка под текстом, свечение — ореол вокруг букв. Переливающийся цвет обходит радугу за десять секунд.", select: { index in
++                LunagramSettings.listTextMode = index
++                refreshMedia()
++            }))
++        case .particlesKind:
++            let kinds = LunagramParticleKind.allCases
++            let enabled = LunagramSettings.particlesEnabled
++            let selected = enabled ? ((kinds.firstIndex(where: { $0.rawValue == LunagramSettings.particlesKind }) ?? 0) + 1) : 0
++            shared.push?(lunagramChoiceScreen(context: context, title: "Что падает в чате", options: ["Нет"] + kinds.map { $0.title }, selected: selected, info: nil, select: { index in
++                // «Нет» выключает частицы, остальное — включает нужный вид.
++                if index == 0 {
++                    LunagramToggle.particles.set(false)
++                    shared.values[.particles] = false
++                } else {
++                    LunagramSettings.particlesKind = kinds[index - 1].rawValue
++                    LunagramToggle.particles.set(true)
++                    shared.values[.particles] = true
++                }
++                shared.valuesPromise.set(shared.values)
++                refreshMedia()
++            }))
++        case .particlesCount:
++            lunagramPushSteps(shared: shared, context: context, title: "Сколько частиц", steps: lunagramParticlesCountSteps, current: LunagramSettings.particlesDensity, apply: { LunagramSettings.particlesDensity = $0 }, refresh: refreshMedia)
++        case .particlesOpacity:
++            lunagramPushSteps(shared: shared, context: context, title: "Насколько заметны", steps: lunagramParticlesOpacitySteps, current: LunagramSettings.particlesOpacity, apply: { LunagramSettings.particlesOpacity = $0 }, refresh: refreshMedia)
++        case .particlesSpeed:
++            lunagramPushSteps(shared: shared, context: context, title: "Как быстро падают", steps: lunagramParticlesSpeedSteps, current: LunagramSettings.particlesSpeed, apply: { LunagramSettings.particlesSpeed = $0 }, refresh: refreshMedia)
++        case .particlesRotation:
++            lunagramPushSteps(shared: shared, context: context, title: "Как быстро крутятся", steps: lunagramParticlesRotationSteps, current: LunagramSettings.particlesRotation, apply: { LunagramSettings.particlesRotation = $0 }, refresh: refreshMedia)
++        case .pickWallpaper:
++            shared.arguments?.pick(.liveWallpaper)
++        case .removeWallpaper:
++            LunagramSettings.clearLiveWallpaper()
++            shared.values[.liveWallpaper] = false
++            shared.valuesPromise.set(shared.values)
++            refreshMedia()
++        case .listTextColor:
++            // Свой цвет текста — это вид «Свой цвет»: иначе цвет не применится.
++            LunagramSettings.listTextMode = 3
++            refreshMedia()
++            shared.arguments?.pick(.listText)
++        case .editWallpaperCrop:
++            shared.arguments?.openEditor(.liveWallpaper)
+         }
+     })
+ }
+ 
+-/// Что открывает строка со значением справа.
++/// Выбор ступени, как окошко на ПК: список подписей, отмечена ближайшая.
++private func lunagramPushSteps(shared: LunagramSharedState, context: AccountContext, title: String, steps: [(Int, String)], current: Int, apply: @escaping (Int) -> Void, refresh: @escaping () -> Void) {
++    shared.push?(lunagramChoiceScreen(context: context, title: title, options: steps.map { $0.1 }, selected: lunagramNearestStep(current, steps), info: nil, select: { index in
++        apply(steps[max(0, min(steps.count - 1, index))].0)
++        refresh()
++    }))
++}
++
++/// Что открывает строка со значением справа или строка-действие.
+ private enum LunagramChoice: Int32 {
+     case sendWithoutSound = 1
+     case sendFont = 2
+     case deviceMask = 3
+     case fontAndWording = 4
++    case listTextMode = 5
++    case particlesKind = 6
++    case particlesCount = 7
++    case particlesOpacity = 8
++    case particlesSpeed = 9
++    case particlesRotation = 10
++    // Действия без выбора.
++    case pickWallpaper = 20
++    case removeWallpaper = 21
++    case listTextColor = 22
++    case editWallpaperCrop = 23
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2044,11 +2132,96 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+         return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, label: value, sectionId: sectionId, style: .blocks, action: {
+             arguments.openChoice(id)
+         })
++    case let .action(id, title, iconName):
++        return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, label: "", sectionId: sectionId, style: .blocks, disclosureStyle: .none, action: {
++            arguments.openChoice(id)
++        })
++    case let .preview(kind, token):
++        return LunagramPreviewItem(presentationData: presentationData, kind: kind, token: token, sectionId: sectionId)
++    case let .slider(id, title, value, minValue, maxValue, step):
++        return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in "" }, sectionId: sectionId, updated: { newValue in
++            arguments.setSlider(id, newValue)
++        })
+     case let .info(text):
+         return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: sectionId)
+     }
+ }
+ 
++/// Ступени для строк со значением, как на ПК: число для настроек и подпись.
++private let lunagramParticlesCountSteps: [(Int, String)] = [(12, "30"), (24, "60"), (40, "100"), (60, "150"), (80, "200"), (100, "300")]
++private let lunagramParticlesOpacitySteps: [(Int, String)] = [(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")]
++private let lunagramParticlesSpeedSteps: [(Int, String)] = [(50, "0,5x"), (100, "1x"), (150, "1,5x"), (200, "2x"), (300, "3x")]
++private let lunagramParticlesRotationSteps: [(Int, String)] = [(20, "Почти не крутятся"), (50, "0,5x"), (100, "1x"), (200, "2x"), (300, "3x")]
++
++/// Какая ступень ближе к числу из настроек.
++private func lunagramNearestStep(_ value: Int, _ steps: [(Int, String)]) -> Int {
++    var best = 0
++    for (index, step) in steps.enumerated() where abs(step.0 - value) < abs(steps[best].0 - value) {
++        best = index
++    }
++    return best
++}
++
++/// Экран «Обои» — как на ПК: образец, ролик, охват на всё окно, ползунки.
++private func lunagramWallpaperEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    func value(_ toggle: LunagramToggle) -> Bool {
++        return values[toggle] ?? toggle.value
++    }
++    var rows = LunagramRowsBuilder()
++    rows.header("Живые обои")
++    rows.row(.preview(.wallpaper, media.wallpaperDimPercent &* 10 &+ (media.hasWallpaper ? 1 : 0) &+ media.wallpaperZoom &* 10_000))
++    rows.row(.action(LunagramChoice.pickWallpaper.rawValue, "Видео фоном переписки", "photo"))
++    rows.row(.action(LunagramChoice.editWallpaperCrop.rawValue, "Подогнать кадр", "crop"))
++    rows.row(.action(LunagramChoice.removeWallpaper.rawValue, "Убрать обои", "trash"))
++    rows.row(.toggle(.wallpaperEverywhere, value(.wallpaperEverywhere), "На всё окно, а не только на переписку", nil))
++    rows.row(.slider(21, "Затемнение списка переписок", media.listWallpaperDim, 0, 100, 5))
++    rows.row(.slider(22, "Размытие под списком", media.listWallpaperBlur, 0, 100, 5))
++    let mode = max(0, min(lunagramListTextModeTitles.count - 1, media.listTextMode))
++    rows.row(.value(LunagramChoice.listTextMode.rawValue, "Вид текста поверх обоев", lunagramListTextModeTitles[mode], "a.square"))
++    rows.row(.action(LunagramChoice.listTextColor.rawValue, "Цвет текста", "paintpalette,paintbrush"))
++    rows.row(.slider(23, "Приближение", media.wallpaperZoom, 100, 300, 5))
++    rows.row(.slider(20, "Затемнение обоев", media.wallpaperDimPercent, 0, 100, 5))
++    rows.info("Видео крутится по кругу за сообщениями. С включённым охватом на всё окно те же обои лежат и за списком переписок — картинка выходит единой. Затемнение и размытие списка идут сверх общего: без них имена на пёстром видео не прочитать.")
++    return rows.entries
++}
++
++/// Экран «Список переписок» — как на ПК: образец, плитки и ползунки.
++private func lunagramCardsEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    func value(_ toggle: LunagramToggle) -> Bool {
++        return values[toggle] ?? toggle.value
++    }
++    var rows = LunagramRowsBuilder()
++    rows.header("Список переписок")
++    rows.row(.preview(.dialogCard, media.cardsDimPercent &* 1_000_000 &+ media.cardsRadius &* 10_000 &+ media.cardsStroke &* 100 &+ media.cardsMuteOpacity &+ media.cardsBlur &* 100_000_000 &+ media.cardsStrokeWidth &* 1_000_000_000_000))
++    rows.row(.toggle(.dialogCards, value(.dialogCards), "Переписки плитками", nil))
++    rows.row(.slider(1, "Размытие фона", media.cardsBlur, 0, 100, 5))
++    rows.row(.slider(0, "Затемнение фона", media.cardsDimPercent, 0, 100, 5))
++    rows.row(.slider(2, "Скругление плитки", media.cardsRadius, 0, 100, 5))
++    rows.row(.slider(5, "Толщина обводки", media.cardsStrokeWidth, 1, 3, 1))
++    rows.row(.slider(3, "Заметность обводки", media.cardsStroke, 0, 100, 5))
++    rows.row(.toggle(.dialogCardsFadeMuted, value(.dialogCardsFadeMuted), "Гасить приглушённые переписки", nil))
++    rows.row(.slider(6, "Яркость приглушённых", media.cardsMuteOpacity, 0, 100, 5))
++    return rows.entries
++}
++
++/// Экран «Частицы» — строки со значением, как на ПК. Живой образец сверху
++/// хозяин попросил оставить: на ПК его нет, а на айфоне он нравится.
++private func lunagramParticlesEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    let enabled = values[.particles] ?? LunagramToggle.particles.value
++    var rows = LunagramRowsBuilder()
++    rows.row(.preview(.particles, media.particlesKind &* 10_000 &+ media.particlesDensity &* 100 &+ media.particlesSpeed % 100 &+ media.particlesOpacity &* 1_000_000 &+ media.particlesRotation &* 1_000_000_000 &+ (enabled ? 7 : 0)))
++    rows.header("Частицы в чате")
++    let kinds = LunagramParticleKind.allCases
++    let kindTitle = enabled ? (kinds.first(where: { $0.rawValue == media.particlesKind })?.title ?? "Нет") : "Нет"
++    rows.row(.value(LunagramChoice.particlesKind.rawValue, "Вид частиц", kindTitle, "snowflake"))
++    rows.row(.value(LunagramChoice.particlesCount.rawValue, "Количество", lunagramParticlesCountSteps[lunagramNearestStep(media.particlesDensity, lunagramParticlesCountSteps)].1, "square.grid.3x3"))
++    rows.row(.value(LunagramChoice.particlesOpacity.rawValue, "Прозрачность", lunagramParticlesOpacitySteps[lunagramNearestStep(media.particlesOpacity, lunagramParticlesOpacitySteps)].1, "circle.lefthalf.filled"))
++    rows.row(.value(LunagramChoice.particlesSpeed.rawValue, "Скорость падения", lunagramParticlesSpeedSteps[lunagramNearestStep(media.particlesSpeed, lunagramParticlesSpeedSteps)].1, "arrow.down"))
++    rows.row(.value(LunagramChoice.particlesRotation.rawValue, "Скорость вращения", lunagramParticlesRotationSteps[lunagramNearestStep(media.particlesRotation, lunagramParticlesRotationSteps)].1, "arrow.clockwise"))
++    rows.info("Частицы падают в ленте переписки, поверх обоев и под сообщениями. На список чатов и настройки они не выходят — там они мешали бы читать.")
++    return rows.entries
++}
++
+ /// Экран «Функции» — один, как на ПК. Режим призрака одним разделом вместе
+ /// с сохранением удалённых: для хозяина это одно целое, и на ПК теперь так
+ /// же. Под каждой строкой — подпись, как на ПК. Внизу — то, чего на ПК нет.
+@@ -2137,7 +2310,10 @@ private func lunagramCategoryController(context: AccountContext, category: Lunag
+     let signal = context.sharedContext.presentationData
+     |> deliverOnMainQueue
+     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+-        let entries = category.groups.map { LunagramSettingsEntry.menuItem($0) }
++        var entries = category.groups.map { LunagramSettingsEntry.menuItem($0) }
++        if category == .appearance {
++            entries.append(.info(.menu, 0, "Оформление профиля — баннер, рамка, фон, имя и статус — живёт в «Изменить профиль»: там его видно сразу на себе."))
++        }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
+         return (controllerState, (listState, arguments))
+@@ -2153,8 +2329,18 @@ private func lunagramGroupController(context: AccountContext, group: LunagramSet
+     |> deliverOnMainQueue
+     |> map { presentationData, currentValues, media, ghostExpanded, expandedToggles -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         var entries: [LunagramSettingsEntry] = []
+-        for section in group.sections {
+-            entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
++        // Страницы «Оформления» собраны по образцу ПК.
++        switch group {
++        case .liveWallpaper:
++            entries = lunagramWallpaperEntries(values: currentValues, media: media)
++        case .dialogCards:
++            entries = lunagramCardsEntries(values: currentValues, media: media)
++        case .particles:
++            entries = lunagramParticlesEntries(values: currentValues, media: media)
++        default:
++            for section in group.sections {
++                entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
++            }
+         }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(group.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
