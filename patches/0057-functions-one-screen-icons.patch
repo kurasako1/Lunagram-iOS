@@ -1,0 +1,583 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 71a5d4f8..4b9a3e35 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -400,6 +400,179 @@ private enum LunagramToggle: Int32 {
+     }
+ }
+ 
++extension LunagramToggle {
++    /// Контурный значок строки, как на ПК, — у каждой свой, без повторов.
++    /// Имя символа из набора самого айфона; через запятую — запасной, если
++    /// на этой версии iOS первого ещё нет.
++    var iconName: String? {
++        switch self {
++        case .ghostDontRead:
++            return "envelope.open"
++        case .ghostDontType:
++            return "keyboard"
++        case .ghostStayOffline:
++            return "wifi.slash"
++        case .ghostDontViewStories:
++            return "eye.slash"
++        case .ghostAutoOffline:
++            return "moon.zzz"
++        case .liveWallpaper:
++            return "play.rectangle"
++        case .particles:
++            return "snowflake"
++        case .profileBanner:
++            return "photo.on.rectangle"
++        case .dialogCards:
++            return "rectangle.grid.1x2"
++        case .dialogCardsFadeMuted:
++            return "speaker.slash"
++        case .hideOwnPhone:
++            return "phone"
++        case .avatarFrame:
++            return "circle.dashed"
++        case .keepDeleted:
++            return "trash"
++        case .keepEditHistory:
++            return "clock.arrow.circlepath"
++        case .showRoundSource:
++            return "info.circle"
++        case .roundFromVideo:
++            return "video.circle"
++        case .showPeerId:
++            return "number"
++        case .avatarFrameSparkle:
++            return "sparkles"
++        case .saveForBots:
++            return "cpu"
++        case .disableAds:
++            return "nosign"
++        case .showMessageSeconds:
++            return "stopwatch"
++        case .suggestGhostForStories:
++            return "questionmark.circle"
++        case .streamerMode:
++            return "dot.radiowaves.left.and.right"
++        case .markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll:
++            // Показываются под стрелкой, своего значка у них нет.
++            return nil
++        case .useScheduledSend:
++            return "clock"
++        case .showMessageShot:
++            return "eye"
++        case .wallpaperEverywhere:
++            return "rectangle.expand.vertical,arrow.up.left.and.arrow.down.right"
++        case .showDeletedGifts:
++            return "gift"
++        case .giftTheSame:
++            return "arrow.2.squarepath"
++        case .sendSoldOutGifts:
++            return "star"
++        case .replyToDeleted:
++            return "arrowshape.turn.up.left"
++        case .showMutedDeleted:
++            return "square.grid.2x2"
++        }
++    }
++}
++
++/// Контурные значки, как на ПК: символ из набора самого айфона, серого
++/// цвета, без цветного квадрата. Клетка 30×30 — как у значков Telegram,
++/// чтобы названия строк стояли на одной линии с соседними экранами.
++private final class LunagramLineIcons {
++    static let shared = LunagramLineIcons()
++
++    private var cache: [String: UIImage] = [:]
++
++    func image(_ names: String?, color: UIColor) -> UIImage? {
++        guard let names = names else {
++            return nil
++        }
++        let key = "\(names)|\(color.argb)"
++        if let cached = self.cache[key] {
++            return cached
++        }
++        let configuration = UIImage.SymbolConfiguration(pointSize: 19.0, weight: .regular)
++        var found: UIImage?
++        for name in names.split(separator: ",") {
++            if let symbol = UIImage(systemName: String(name), withConfiguration: configuration) {
++                found = symbol
++                break
++            }
++        }
++        guard let symbol = found?.withTintColor(color, renderingMode: .alwaysOriginal) else {
++            return nil
++        }
++        let size = CGSize(width: 30.0, height: 30.0)
++        let image = UIGraphicsImageRenderer(size: size).image { _ in
++            let symbolSize = symbol.size
++            symbol.draw(in: CGRect(x: floor((size.width - symbolSize.width) / 2.0), y: floor((size.height - symbolSize.height) / 2.0), width: symbolSize.width, height: symbolSize.height))
++        }
++        self.cache[key] = image
++        return image
++    }
++}
++
++private func lunagramLineIcon(_ names: String?, _ presentationData: ItemListPresentationData) -> UIImage? {
++    return LunagramLineIcons.shared.image(names, color: presentationData.theme.list.itemSecondaryTextColor)
++}
++
++/// Строка экрана, собранного по образцу ПК: заголовок раздела, строка,
++/// подпись под ней. Номер блока и порядок раздаёт LunagramRowsBuilder.
++private enum LunagramRow: Equatable {
++    case header(String)
++    // Переключатель: какой, включён ли, название, значок.
++    case toggle(LunagramToggle, Bool, String, String?)
++    // «Режим призрака N/5»: раскрыт ли и пять переключателей под стрелкой.
++    case ghost(Bool, [Bool])
++    // «Читать при действиях»: раскрыт ли и три переключателя под стрелкой.
++    case read(Bool, [Bool])
++    // Строка со значением справа, как на ПК: что открыть, название,
++    // значение, значок. Нажатие открывает выбор.
++    case value(Int32, String, String, String?)
++    case info(String)
++}
++
++/// Собирает экран как на ПК: заголовок раздела, строки, под строкой —
++/// подпись. Подпись закрывает свой блок, и следующая строка идёт уже новым
++/// блоком — так подпись встаёт ровно под своей строкой, как на ПК.
++private struct LunagramRowsBuilder {
++    private(set) var entries: [LunagramSettingsEntry] = []
++    private var block: Int32 = 0
++    private var order: Int32 = 0
++    private var closed = false
++
++    mutating func header(_ text: String) {
++        if !self.entries.isEmpty {
++            self.block += 1
++        }
++        self.closed = false
++        self.append(.header(text))
++    }
++
++    mutating func row(_ row: LunagramRow) {
++        if self.closed {
++            self.block += 1
++            self.closed = false
++        }
++        self.append(row)
++    }
++
++    mutating func info(_ text: String) {
++        self.row(.info(text))
++        self.closed = true
++    }
++
++    /// Разрыв без подписи: следующая строка — новым блоком.
++    mutating func split() {
++        self.closed = true
++    }
++
++    private mutating func append(_ row: LunagramRow) {
++        self.entries.append(.row(1000 + self.block, self.order, row))
++        self.order += 1
++    }
++}
++
+ /// Четыре выключателя Ghost — мастер-переключатель включает и выключает
+ /// разом, а под стрелкой они настраиваются по отдельности.
+ private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDontType, .ghostStayOffline, .ghostDontViewStories, .ghostAutoOffline]
+@@ -449,8 +622,11 @@ private final class LunagramSettingsControllerArguments {
+     let readMaster: (Bool) -> Void
+     let toggleExpand: (LunagramToggle) -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
++    // Строка со значением справа: открыть выбор (номера — см. LunagramChoice).
++    let openChoice: (Int32) -> Void
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void) {
++        self.openChoice = openChoice
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+@@ -513,12 +689,14 @@ private enum LunagramSettingsCategory: Int32, CaseIterable {
+         }
+     }
+ 
+-    var icon: UIImage? {
++    /// Контурный значок, как на ПК: у «Функций» — переключатели, у
++    /// «Оформления» — палитра.
++    var iconName: String {
+         switch self {
+         case .functions:
+-            return PresentationResourcesSettings.security
++            return "switch.2,slider.horizontal.3"
+         case .appearance:
+-            return PresentationResourcesSettings.appearance
++            return "paintpalette,paintbrush"
+         }
+     }
+ 
+@@ -576,30 +754,32 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+         }
+     }
+ 
+-    var icon: UIImage? {
++    /// Контурный значок, как на ПК: Обои — картинка, Список — облачко,
++    /// Частицы — смайлик. У остальных — свои, без повторов.
++    var iconName: String {
+         switch self {
+         case .ghost:
+-            return PresentationResourcesSettings.security
++            return "eye.slash"
+         case .spy:
+-            return PresentationResourcesSettings.savedMessages
++            return "trash"
+         case .messages:
+-            return PresentationResourcesSettings.recentCalls
++            return "bubble.left.and.bubble.right"
+         case .profile:
+-            return PresentationResourcesSettings.myProfile
++            return "person.crop.circle"
+         case .privacy:
+-            return PresentationResourcesSettings.devices
++            return "lock"
+         case .banner:
+-            return PresentationResourcesSettings.appearance
++            return "photo.on.rectangle"
+         case .avatarFrame:
+-            return PresentationResourcesSettings.myProfile
++            return "circle.dashed"
+         case .liveWallpaper:
+-            return PresentationResourcesSettings.appearance
++            return "photo"
+         case .dialogCards:
+-            return PresentationResourcesSettings.chatFolders
++            return "bubble.left"
+         case .particles:
+-            return PresentationResourcesSettings.premium
++            return "face.smiling"
+         case .font:
+-            return PresentationResourcesSettings.language
++            return "textformat.size"
+         }
+     }
+ 
+@@ -655,9 +835,13 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     case editor(LunagramSettingsSection, String)
+     case photoAction(LunagramSettingsSection, Int32, String)
+     case info(LunagramSettingsSection, Int32, String)
++    // Экран по образцу ПК: блок, порядок, сама строка (см. LunagramRowsBuilder).
++    case row(Int32, Int32, LunagramRow)
+ 
+     var section: ItemListSectionId {
+         switch self {
++        case let .row(block, _, _):
++            return block
+         case .categoryItem, .menuItem:
+             return LunagramSettingsSection.menu.rawValue
+         case .ghostRow, .readRow:
+@@ -670,6 +854,10 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     // Порядок строк: по сотне на раздел, внутри — по порядку появления.
+     var stableId: Int32 {
+         switch self {
++        case let .row(_, order, _):
++            // Своя дальняя сотня тысяч: не пересечься с номерами прежних строк,
++            // если такие строки окажутся на одном экране.
++            return 100_000 + order
+         case let .categoryItem(category):
+             return category.rawValue
+         case let .menuItem(group):
+@@ -715,6 +903,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+ 
+     static func ==(lhs: LunagramSettingsEntry, rhs: LunagramSettingsEntry) -> Bool {
+         switch lhs {
++        case let .row(lhsBlock, lhsOrder, lhsRow):
++            if case let .row(rhsBlock, rhsOrder, rhsRow) = rhs, lhsBlock == rhsBlock, lhsOrder == rhsOrder, lhsRow == rhsRow {
++                return true
++            } else {
++                return false
++            }
+         case let .categoryItem(lhsCategory):
+             if case let .categoryItem(rhsCategory) = rhs, lhsCategory == rhsCategory {
+                 return true
+@@ -827,24 +1021,26 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+         let arguments = arguments as! LunagramSettingsControllerArguments
+         switch self {
++        case let .row(_, _, row):
++            return lunagramRowItem(row, presentationData: presentationData, sectionId: self.section, arguments: arguments)
+         case let .categoryItem(category):
+-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: category.icon, title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(category.iconName, presentationData), title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.openCategory(category)
+             })
+         case let .menuItem(group):
+-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: group.icon, title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(group.iconName, presentationData), title: group.title, label: "", sectionId: self.section, style: .blocks, action: {
+                 arguments.openGroup(group)
+             })
+         case let .header(_, _, text):
+             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+         case let .toggle(_, toggle, value):
+-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: toggle.icon, title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(toggle.iconName, presentationData), title: toggle.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             })
+         case let .toggleDesc(_, toggle, value, expanded):
+             // Переключатель справа работает сам; стрелка у названия раскрывает
+             // описание. Под-переключателей нет — вместо них текст.
+-            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: toggle.icon, title: toggle.title, value: value, isExpanded: expanded, subItems: [], expandedText: toggle.descriptionText, sectionId: self.section, style: .blocks, updated: { value in
++            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(toggle.iconName, presentationData), title: toggle.title, value: value, isExpanded: expanded, subItems: [], expandedText: toggle.descriptionText, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.toggle(toggle, value)
+             }, selectAction: {
+                 arguments.toggleExpand(toggle)
+@@ -1651,6 +1847,11 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.present?(c)
+         })
+     }, openCategory: { category in
++        // «Функции» — один экран, как на ПК, без промежуточного списка.
++        if category == .functions {
++            shared.push?(lunagramFunctionsController(context: context, shared: shared))
++            return
++        }
+         shared.push?(lunagramCategoryController(context: context, category: category, shared: shared))
+     }, openGroup: { group in
+         shared.push?(lunagramGroupController(context: context, group: group, shared: shared))
+@@ -1694,9 +1895,241 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 refreshMedia()
+             })
+         }
++    }, openChoice: { id in
++        guard let choice = LunagramChoice(rawValue: id) else {
++            return
++        }
++        // Выбор значения — отдельным экраном со списком и галочкой, как
++        // окошко выбора на ПК.
++        switch choice {
++        case .sendWithoutSound:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Отправлять без звука", options: LunagramSettings.sendWithoutSoundTitles, selected: LunagramSettings.sendWithoutSound, info: "Отправляет сообщения по умолчанию без звука: никогда, только когда включён режим призрака, или всегда.", select: { index in
++                LunagramSettings.sendWithoutSound = index
++                refreshMedia()
++            }))
++        case .sendFont:
++            // Каждый стиль написан собой же — видно, как уйдёт сообщение.
++            shared.push?(lunagramChoiceScreen(context: context, title: "Шрифт отправки", options: LunagramSendFont.allCases.map { $0.title }, selected: LunagramSettings.sendFontStyle, info: "Буквы заменяются похожими символами Юникода, поэтому стиль видят все — в любом клиенте. Такой текст не находится поиском Telegram.\n\nСтилизованных алфавитов для кириллицы в Юникоде нет, поэтому первые стили работают только с латиницей — это видно прямо в названии.", select: { index in
++                LunagramSettings.sendFontStyle = index
++                refreshMedia()
++            }))
++        case .deviceMask:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Маскировка устройства", options: LunagramSettings.deviceMaskPresets.map { $0.title }, selected: LunagramSettings.deviceMaskIndex, info: "Как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. У масок Android и Mac подменяется и версия системы: по ней сервер выбирает значок. Начнёт действовать после перезапуска Lunagram.", select: { index in
++                LunagramSettings.setDeviceMask(index)
++                refreshMedia()
++            }))
++        case .fontAndWording:
++            shared.push?(lunagramGroupController(context: context, group: .font, shared: shared))
++        }
+     })
+ }
+ 
++/// Что открывает строка со значением справа.
++private enum LunagramChoice: Int32 {
++    case sendWithoutSound = 1
++    case sendFont = 2
++    case deviceMask = 3
++    case fontAndWording = 4
++}
++
++private enum LunagramChoiceEntry: ItemListNodeEntry {
++    case option(Int32, String, Bool)
++    case info(String)
++
++    var section: ItemListSectionId {
++        return 0
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .option(index, _, _):
++            return index
++        case .info:
++            return 10_000
++        }
++    }
++
++    static func ==(lhs: LunagramChoiceEntry, rhs: LunagramChoiceEntry) -> Bool {
++        switch lhs {
++        case let .option(lhsIndex, lhsTitle, lhsChecked):
++            if case let .option(rhsIndex, rhsTitle, rhsChecked) = rhs, lhsIndex == rhsIndex, lhsTitle == rhsTitle, lhsChecked == rhsChecked {
++                return true
++            } else {
++                return false
++            }
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            } else {
++                return false
++            }
++        }
++    }
++
++    static func <(lhs: LunagramChoiceEntry, rhs: LunagramChoiceEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let select = arguments as! (Int) -> Void
++        switch self {
++        case let .option(index, title, checked):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                select(Int(index))
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++/// Экран выбора одного значения из списка — как окошко выбора на ПК.
++private func lunagramChoiceScreen(context: AccountContext, title: String, options: [String], selected: Int, info: String?, select: @escaping (Int) -> Void) -> ViewController {
++    let selectedPromise = ValuePromise<Int>(selected, ignoreRepeated: true)
++    let arguments: (Int) -> Void = { index in
++        selectedPromise.set(index)
++        select(index)
++    }
++    let signal = combineLatest(context.sharedContext.presentationData, selectedPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, current -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries = options.enumerated().map { LunagramChoiceEntry.option(Int32($0.offset), $0.element, $0.offset == current) }
++        if let info = info {
++            entries.append(.info(info))
++        }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
++
++/// Одна строка экрана по образцу ПК.
++private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPresentationData, sectionId: ItemListSectionId, arguments: LunagramSettingsControllerArguments) -> ListViewItem {
++    switch row {
++    case let .header(text):
++        return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: sectionId)
++    case let .toggle(toggle, value, title, iconName):
++        return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, value: value, sectionId: sectionId, style: .blocks, updated: { value in
++            arguments.toggle(toggle, value)
++        })
++    case let .ghost(expanded, subs):
++        let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
++            return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++        }
++        // «Режим призрака 0/5» со стрелкой — счётчик рисует сама строка.
++        return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Режим призрака", value: subs.contains(true), isExpanded: expanded, subItems: subItems, sectionId: sectionId, style: .blocks, updated: { value in
++            arguments.ghostMaster(value)
++        }, selectAction: {
++            arguments.ghostExpand()
++        }, subAction: { sub in
++            if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
++                arguments.toggle(toggle, !toggle.value)
++            }
++        })
++    case let .read(expanded, subs):
++        let subItems = zip(lunagramMarkReadToggles, subs).map { toggle, isOn in
++            return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++        }
++        return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Читать при действиях", value: subs.contains(true), isExpanded: expanded, subItems: subItems, sectionId: sectionId, style: .blocks, updated: { value in
++            arguments.readMaster(value)
++        }, selectAction: {
++            arguments.toggleExpand(.markReadAfterSend)
++        }, subAction: { sub in
++            if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
++                arguments.toggle(toggle, !toggle.value)
++            }
++        })
++    case let .value(id, title, value, iconName):
++        return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, label: value, sectionId: sectionId, style: .blocks, action: {
++            arguments.openChoice(id)
++        })
++    case let .info(text):
++        return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: sectionId)
++    }
++}
++
++/// Экран «Функции» — один, как на ПК. Режим призрака одним разделом вместе
++/// с сохранением удалённых: для хозяина это одно целое, и на ПК теперь так
++/// же. Под каждой строкой — подпись, как на ПК. Внизу — то, чего на ПК нет.
++private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: LunagramMediaState, ghostExpanded: Bool, expandedToggles: Set<Int32>) -> [LunagramSettingsEntry] {
++    func value(_ toggle: LunagramToggle) -> Bool {
++        return values[toggle] ?? toggle.value
++    }
++    var rows = LunagramRowsBuilder()
++
++    rows.header("Режим призрака")
++    rows.row(.ghost(ghostExpanded, lunagramGhostToggles.map { value($0) }))
++    rows.row(.read(expandedToggles.contains(LunagramToggle.markReadAfterSend.rawValue), lunagramMarkReadToggles.map { value($0) }))
++    rows.info("Автоматически читает сообщение при отправке нового, при реакции на сообщение или голосе в опросе. Призрак при этом остаётся включённым.")
++    rows.row(.toggle(.useScheduledSend, value(.useScheduledSend), "Использовать отложку", nil))
++    rows.info("Автоматически ставит задержку в ~12 секунд (дольше для сообщений с вложениями) при отправке сообщений. При использовании этой функции ты не будешь появляться в сети.\nНе рекомендуется использовать на слабом интернете.")
++    let sound = max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))
++    rows.row(.value(LunagramChoice.sendWithoutSound.rawValue, "Отправлять без звука", LunagramSettings.sendWithoutSoundTitles[sound], nil))
++    rows.info("Отправляет сообщения по умолчанию без звука.")
++    rows.row(.toggle(.suggestGhostForStories, value(.suggestGhostForStories), "Предлагать призрака для сторис", nil))
++    rows.info("Показывает предупреждение перед открытием сторис, предлагая включить режим призрака.")
++    rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", nil))
++    rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", nil))
++    rows.split()
++    rows.row(.toggle(.saveForBots, value(.saveForBots), "Сохранять в чатах с ботами", nil))
++
++    rows.header("Другое")
++    rows.row(.toggle(.disableAds, value(.disableAds), "Отключить рекламу", "nosign"))
++    rows.info("Скрывает спонсорские сообщения в каналах.")
++    rows.row(.toggle(.showMessageShot, value(.showMessageShot), "Показывать ф-ию снимка сообщений", "eye"))
++    rows.info("Позволяет снять сообщение в аккуратную картинку: зажми его → «Снимок сообщения».")
++    rows.row(.toggle(.streamerMode, value(.streamerMode), "Режим стримера", "dot.radiowaves.left.and.right"))
++    rows.info("Прячет содержимое, пока айфон записывает или транслирует экран. Срабатывает само — айфон сам говорит, что экран пишется.")
++    rows.row(.toggle(.hideOwnPhone, value(.hideOwnPhone), "Скрыть свой номер", "phone"))
++    rows.info("В твоём профиле вместо номера будут точки. Сам номер не меняется — прячется только показ на экране.")
++
++    rows.header("Мут")
++    rows.row(.toggle(.showMutedDeleted, value(.showMutedDeleted), "Показывать удалённые в чате", "square.grid.2x2"))
++    rows.info("Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения приходят с корзинкой, как удалённые. Выключи — и не будут появляться у тебя вовсе.")
++    rows.row(.toggle(.showMessageSeconds, value(.showMessageSeconds), "Время с секундами", "stopwatch"))
++    rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
++    let fonts = LunagramSendFont.allCases
++    let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
++    rows.row(.value(LunagramChoice.sendFont.rawValue, "Шрифт отправки", font.title, "textformat"))
++    rows.info("Буквы заменяются похожими символами Юникода, поэтому стиль видят все — в любом клиенте. Такой текст не находится поиском Telegram.")
++    let masks = LunagramSettings.deviceMaskPresets
++    let mask = masks[max(0, min(masks.count - 1, media.deviceMask))]
++    rows.row(.value(LunagramChoice.deviceMask.rawValue, "Маскировка устройства", mask.title, "iphone"))
++    rows.info("Telegram покажет выбранное устройство в списке твоих сессий вместо настоящего — вместе со значком. Применяется при следующем запуске.")
++
++    rows.header("Сообщения")
++    rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
++    rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки просто нет — неверная хуже отсутствующей.")
++
++    // Этого на экране ПК нет — айфонное. Внизу того же экрана, как решили.
++    rows.header("Только на айфоне")
++    let phoneOnly: [LunagramToggle] = [.roundFromVideo, .showPeerId, .replyToDeleted, .showDeletedGifts, .giftTheSame, .sendSoldOutGifts]
++    for toggle in phoneOnly {
++        rows.row(.toggle(toggle, value(toggle), toggle.title, toggle.iconName))
++        if let text = toggle.descriptionText {
++            rows.info(text)
++        }
++    }
++    rows.row(.value(LunagramChoice.fontAndWording.rawValue, "Шрифт и надписи", "", "textformat.size"))
++    rows.info("Шрифт всего приложения и свои надписи вместо телеграмовских — «языки».")
++
++    return rows.entries
++}
++
++private func lunagramFunctionsController(context: AccountContext, shared: LunagramSharedState) -> ViewController {
++    let arguments = shared.arguments!
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get(), shared.expandedTogglesPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, currentValues, media, ghostExpanded, expandedToggles -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let entries = lunagramFunctionsEntries(values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles)
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Функции"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
++
+ /// Экран категории: список её разделов. Как на ПК — Функции и Оформление
+ /// открывают каждый свой набор.
+ private func lunagramCategoryController(context: AccountContext, category: LunagramSettingsCategory, shared: LunagramSharedState) -> ViewController {
