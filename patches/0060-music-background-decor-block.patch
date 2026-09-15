@@ -1,0 +1,689 @@
+diff --git a/submodules/Lunagram/Sources/LunagramMusicBackgroundView.swift b/submodules/Lunagram/Sources/LunagramMusicBackgroundView.swift
+new file mode 100644
+index 00000000..f1283dd6
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramMusicBackgroundView.swift
+@@ -0,0 +1,77 @@
++import UIKit
++
++/// Свой фон полоски с песней — как на ПК: картинка или гифка с затемнением и
++/// размытием либо ровный свой цвет. Один вид на образец в настройках и на
++/// саму полоску в профиле, чтобы образец не врал.
++public final class LunagramMusicBackgroundView: UIView {
++    private let imageView = UIImageView()
++    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
++    private let dimView = UIView()
++    private var shownURL: URL?
++
++    /// Светлый ли свой цвет — тогда текст поверх пишем тёмным, как на ПК.
++    public private(set) var isLight = false
++
++    public init() {
++        super.init(frame: CGRect())
++        self.isUserInteractionEnabled = false
++        self.clipsToBounds = true
++
++        self.imageView.contentMode = .scaleAspectFill
++        self.imageView.clipsToBounds = true
++        self.addSubview(self.imageView)
++
++        self.blurView.isUserInteractionEnabled = false
++        self.addSubview(self.blurView)
++
++        self.dimView.backgroundColor = .black
++        self.dimView.isUserInteractionEnabled = false
++        self.addSubview(self.dimView)
++
++        self.reload()
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    public override func layoutSubviews() {
++        super.layoutSubviews()
++        self.imageView.frame = self.bounds
++        self.blurView.frame = self.bounds
++        self.dimView.frame = self.bounds
++    }
++
++    /// Перечитать выбранное. Картинка главнее цвета, как на ПК.
++    public func reload() {
++        let url = LunagramSettings.profileMusicBgURL
++        if url != self.shownURL {
++            self.shownURL = url
++            // Гифка — «анимированная» картинка: UIImageView крутит её сам.
++            self.imageView.image = url.flatMap { LunagramSettings.loadAnimatedImage(url: $0) }
++        }
++        if url != nil, self.imageView.image != nil {
++            self.imageView.isHidden = false
++            self.backgroundColor = .clear
++            self.dimView.alpha = CGFloat(LunagramSettings.profileMusicBgDim) / 100.0
++            self.blurView.alpha = CGFloat(LunagramSettings.profileMusicBgBlur) / 100.0
++            self.isLight = false
++        } else if let rgb = LunagramSettings.profileMusicBgColor {
++            self.imageView.isHidden = true
++            self.dimView.alpha = 0.0
++            self.blurView.alpha = 0.0
++            let red = CGFloat((rgb >> 16) & 0xFF)
++            let green = CGFloat((rgb >> 8) & 0xFF)
++            let blue = CGFloat(rgb & 0xFF)
++            self.backgroundColor = UIColor(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: 1.0)
++            // Та же граница яркости, что на ПК.
++            self.isLight = (red * 0.299 + green * 0.587 + blue * 0.114) > 150.0
++        } else {
++            self.imageView.isHidden = true
++            self.dimView.alpha = 0.0
++            self.blurView.alpha = 0.0
++            self.backgroundColor = .clear
++            self.isLight = false
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index febf8d15..c48bb7ce 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -95,6 +95,11 @@ public final class LunagramSettings {
+         static let profileBackgroundOffsetX = "lunagram.profile.backgroundOffsetX"
+         static let profileBackgroundOffsetY = "lunagram.profile.backgroundOffsetY"
+         static let profileBackgroundZoom = "lunagram.profile.backgroundZoom"
++        // Фон полоски с песней в своём профиле — как на ПК.
++        static let profileMusicBgFile = "lunagram.profile.musicBgFile"
++        static let profileMusicBgColor = "lunagram.profile.musicBgColor"
++        static let profileMusicBgDim = "lunagram.profile.musicBgDim"
++        static let profileMusicBgBlur = "lunagram.profile.musicBgBlur"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -602,6 +607,106 @@ public final class LunagramSettings {
+         set { setClamped(newValue, Key.profileBackgroundBlur, 0, 100) }
+     }
+ 
++    // MARK: Фон музыки
++
++    /// Своя картинка или гифка под полоской с песней в своём профиле — как на
++    /// ПК. Картинка главнее цвета.
++    public static var profileMusicBgURL: URL? {
++        return storedURL(forKey: Key.profileMusicBgFile)
++    }
++
++    /// Забирает картинку себе. Гифку копируем как есть — пережатая в JPEG,
++    /// она перестала бы двигаться.
++    public static func importProfileMusicBackground(from source: URL) throws {
++        let folder = try lunagramFolder()
++        let isGIF = source.pathExtension.lowercased() == "gif"
++        let name = "musicbg-\(UUID().uuidString).\(isGIF ? "gif" : "jpg")"
++        if isGIF {
++            try FileManager.default.copyItem(at: source, to: folder.appendingPathComponent(name))
++        } else {
++            try writeScaledImage(from: source, to: folder.appendingPathComponent(name))
++        }
++        store(name, forKey: Key.profileMusicBgFile, in: folder)
++    }
++
++    /// «Убрать свой фон», как на ПК: и картинку, и цвет.
++    public static func clearProfileMusicBackground() {
++        if let folder = try? lunagramFolder(), let name = defaults.string(forKey: Key.profileMusicBgFile) {
++            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
++        }
++        defaults.removeObject(forKey: Key.profileMusicBgFile)
++        defaults.removeObject(forKey: Key.profileMusicBgColor)
++        changed()
++    }
++
++    /// Свой цвет полоски, 0xRRGGBB. nil — своего цвета нет.
++    public static var profileMusicBgColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileMusicBgColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileMusicBgColor)) & 0xFFFFFF
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue & 0xFFFFFF), forKey: Key.profileMusicBgColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileMusicBgColor)
++            }
++            changed()
++        }
++    }
++
++    /// Затемнение картинки под полоской, 0…100. По умолчанию 45, как на ПК.
++    public static var profileMusicBgDim: Int {
++        get { return clamped(Key.profileMusicBgDim, 0, 100, 45) }
++        set { setClamped(newValue, Key.profileMusicBgDim, 0, 100) }
++    }
++
++    /// Размытие картинки под полоской, 0…100.
++    public static var profileMusicBgBlur: Int {
++        get { return clamped(Key.profileMusicBgBlur, 0, 100, 0) }
++        set { setClamped(newValue, Key.profileMusicBgBlur, 0, 100) }
++    }
++
++    /// Есть ли свой фон полоски вообще — картинка или цвет.
++    public static var hasProfileMusicBackground: Bool {
++        return profileMusicBgURL != nil || profileMusicBgColor != nil
++    }
++
++    /// Картинка из файла, у гифки — с движением. Кадры читаем сами:
++    /// UIImage(contentsOfFile:) у гифки берёт только первый.
++    public static func loadAnimatedImage(url: URL) -> UIImage? {
++        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
++            return nil
++        }
++        let count = CGImageSourceGetCount(source)
++        if count <= 1 {
++            return UIImage(contentsOfFile: url.path)
++        }
++        var frames: [UIImage] = []
++        var duration: Double = 0.0
++        for index in 0 ..< min(count, 240) {
++            guard let image = CGImageSourceCreateImageAtIndex(source, index, nil) else {
++                continue
++            }
++            frames.append(UIImage(cgImage: image))
++            var delay = 0.08
++            if let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any], let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any] {
++                if let value = gif[kCGImagePropertyGIFUnclampedDelayTime] as? Double, value > 0.0 {
++                    delay = value
++                } else if let value = gif[kCGImagePropertyGIFDelayTime] as? Double, value > 0.0 {
++                    delay = value
++                }
++            }
++            duration += max(0.02, delay)
++        }
++        if frames.isEmpty {
++            return nil
++        }
++        return UIImage.animatedImage(with: frames, duration: duration)
++    }
++
+     // MARK: Надписи интерфейса
+     //
+     // Ключ читает не Swift, а сам генератор строк Telegram — тот кусок, через
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 7791f017..6d134e3f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -19,6 +19,8 @@ enum LunagramPreviewKind {
+     case banner
+     // Фон под списком профиля — высокий образец с выбором кадра.
+     case profileBackground
++    // Полоска с песней в профиле — со своим фоном, как на ПК.
++    case music
+ }
+ 
+ /// Живой образец сверху экрана настроек — «так это будет выглядеть», как на
+@@ -87,6 +89,12 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+     private var particlesLayer: CALayer?
+     /// Образец с выбором кадра пальцем — для баннера, обоев и фона профиля.
+     private var cropView: LunagramCropPreviewView?
++    /// Образец полоски с песней: фон, обложка-заглушка, название, исполнитель.
++    private var musicStrip: UIView?
++    private var musicBackground: LunagramMusicBackgroundView?
++    private var musicCover: UILabel?
++    private var musicTitle: UILabel?
++    private var musicArtist: UILabel?
+     private let avatarView: UIView
+     private let frameHost: UIView
+     private let titleNode: TextNode
+@@ -167,6 +175,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 subtitleText = "Так будет выглядеть баннер"
+             case .profileBackground:
+                 subtitleText = "Так будет выглядеть фон"
++            case .music:
++                subtitleText = "Так будет выглядеть полоска с песней"
+             }
+ 
+             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleText, font: titleFont, textColor: titleColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset * 2.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+@@ -185,6 +195,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             case .profileBackground:
+                 // Высокий, как на ПК: фон ложится под весь список профиля.
+                 previewHeight = 320.0
++            case .music:
++                previewHeight = 76.0
+             }
+             let contentSize = CGSize(width: params.width, height: previewHeight)
+             let insets = itemListNeighborsGroupedInsets(neighbors, params)
+@@ -253,6 +265,7 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+         self.previewContainer.isUserInteractionEnabled = false
+         self.subtitleNode.isHidden = false
+         self.cropView?.isHidden = true
++        self.musicStrip?.isHidden = true
+ 
+         switch item.kind {
+         case .dialogCard:
+@@ -325,6 +338,17 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+ 
+             self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 10.0, width: subtitleSize.width, height: subtitleSize.height)
+ 
++        case .music:
++            self.cardView?.isHidden = true
++            self.avatarView.isHidden = true
++            self.frameHost.isHidden = true
++            self.titleNode.isHidden = true
++            self.subtitleNode.isHidden = true
++            self.mediaView?.isHidden = true
++            self.mediaBlurView?.isHidden = true
++            self.mediaDimView?.isHidden = true
++            self.particlesLayer?.isHidden = true
++
+         case .wallpaper, .banner, .profileBackground:
+             // Как на ПК: кадр выбирают прямо в образце — тянут пальцем и
+             // приближают щипком. Подсказка внутри образца, подпись не нужна.
+@@ -362,14 +386,80 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             cropView.reload()
+         }
+ 
++        if case .music = item.kind {
++            self.updateMusic(rowSize: rowSize, theme: theme)
++        }
++
+         switch item.kind {
+-        case .wallpaper, .particles, .banner, .profileBackground:
++        case .wallpaper, .particles, .banner, .profileBackground, .music:
+             break
+         default:
+             self.titleNode.isHidden = false
+         }
+     }
+ 
++    /// Образец полоски с песней — как на ПК: слева квадратик с нотой (песни в
++    /// образце нет), справа название и исполнитель, под ними свой фон.
++    private func updateMusic(rowSize: CGSize, theme: PresentationTheme) {
++        let strip: UIView
++        if let current = self.musicStrip {
++            strip = current
++        } else {
++            strip = UIView()
++            strip.clipsToBounds = true
++            strip.layer.cornerRadius = 12.0
++            self.musicStrip = strip
++            self.previewContainer.addSubview(strip)
++
++            let background = LunagramMusicBackgroundView()
++            strip.addSubview(background)
++            self.musicBackground = background
++
++            let cover = UILabel()
++            cover.text = "♫"
++            cover.textAlignment = .center
++            cover.font = .systemFont(ofSize: 20.0, weight: .semibold)
++            cover.clipsToBounds = true
++            cover.layer.cornerRadius = 8.0
++            strip.addSubview(cover)
++            self.musicCover = cover
++
++            let title = UILabel()
++            title.text = "Название песни"
++            title.font = .systemFont(ofSize: 15.0, weight: .semibold)
++            strip.addSubview(title)
++            self.musicTitle = title
++
++            let artist = UILabel()
++            artist.text = "Исполнитель"
++            artist.font = .systemFont(ofSize: 13.0)
++            strip.addSubview(artist)
++            self.musicArtist = artist
++        }
++        strip.isHidden = false
++        strip.frame = CGRect(x: 12.0, y: 8.0, width: rowSize.width - 24.0, height: rowSize.height - 16.0)
++        let background = self.musicBackground
++        background?.frame = strip.bounds
++        background?.reload()
++
++        let hasOwn = LunagramSettings.hasProfileMusicBackground
++        let light = hasOwn && LunagramSettings.profileMusicBgURL == nil && (background?.isLight ?? false)
++        strip.backgroundColor = hasOwn ? .clear : theme.list.itemSecondaryTextColor.withAlphaComponent(0.15)
++        let titleColor: UIColor = hasOwn ? (light ? UIColor(white: 0.0, alpha: 0.9) : .white) : theme.list.itemPrimaryTextColor
++        let artistColor: UIColor = hasOwn ? (light ? UIColor(white: 0.0, alpha: 0.6) : UIColor(white: 1.0, alpha: 0.6)) : theme.list.itemSecondaryTextColor
++
++        let coverSide = strip.bounds.height - 16.0
++        self.musicCover?.frame = CGRect(x: 8.0, y: 8.0, width: coverSide, height: coverSide)
++        self.musicCover?.backgroundColor = UIColor(white: 1.0, alpha: 0.24)
++        self.musicCover?.textColor = titleColor
++        let textX = 8.0 + coverSide + 10.0
++        let textWidth = max(0.0, strip.bounds.width - textX - 8.0)
++        self.musicTitle?.frame = CGRect(x: textX, y: strip.bounds.height / 2.0 - 19.0, width: textWidth, height: 20.0)
++        self.musicTitle?.textColor = titleColor
++        self.musicArtist?.frame = CGRect(x: textX, y: strip.bounds.height / 2.0 + 1.0, width: textWidth, height: 18.0)
++        self.musicArtist?.textColor = artistColor
++    }
++
+     /// Образец обоев, частиц и баннера: показываем сам выбранный файл с теми
+     /// же затемнением и размытием, что и на деле.
+     private func updateMedia(kind: LunagramPreviewKind, area: CGRect, theme: PresentationTheme) {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 75724c28..ba0a8518 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -705,6 +705,8 @@ private enum LunagramSettingsSection: Int32 {
+     case particlesDensity
+     case particlesSpeed
+     case listText
++    // Фон полоски с песней в своём профиле.
++    case music
+ }
+ 
+ /// Виды текста поверх обоев — по номеру, как их хранят настройки.
+@@ -1202,6 +1204,10 @@ private struct LunagramMediaState: Equatable {
+     var bannerDimPercent: Int = 0
+     var nameGlowPercent: Int = 0
+     var nameColorRGB: UInt32 = 0xFFFFFF
++    var musicFile: String = ""
++    var musicColor: UInt32? = nil
++    var musicDim: Int = 0
++    var musicBlur: Int = 0
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1210,6 +1216,10 @@ private struct LunagramMediaState: Equatable {
+         state.cardsDimPercent = LunagramSettings.dialogCardsDimPercent
+         state.bannerDimPercent = LunagramSettings.profileBannerDimPercent
+         state.nameGlowPercent = LunagramSettings.profileNameGlowPercent
++        state.musicFile = LunagramSettings.profileMusicBgURL?.lastPathComponent ?? ""
++        state.musicColor = LunagramSettings.profileMusicBgColor
++        state.musicDim = LunagramSettings.profileMusicBgDim
++        state.musicBlur = LunagramSettings.profileMusicBgBlur
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1533,6 +1543,9 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         }
+         entries.append(.info(.listText, 0, "Как писать имена и отрывки в списке переписок. Подложка — тёмная плашка под текстом, свечение — белый ореол вокруг букв. Переливающийся цвет обходит радугу за десять секунд."))
+         return entries
++    case .music:
++        // Фон музыки собирается своим окном (lunagramMusicEntries).
++        return []
+     }
+ }
+ 
+@@ -1628,11 +1641,16 @@ private final class LunagramMediaPickerDelegate: NSObject, PHPickerViewControlle
+         }
+         let imageType = "public.image"
+         let movieType = "public.movie"
++        let gifType = "com.compuserve.gif"
+         let type: String
+         let isVideo: Bool
+-        // Снимок проверяем первым: живое фото — это снимок, даже если к нему
+-        // приложен ролик.
+-        if self.allowsImages && provider.hasItemConformingToTypeIdentifier(imageType) {
++        // Гифку просим гифкой: как «снимок» галерея отдала бы один кадр.
++        // Снимок проверяем раньше видео: живое фото — это снимок, даже если
++        // к нему приложен ролик.
++        if self.allowsImages && provider.hasItemConformingToTypeIdentifier(gifType) {
++            type = gifType
++            isVideo = false
++        } else if self.allowsImages && provider.hasItemConformingToTypeIdentifier(imageType) {
+             type = imageType
+             isVideo = false
+         } else if provider.hasItemConformingToTypeIdentifier(movieType) {
+@@ -1754,17 +1772,20 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         let isBanner = section == .bannerPhoto
+         let isFrame = section == .avatarFrame
+         let isProfileBg = section == .profileBackground
++        let isMusic = section == .music
+         var configuration = PHPickerConfiguration()
+-        configuration.filter = isBanner ? PHPickerFilter.any(of: [.images, .videos]) : ((isFrame || isProfileBg) ? PHPickerFilter.images : PHPickerFilter.videos)
++        configuration.filter = isBanner ? PHPickerFilter.any(of: [.images, .videos]) : ((isFrame || isProfileBg || isMusic) ? PHPickerFilter.images : PHPickerFilter.videos)
+         configuration.selectionLimit = 1
+         let picker = PHPickerViewController(configuration: configuration)
+-        let delegate = LunagramMediaPickerDelegate(allowsImages: isBanner || isFrame || isProfileBg, importer: { url, isVideo in
++        let delegate = LunagramMediaPickerDelegate(allowsImages: isBanner || isFrame || isProfileBg || isMusic, importer: { url, isVideo in
+             if isBanner {
+                 try LunagramSettings.importProfileBanner(from: url, isVideo: isVideo)
+             } else if isFrame {
+                 try LunagramSettings.importAvatarFrameImage(from: url)
+             } else if isProfileBg {
+                 try LunagramSettings.importProfileBackground(from: url)
++            } else if isMusic {
++                try LunagramSettings.importProfileMusicBackground(from: url)
+             } else {
+                 try LunagramSettings.importLiveWallpaper(from: url)
+             }
+@@ -1773,7 +1794,7 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             guard imported else {
+                 return
+             }
+-            if isProfileBg {
++            if isProfileBg || isMusic {
+                 refreshMedia()
+                 return
+             }
+@@ -1874,6 +1895,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case 70:
+             // Свечение имени — ползунком в процентах, как на ПК.
+             LunagramSettings.profileNameGlowPercent = value
++        case 80:
++            LunagramSettings.profileMusicBgDim = value
++        case 81:
++            LunagramSettings.profileMusicBgBlur = value
+         case 60:
+             // Своя рамка: размер, осветление, свечение — ползунками, как на ПК.
+             LunagramSettings.avatarFrameScale = value
+@@ -2041,6 +2066,30 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileNameCustomColor = nil
+             LunagramSettings.profileNameColor = 0
+             refreshMedia()
++        case .musicPick:
++            shared.arguments?.pick(.music)
++        case .musicColor:
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            // Та же палитра, что у цвета имени: полоска перекрашивается на ходу.
++            let picker = UIColorPickerViewController()
++            picker.supportsAlpha = false
++            if let current = LunagramSettings.profileMusicBgColor {
++                picker.selectedColor = UIColor(rgb: current)
++            }
++            let delegate = LunagramColorPickerDelegate(changed: { color in
++                LunagramSettings.profileMusicBgColor = lunagramPackColor(color)
++                refreshMedia()
++            }, finished: {
++                shared.pickerHolder.delegate = nil
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++        case .musicReset:
++            LunagramSettings.clearProfileMusicBackground()
++            refreshMedia()
+         }
+     }, tile: { rawKind, id, isLongPress in
+         guard let kind = LunagramTileKind(rawValue: rawKind) else {
+@@ -2143,6 +2192,9 @@ private enum LunagramChoice: Int32 {
+     case editWallpaperCrop = 23
+     case nameColor = 30
+     case nameColorReset = 31
++    case musicPick = 40
++    case musicColor = 41
++    case musicReset = 42
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2651,6 +2703,32 @@ private func lunagramNameEntries(values: [LunagramToggle: Bool], media: Lunagram
+     return rows.entries
+ }
+ 
++/// Окно «Фон музыки в профиле» — как на ПК: образец полоски, картинка или
++/// гифка, свой цвет, «Убрать». Затемнение и размытие — только у картинки.
++private func lunagramMusicEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    var rows = LunagramRowsBuilder()
++    let hasPicture = !media.musicFile.isEmpty
++    rows.row(.preview(.music, lunagramNameToken(media.musicFile) &* 1_000 &+ Int((media.musicColor ?? 0x1000000) % 1_000_003) &* 7 &+ media.musicDim &* 1_000_000_000 &+ media.musicBlur &* 100_000_000_000))
++    rows.row(.action(LunagramChoice.musicPick.rawValue, "Выбрать картинку или гифку", nil))
++    rows.row(.color(LunagramChoice.musicColor.rawValue, "Свой цвет", media.musicColor ?? 0x8E8E93))
++    rows.row(.action(LunagramChoice.musicReset.rawValue, "Убрать свой фон", nil))
++    if hasPicture {
++        rows.row(.slider(80, "Затемнение", media.musicDim, 0, 100, 5))
++        rows.row(.slider(81, "Размытие", media.musicBlur, 0, 100, 5))
++    }
++    rows.info("Фон полоски с песней — только в твоём профиле, и видишь его только ты: у других людей полоска остаётся обычной. Картинка главнее цвета. Подойдут PNG, JPG, WebP и GIF — гифки двигаются.")
++    return rows.entries
++}
++
++func lunagramMusicBackgroundScreen(context: AccountContext) -> ViewController {
++    return lunagramBuiltScreen(context: context, title: "Фон музыки в профиле", build: lunagramMusicEntries)
++}
++
++/// Контурный значок, как на ПК, — для строк в «Изменить профиль».
++func lunagramContourIcon(_ names: String, theme: PresentationTheme) -> UIImage? {
++    return LunagramLineIcons.shared.image(names, color: theme.list.itemSecondaryTextColor)
++}
++
+ func lunagramProfileNameScreen(context: AccountContext) -> ViewController {
+     return lunagramBuiltScreen(context: context, title: "Имя в профиле", build: lunagramNameEntries)
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index d1f9f76e..92a52e49 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -164,6 +164,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+     
+     var musicBackground: UIView?
+     var music: ComponentView<Empty>?
++    // Lunagram: свой фон полоски с песней — только в своём профиле.
++    var lunagramMusicBackground: LunagramMusicBackgroundView?
+     
+     var performButtonAction: ((PeerInfoHeaderButtonKey, PeerInfoHeaderButtonNode?, ContextGesture?) -> Void)?
+     var requestAvatarExpansion: ((Bool, [AvatarGalleryEntry], AvatarGalleryEntry?, (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?) -> Void)?
+@@ -2706,8 +2708,32 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             
+             let musicString = NSMutableAttributedString()
+             let isOverlay = self.isAvatarExpanded || hasBackground
+-            musicString.append(NSAttributedString(string: track ?? "", font: Font.semibold(12.0), textColor: isOverlay ? .white : presentationData.theme.list.itemAccentColor))
+-            musicString.append(NSAttributedString(string: " - \(artist)", font: Font.regular(12.0), textColor: isOverlay ? UIColor.white.withAlphaComponent(0.7) : presentationData.theme.list.itemSecondaryTextColor))
++            // Lunagram: свой фон полоски — картинка или цвет, только в своём
++            // профиле. Текст поверх белый, на светлом своём цвете — тёмный,
++            // как на ПК.
++            let lunagramMusicBg = (isSettings || peer?.id == self.context.account.peerId) && LunagramSettings.hasProfileMusicBackground
++            let lunagramMusicLight: Bool
++            if lunagramMusicBg, LunagramSettings.profileMusicBgURL == nil, let rgb = LunagramSettings.profileMusicBgColor {
++                // Та же граница яркости, что на ПК и в образце.
++                let luminance = CGFloat((rgb >> 16) & 0xFF) * 0.299 + CGFloat((rgb >> 8) & 0xFF) * 0.587 + CGFloat(rgb & 0xFF) * 0.114
++                lunagramMusicLight = luminance > 150.0
++            } else {
++                lunagramMusicLight = false
++            }
++            let musicTitleColor: UIColor
++            let musicArtistColor: UIColor
++            let musicIconColor: UIColor
++            if lunagramMusicBg {
++                musicTitleColor = lunagramMusicLight ? UIColor(white: 0.0, alpha: 0.9) : .white
++                musicArtistColor = lunagramMusicLight ? UIColor(white: 0.0, alpha: 0.6) : UIColor.white.withAlphaComponent(0.7)
++                musicIconColor = musicTitleColor
++            } else {
++                musicTitleColor = isOverlay ? .white : presentationData.theme.list.itemAccentColor
++                musicArtistColor = isOverlay ? UIColor.white.withAlphaComponent(0.7) : presentationData.theme.list.itemSecondaryTextColor
++                musicIconColor = isOverlay ? .white : presentationData.theme.list.itemAccentColor
++            }
++            musicString.append(NSAttributedString(string: track ?? "", font: Font.semibold(12.0), textColor: musicTitleColor))
++            musicString.append(NSAttributedString(string: " - \(artist)", font: Font.regular(12.0), textColor: musicArtistColor))
+             
+             let musicSize = music.update(
+                 transition: .immediate,
+@@ -2717,7 +2743,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+                             HStack([
+                                 AnyComponentWithIdentity(
+                                     id: "icon",
+-                                    component: AnyComponent(BundleIconComponent(name: "Media Editor/SmallAudio", tintColor: isOverlay ? .white : presentationData.theme.list.itemAccentColor))
++                                    component: AnyComponent(BundleIconComponent(name: "Media Editor/SmallAudio", tintColor: musicIconColor))
+                                 ),
+                                 AnyComponentWithIdentity(
+                                     id: "label",
+@@ -2725,7 +2751,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+                                 ),
+                                 AnyComponentWithIdentity(
+                                     id: "arrow",
+-                                    component: AnyComponent(BundleIconComponent(name: "Item List/InlineTextRightArrow", tintColor: isOverlay ? .white : presentationData.theme.list.itemSecondaryTextColor))
++                                    component: AnyComponent(BundleIconComponent(name: "Item List/InlineTextRightArrow", tintColor: lunagramMusicBg ? musicArtistColor : (isOverlay ? .white : presentationData.theme.list.itemSecondaryTextColor)))
+                                 )
+                             ], spacing: 4.0)
+                         ),
+@@ -2757,8 +2783,32 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+                 } else {
+                     ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut).updateAlpha(layer: musicView.layer, alpha: backgroundBannerAlpha)
+                 }
++
++                // Lunagram: свой фон — под самой полоской, во всю её ширину.
++                if lunagramMusicBg {
++                    let musicBg: LunagramMusicBackgroundView
++                    if let current = self.lunagramMusicBackground {
++                        musicBg = current
++                    } else {
++                        musicBg = LunagramMusicBackgroundView()
++                        self.lunagramMusicBackground = musicBg
++                    }
++                    if musicBg.superview == nil {
++                        self.regularContentNode.view.insertSubview(musicBg, belowSubview: musicView)
++                    }
++                    musicBg.reload()
++                    musicTransition.updateFrame(view: musicBg, frame: musicFrame)
++                    musicBg.alpha = musicView.alpha
++                } else if let musicBg = self.lunagramMusicBackground {
++                    self.lunagramMusicBackground = nil
++                    musicBg.removeFromSuperview()
++                }
+             }
+         } else {
++            if let musicBg = self.lunagramMusicBackground {
++                self.lunagramMusicBackground = nil
++                musicBg.removeFromSuperview()
++            }
+             if let musicBackground = self.musicBackground {
+                 self.musicBackground = nil
+                 if transition.isAnimated {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 46e4c775..ae8e241d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -393,22 +393,22 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+         let pushDecor: (ViewController) -> Void = { screen in
+             (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(screen)
+         }
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 200, label: .text(""), text: "Баннер профиля", icon: PresentationResourcesSettings.appearance, action: {
++        // Порядок, названия и контурные значки — как на ПК.
++        let theme = presentationData.theme
++        items[.lunagramDecor]!.append(PeerInfoScreenHeaderItem(id: 199, text: "Оформление Lunagram"))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 200, label: .text(""), text: "Баннер профиля", icon: lunagramContourIcon("paintpalette,paintbrush", theme: theme), action: {
+             pushDecor(lunagramBannerScreen(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 201, label: .text(""), text: "Рамка аватарки", icon: PresentationResourcesSettings.myProfile, action: {
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 201, label: .text(""), text: "Рамка аватарки", icon: lunagramContourIcon("person.crop.circle", theme: theme), action: {
+             pushDecor(lunagramAvatarFrameScreen(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 205, label: .text(""), text: "Фон профиля", icon: PresentationResourcesSettings.appearance, action: {
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 205, label: .text(""), text: "Фон профиля", icon: lunagramContourIcon("photo", theme: theme), action: {
+             pushDecor(lunagramProfileBackgroundScreen(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 202, label: .text(""), text: "Статус в имени", icon: PresentationResourcesSettings.premium, action: {
+-            pushDecor(lunagramStatusController(context: context))
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Цвет и свечение имени", icon: PresentationResourcesSettings.yourColor, action: {
+-            pushDecor(lunagramProfileNameScreen(context: context))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 206, label: .text(""), text: "Фон музыки", icon: lunagramContourIcon("speaker.wave.2", theme: theme), action: {
++            pushDecor(lunagramMusicBackgroundScreen(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenActionItem(id: 204, text: "Удалить все фотографии", color: .destructive, action: {
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 204, label: .text(""), text: "Удалить все фотографии", icon: lunagramContourIcon("trash", theme: theme), action: {
+             lunagramDeleteProfilePhotos(context: context, keepMain: false, present: { c in
+                 // Показ ведём через окно приложения: present(_, on:) у окна
+                 // берёт именно наш ViewController из Display. У NavigationController
+@@ -416,6 +416,13 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+                 context.sharedContext.mainWindow?.present(c, on: .root)
+             })
+         }))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 202, label: .text(""), text: "Статус в имени", icon: lunagramContourIcon("face.smiling", theme: theme), action: {
++            pushDecor(lunagramStatusController(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Имя", icon: lunagramContourIcon("pencil", theme: theme), action: {
++            pushDecor(lunagramProfileNameScreen(context: context))
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе."))
+     }
+ 
+     if let cachedData = data.cachedData as? CachedUserData {
