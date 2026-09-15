@@ -1,0 +1,469 @@
+diff --git a/submodules/AvatarNode/BUILD b/submodules/AvatarNode/BUILD
+index 3aad72c5..bfd07ee7 100644
+--- a/submodules/AvatarNode/BUILD
++++ b/submodules/AvatarNode/BUILD
+@@ -24,6 +24,7 @@ swift_library(
+         "//submodules/ComponentFlow",
+         "//submodules/TelegramUI/Components/Stories/AvatarStoryIndicatorComponent",
+         "//submodules/DirectMediaImageCache",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/AvatarNode/Sources/AvatarNode.swift b/submodules/AvatarNode/Sources/AvatarNode.swift
+index e690da30..e77b38bc 100644
+--- a/submodules/AvatarNode/Sources/AvatarNode.swift
++++ b/submodules/AvatarNode/Sources/AvatarNode.swift
+@@ -14,6 +14,7 @@ import Accelerate
+ import ComponentFlow
+ import AvatarStoryIndicatorComponent
+ import DirectMediaImageCache
++import Lunagram
+ 
+ private let deletedIcon = UIImage(bundleImageName: "Avatar/DeletedIcon")?.precomposed()
+ private let phoneIcon = generateTintedImage(image: UIImage(bundleImageName: "Avatar/PhoneIcon"), color: .white)
+@@ -733,11 +734,12 @@ public final class AvatarNode: ASDisplayNode {
+                 self.imageNode.clipsToBounds = false
+                 self.imageNode.cornerRadius = 0.0
+             case .round:
++                // Lunagram: форма аватарок — как «Закругление аватарок» на ПК.
+                 self.imageNode.clipsToBounds = true
+-                self.imageNode.cornerRadius = displayDimensions.height * 0.5
++                self.imageNode.cornerRadius = LunagramAvatarShape.cornerRadius(side: displayDimensions.height)
+             case .roundedRect:
+                 self.imageNode.clipsToBounds = true
+-                self.imageNode.cornerRadius = displayDimensions.height * 0.25
++                self.imageNode.cornerRadius = LunagramAvatarShape.forumRadius(side: displayDimensions.height)
+             case .bubble:
+                 break
+             }
+@@ -965,13 +967,13 @@ public final class AvatarNode: ASDisplayNode {
+                 colors = parameters.colors
+                 
+                 if case .round = parameters.clipStyle {
++                    // Lunagram: заглушка с буквами — той же формы, что и фото.
+                     context.beginPath()
+-                    context.addEllipse(in: CGRect(x: 0.0, y: 0.0, width: bounds.size.width, height:
+-                        bounds.size.height))
++                    context.addPath(LunagramAvatarShape.path(in: CGRect(x: 0.0, y: 0.0, width: bounds.size.width, height: bounds.size.height)))
+                     context.clip()
+                 } else if case .roundedRect = parameters.clipStyle {
+                     context.beginPath()
+-                    context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: bounds.size.width, height: bounds.size.height), cornerRadius: floor(bounds.size.width * 0.25)).cgPath)
++                    context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: bounds.size.width, height: bounds.size.height), cornerRadius: LunagramAvatarShape.forumRadius(side: bounds.size.width)).cgPath)
+                     context.clip()
+                 } else if case .bubble = parameters.clipStyle {
+                     context.beginPath()
+diff --git a/submodules/AvatarNode/Sources/PeerAvatar.swift b/submodules/AvatarNode/Sources/PeerAvatar.swift
+index caf06427..102db139 100644
+--- a/submodules/AvatarNode/Sources/PeerAvatar.swift
++++ b/submodules/AvatarNode/Sources/PeerAvatar.swift
+@@ -7,6 +7,7 @@ import TelegramCore
+ import TinyThumbnail
+ import FastBlur
+ import Postbox
++import Lunagram
+ 
+ private let roundCorners = { () -> UIImage in
+     let diameter: CGFloat = 60.0
+@@ -201,12 +202,14 @@ public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, aut
+                             case .none:
+                                 break
+                             case .round:
+-                                if displayDimensions.width != 60.0 {
+-                                    context.addEllipse(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
++                                // Lunagram: не круг — режем своей формой; заготовка
++                                // уголков на 60 точек годится только для круга.
++                                if displayDimensions.width != 60.0 || !LunagramAvatarShape.isCircle {
++                                    context.addPath(LunagramAvatarShape.path(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)))
+                                     context.clip()
+                                 }
+                             case .roundedRect:
+-                                context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: floor(displayDimensions.width * 0.25)).cgPath)
++                                context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: LunagramAvatarShape.forumRadius(side: displayDimensions.width)).cgPath)
+                                 context.clip()
+                             case .bubble:
+                                 let rect = CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)
+@@ -263,7 +266,7 @@ public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, aut
+                             case .none:
+                                 break
+                             case .round:
+-                                if displayDimensions.width == 60.0 {
++                                if displayDimensions.width == 60.0 && LunagramAvatarShape.isCircle {
+                                     context.setBlendMode(.destinationOut)
+                                     context.draw(roundCorners.cgImage!, in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
+                                 }
+@@ -280,10 +283,11 @@ public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, aut
+                                 case .none:
+                                     context.fill(CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
+                                 case .round:
+-                                    context.fillEllipse(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
++                                    context.addPath(LunagramAvatarShape.path(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)))
++                                    context.fillPath()
+                                 case .roundedRect:
+                                     context.beginPath()
+-                                    context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: floor(displayDimensions.width * 0.25)).cgPath)
++                                    context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: LunagramAvatarShape.forumRadius(side: displayDimensions.width)).cgPath)
+                                     context.fillPath()
+                                 case .bubble:
+                                     let rect = CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)
+@@ -306,10 +310,11 @@ public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, aut
+                         case .none:
+                             context.fill(CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
+                         case .round:
+-                            context.fillEllipse(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
++                            context.addPath(LunagramAvatarShape.path(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)))
++                                    context.fillPath()
+                         case .roundedRect:
+                             context.beginPath()
+-                            context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: floor(displayDimensions.width * 0.25)).cgPath)
++                            context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: LunagramAvatarShape.forumRadius(side: displayDimensions.width)).cgPath)
+                             context.fillPath()
+                         case .bubble:
+                             let rect = CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)
+@@ -354,10 +359,11 @@ public func peerAvatarImage(postbox: Postbox, peerReference: PeerReference?, aut
+                             case .none:
+                                 context.fill(CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
+                             case .round:
+-                                context.fillEllipse(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
++                                context.addPath(LunagramAvatarShape.path(in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)))
++                                    context.fillPath()
+                             case .roundedRect:
+                                 context.beginPath()
+-                                context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: floor(displayDimensions.width * 0.25)).cgPath)
++                                context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: LunagramAvatarShape.forumRadius(side: displayDimensions.width)).cgPath)
+                                 context.fillPath()
+                             case .bubble:
+                                 let rect = CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset)
+diff --git a/submodules/Lunagram/Sources/LunagramAvatarShape.swift b/submodules/Lunagram/Sources/LunagramAvatarShape.swift
+new file mode 100644
+index 00000000..1b4d5d84
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramAvatarShape.swift
+@@ -0,0 +1,43 @@
++import UIKit
++
++/// Форма аватарок — как «Закругление аватарок» на ПК: ступень от 0 (квадрат)
++/// до 23 (круг), радиус — доля от половины стороны. Та же формула, что у
++/// AyuGram на ПК (ComputeRadiusF), чтобы оба клиента выглядели одинаково.
++public enum LunagramAvatarShape {
++    /// Ступень круга — как kMaxAvatarCorners на ПК.
++    public static let maxCorners = 23
++
++    /// Круг ли сейчас. Тогда Telegram рисует по-своему, и мы не вмешиваемся.
++    public static var isCircle: Bool {
++        return LunagramSettings.avatarCorners >= maxCorners
++    }
++
++    /// Радиус скругления для аватарки этой стороны.
++    public static func cornerRadius(side: CGFloat) -> CGFloat {
++        let corners = LunagramSettings.avatarCorners
++        if corners >= maxCorners {
++            return side / 2.0
++        }
++        if corners <= 0 {
++            return 0.0
++        }
++        return CGFloat(corners) / CGFloat(maxCorners) * side / 2.0
++    }
++
++    /// Контур обычной аватарки: круг или прямоугольник со скруглением.
++    public static func path(in rect: CGRect) -> CGPath {
++        if isCircle {
++            return CGPath(ellipseIn: rect, transform: nil)
++        }
++        return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius(side: min(rect.width, rect.height))).cgPath
++    }
++
++    /// Радиус у форумов. С «Единым закруглением» — как у чатов, иначе своя
++    /// телеграмовская четверть стороны.
++    public static func forumRadius(side: CGFloat) -> CGFloat {
++        if LunagramSettings.avatarSingleCorner {
++            return cornerRadius(side: side)
++        }
++        return floor(side * 0.25)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index c51d2444..7fd573a7 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -105,6 +105,8 @@ public final class LunagramSettings {
+         static let storiesClickOnly = "lunagram.list.storiesClickOnly"
+         static let searchFilterButton = "lunagram.messages.searchFilterButton"
+         static let typingAnimation = "lunagram.other.typingAnimation"
++        static let avatarCorners = "lunagram.avatars.corners"
++        static let avatarSingleCorner = "lunagram.avatars.singleCorner"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -271,6 +273,24 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Закругление аватарок — ступень от 0 (квадрат) до 23 (круг), как на ПК.
++    /// По умолчанию круг: так аватарки выглядят как в обычном Telegram.
++    public static var avatarCorners: Int {
++        get { return clamped(Key.avatarCorners, 0, 23, 23) }
++        set { setClamped(newValue, Key.avatarCorners, 0, 23) }
++    }
++
++    /// «Единое закругление»: форумы той же формы, что и чаты — как на ПК.
++    public static var avatarSingleCorner: Bool {
++        get {
++            return defaults.bool(forKey: Key.avatarSingleCorner)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.avatarSingleCorner)
++            changed()
++        }
++    }
++
+     /// Плавное появление набираемых букв — как на ПК. Видно только себе, на
+     /// отправку не влияет. По умолчанию выключено, как на ПК.
+     public static var typingAnimation: Bool {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 6d134e3f..36276c05 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -21,6 +21,8 @@ enum LunagramPreviewKind {
+     case profileBackground
+     // Полоска с песней в профиле — со своим фоном, как на ПК.
+     case music
++    // Строка с аватаркой — видно закругление, как образец на ПК.
++    case avatar
+ }
+ 
+ /// Живой образец сверху экрана настроек — «так это будет выглядеть», как на
+@@ -158,7 +160,7 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 titleColor = item.presentationData.theme.list.itemPrimaryTextColor
+             }
+ 
+-            let titleText: String = "kura"
++            let titleText: String = item.kind == .avatar ? "Lunagram Releases" : "kura"
+             let subtitleText: String
+             switch item.kind {
+             case .dialogCard:
+@@ -177,6 +179,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 subtitleText = "Так будет выглядеть фон"
+             case .music:
+                 subtitleText = "Так будет выглядеть полоска с песней"
++            case .avatar:
++                subtitleText = "Better late than never"
+             }
+ 
+             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleText, font: titleFont, textColor: titleColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset * 2.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+@@ -197,6 +201,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 previewHeight = 320.0
+             case .music:
+                 previewHeight = 76.0
++            case .avatar:
++                previewHeight = 72.0
+             }
+             let contentSize = CGSize(width: params.width, height: previewHeight)
+             let insets = itemListNeighborsGroupedInsets(neighbors, params)
+@@ -338,6 +344,20 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+ 
+             self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 10.0, width: subtitleSize.width, height: subtitleSize.height)
+ 
++        case .avatar:
++            // Как образец на ПК: аватарка и название канала рядом.
++            self.cardView?.isHidden = true
++            self.frameHost.isHidden = true
++            self.avatarView.isHidden = false
++            let avatarSize: CGFloat = 46.0
++            self.avatarView.frame = CGRect(x: 16.0, y: floor((rowSize.height - avatarSize) / 2.0), width: avatarSize, height: avatarSize)
++            self.avatarView.layer.cornerRadius = LunagramAvatarShape.cornerRadius(side: avatarSize)
++            self.avatarView.backgroundColor = theme.list.itemAccentColor
++            self.avatarView.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
++            let textX = 16.0 + avatarSize + 12.0
++            self.titleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) - titleSize.height - 1.0, width: titleSize.width, height: titleSize.height)
++            self.subtitleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) + 2.0, width: subtitleSize.width, height: subtitleSize.height)
++
+         case .music:
+             self.cardView?.isHidden = true
+             self.avatarView.isHidden = true
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f228d127..88271c10 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -58,6 +58,7 @@ private enum LunagramToggle: Int32 {
+     case storiesClickOnly
+     case searchFilterButton
+     case typingAnimation
++    case avatarSingleCorner
+ 
+     var value: Bool {
+         switch self {
+@@ -137,6 +138,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.searchFilterButton
+         case .typingAnimation:
+             return LunagramSettings.typingAnimation
++        case .avatarSingleCorner:
++            return LunagramSettings.avatarSingleCorner
+         }
+     }
+ 
+@@ -218,6 +221,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.searchFilterButton = value
+         case .typingAnimation:
+             LunagramSettings.typingAnimation = value
++        case .avatarSingleCorner:
++            LunagramSettings.avatarSingleCorner = value
+         }
+     }
+ 
+@@ -299,6 +304,8 @@ private enum LunagramToggle: Int32 {
+             return "Фильтр в поиске по переписке"
+         case .typingAnimation:
+             return "Плавное появление букв"
++        case .avatarSingleCorner:
++            return "Единое закругление"
+         }
+     }
+ 
+@@ -363,7 +370,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner:
+             return nil
+         }
+     }
+@@ -509,6 +516,8 @@ extension LunagramToggle {
+             return "magnifyingglass"
+         case .typingAnimation:
+             return "character.cursor.ibeam,textformat"
++        case .avatarSingleCorner:
++            return "square.on.circle"
+         }
+     }
+ }
+@@ -583,6 +592,8 @@ private enum LunagramRow: Equatable {
+     // Строка с кружком цвета справа, как «Цвет имени» на ПК: что открыть,
+     // название, цвет.
+     case color(Int32, String, UInt32)
++    // Ползунок закругления аватарок: справа «Квадрат», число или «Круг».
++    case cornerSlider(Int)
+     case info(String)
+ }
+ 
+@@ -785,7 +796,7 @@ private enum LunagramSettingsCategory: Int32, CaseIterable {
+             // Баннер, рамка и всё про имя/статус переехали в «Изменить
+             // профиль» — как на ПК. Здесь остаётся то, что видно в переписке
+             // и в списке.
+-            return [.liveWallpaper, .dialogCards, .particles]
++            return [.liveWallpaper, .dialogCards, .particles, .avatars]
+         }
+     }
+ }
+@@ -803,6 +814,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+     case dialogCards
+     case particles
+     case font
++    case avatars
+ 
+     var title: String {
+         switch self {
+@@ -828,6 +840,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return "Частицы"
+         case .font:
+             return "Шрифт и надписи"
++        case .avatars:
++            return "Аватарки"
+         }
+     }
+ 
+@@ -857,6 +871,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return "face.smiling"
+         case .font:
+             return "textformat.size"
++        case .avatars:
++            return "person.crop.circle"
+         }
+     }
+ 
+@@ -885,6 +901,9 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return [.appearance, .particlesDensity, .particlesSpeed]
+         case .font:
+             return [.font, .wording]
++        case .avatars:
++            // Собирается своим построителем (lunagramAvatarsEntries).
++            return []
+         }
+     }
+ }
+@@ -1246,6 +1265,7 @@ private struct LunagramMediaState: Equatable {
+     var musicColor: UInt32? = nil
+     var musicDim: Int = 0
+     var musicBlur: Int = 0
++    var avatarCorners: Int = 23
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1258,6 +1278,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicColor = LunagramSettings.profileMusicBgColor
+         state.musicDim = LunagramSettings.profileMusicBgDim
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
++        state.avatarCorners = LunagramSettings.avatarCorners
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1933,6 +1954,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case 70:
+             // Свечение имени — ползунком в процентах, как на ПК.
+             LunagramSettings.profileNameGlowPercent = value
++        case 90:
++            // Закругление аватарок — ступенями от квадрата до круга, как на ПК.
++            LunagramSettings.avatarCorners = value
+         case 80:
+             LunagramSettings.profileMusicBgDim = value
+         case 81:
+@@ -2367,6 +2391,17 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+         return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: sectionId, action: {
+             arguments.toggle(toggle, !value)
+         })
++    case let .cornerSlider(value):
++        return LunagramSliderItem(presentationData: presentationData, title: "Закругление", value: value, minValue: 0, maxValue: LunagramAvatarShape.maxCorners, step: 1, valueText: { current in
++            if current <= 0 {
++                return "Квадрат"
++            } else if current >= LunagramAvatarShape.maxCorners {
++                return "Круг"
++            }
++            return "\(current)"
++        }, sectionId: sectionId, updated: { newValue in
++            arguments.setSlider(90, newValue)
++        })
+     case let .color(id, title, rgb):
+         return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", labelStyle: .color(UIColor(rgb: rgb)), sectionId: sectionId, style: .blocks, action: {
+             arguments.openChoice(id)
+@@ -2439,6 +2474,19 @@ private func lunagramCardsEntries(values: [LunagramToggle: Bool], media: Lunagra
+     return rows.entries
+ }
+ 
++/// Экран «Аватарки» — как на ПК: образец, ползунок закругления (с подписью
++/// «Квадрат» и «Круг» по краям), «Единое закругление». Бокового меню с ПК
++/// здесь нет: у айфона его нет, вместо него вкладки внизу.
++private func lunagramAvatarsEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    var rows = LunagramRowsBuilder()
++    rows.header("Закругление аватарок")
++    rows.row(.preview(.avatar, media.avatarCorners))
++    rows.row(.cornerSlider(media.avatarCorners))
++    rows.row(.toggle(.avatarSingleCorner, values[.avatarSingleCorner] ?? LunagramToggle.avatarSingleCorner.value, "Единое закругление", nil))
++    rows.info("Форумы будут иметь ту же форму, что и чаты. В уже открытых списках форма сменится, когда они перерисуются, — везде сразу после перезапуска Lunagram.")
++    return rows.entries
++}
++
+ /// Экран «Частицы» — строки со значением, как на ПК. Живой образец сверху
+ /// хозяин попросил оставить: на ПК его нет, а на айфоне он нравится.
+ private func lunagramParticlesEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
+@@ -2576,6 +2624,8 @@ private func lunagramGroupController(context: AccountContext, group: LunagramSet
+             entries = lunagramCardsEntries(values: currentValues, media: media)
+         case .particles:
+             entries = lunagramParticlesEntries(values: currentValues, media: media)
++        case .avatars:
++            entries = lunagramAvatarsEntries(values: currentValues, media: media)
+         default:
+             for section in group.sections {
+                 entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
