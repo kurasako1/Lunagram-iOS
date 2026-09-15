@@ -1,0 +1,1031 @@
+diff --git a/submodules/ItemListUI/BUILD b/submodules/ItemListUI/BUILD
+index 0b641c47..138c6f33 100644
+--- a/submodules/ItemListUI/BUILD
++++ b/submodules/ItemListUI/BUILD
+@@ -37,6 +37,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/GlassBackgroundComponent",
+         "//submodules/TelegramUI/Components/GlassControls",
+         "//submodules/TelegramUI/Components/HorizontalTabsComponent",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/ItemListUI/Sources/Items/ItemListDisclosureItem.swift b/submodules/ItemListUI/Sources/Items/ItemListDisclosureItem.swift
+index ab096a88..cce158b7 100644
+--- a/submodules/ItemListUI/Sources/Items/ItemListDisclosureItem.swift
++++ b/submodules/ItemListUI/Sources/Items/ItemListDisclosureItem.swift
+@@ -10,6 +10,7 @@ import TelegramCore
+ import AccountContext
+ import TextNodeWithEntities
+ import ListItemComponentAdaptor
++import Lunagram
+ 
+ private let avatarFont = avatarPlaceholderFont(size: 16.0)
+ 
+@@ -234,6 +235,39 @@ public class ItemListDisclosureItemNode: ListViewItemNode, ItemListItemNode {
+         return self.item?.tag
+     }
+ 
++    // Lunagram: долгое нажатие по строке со значком — «Свой значок», как
++    // правый щелчок на ПК. Выключены свои значки — строка ведёт себя как обычно.
++    override public var canBeLongTapped: Bool {
++        return LunagramSettingIcons.enabled && self.item?.icon != nil
++    }
++
++    override public func longTapped() {
++        guard let item = self.item, let icon = item.icon else {
++            return
++        }
++        let theme = item.presentationData.theme
++        let palette = LunagramSettingIcons.Palette(isDark: theme.overallDarkAppearance, background: theme.list.blocksBackgroundColor, card: theme.list.itemBlocksBackgroundColor, text: theme.list.itemPrimaryTextColor, secondaryText: theme.list.itemSecondaryTextColor, accent: theme.list.itemAccentColor)
++        LunagramSettingIcons.showMenu(key: item.title, icon: icon, iconSize: icon.size, from: self.view, palette: palette)
++    }
++
++    // Своя картинка, если есть, иначе обычный значок строки.
++    private func lunagramApplyIcon() {
++        guard let item = self.item, let icon = item.icon else {
++            return
++        }
++        self.iconNode.image = LunagramSettingIcons.image(for: item.title, size: icon.size) ?? icon
++    }
++
++    @objc private func lunagramSettingsChanged() {
++        if Thread.isMainThread {
++            self.lunagramApplyIcon()
++        } else {
++            DispatchQueue.main.async { [weak self] in
++                self?.lunagramApplyIcon()
++            }
++        }
++    }
++
+     private var placeholderNode: ShimmerEffectNode?
+     private var absoluteLocation: (CGRect, CGSize)?
+     
+@@ -289,8 +323,14 @@ public class ItemListDisclosureItemNode: ListViewItemNode, ItemListItemNode {
+         self.addSubnode(self.titleNode.textNode)
+         self.addSubnode(self.labelNode)
+         self.addSubnode(self.arrowNode)
+-        
++
+         self.addSubnode(self.activateArea)
++
++        NotificationCenter.default.addObserver(self, selector: #selector(self.lunagramSettingsChanged), name: LunagramSettings.didChangeNotification, object: nil)
++    }
++
++    deinit {
++        NotificationCenter.default.removeObserver(self)
+     }
+ 
+     override public func updateAbsoluteRect(_ rect: CGRect, within containerSize: CGSize) {
+@@ -598,6 +638,7 @@ public class ItemListDisclosureItemNode: ListViewItemNode, ItemListItemNode {
+                         if updateIcon {
+                             strongSelf.iconNode.image = icon
+                         }
++                        strongSelf.lunagramApplyIcon()
+                         let iconY: CGFloat
+                         if case .multilineDetailText = item.labelStyle {
+                             iconY = 14.0
+diff --git a/submodules/Lunagram/Sources/LunagramSettingIcons.swift b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+new file mode 100644
+index 00000000..0baa5d3a
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+@@ -0,0 +1,657 @@
++import Foundation
++import UIKit
++import PhotosUI
++
++/// Свои картинки вместо значков у строк настроек — как на ПК.
++///
++/// Строку узнаём по её тексту, как ПК — по надписи кнопки. Картинка лежит в
++/// папке Lunagram (сторона до 256 точек, как на ПК), а приближение и сдвиг —
++/// в настройках одной строкой. Картинка ложится как есть: при 100% целиком
++/// помещается в значок, прозрачные края остаются прозрачными; приближение
++/// увеличивает её, и лишнее уходит за край, а сдвиг выбирает видимый кусок.
++public enum LunagramSettingIcons {
++    /// Приближение в процентах: 100 — картинка целиком в значке. Как на ПК.
++    static let zoomMin = 100
++    static let zoomMax = 400
++
++    /// Сторона сохранённой картинки — как у значков на ПК.
++    private static let fileSide = 256
++    private static let filePrefix = "icon-"
++
++    struct Entry: Equatable {
++        var file: String
++        var zoom: Int
++        var offsetX: Int
++        var offsetY: Int
++    }
++
++    /// Выключатель «Свои значки в настройках».
++    public static var enabled: Bool {
++        return LunagramSettings.settingIcons
++    }
++
++    // MARK: Список «строка → картинка»
++
++    private static var parsedSource: String?
++    private static var parsedEntries: [String: Entry] = [:]
++
++    /// Разбираем, только когда список сменился: значки рисуются часто, а
++    /// меняется список редко.
++    static func entries() -> [String: Entry] {
++        let source = LunagramSettings.settingIconsMap
++        if source != parsedSource {
++            parsedSource = source
++            var result: [String: Entry] = [:]
++            for line in source.components(separatedBy: "\n") {
++                let parts = line.components(separatedBy: "\t")
++                if parts.count < 5 || parts[0].isEmpty || parts[1].isEmpty {
++                    continue
++                }
++                result[parts[0]] = Entry(
++                    file: parts[1],
++                    zoom: max(zoomMin, min(zoomMax, Int(parts[2]) ?? zoomMin)),
++                    offsetX: max(-100, min(100, Int(parts[3]) ?? 0)),
++                    offsetY: max(-100, min(100, Int(parts[4]) ?? 0))
++                )
++            }
++            parsedEntries = result
++        }
++        return parsedEntries
++    }
++
++    private static func save(_ entries: [String: Entry]) {
++        var lines: [String] = []
++        for key in entries.keys.sorted() {
++            if let entry = entries[key] {
++                lines.append([key, entry.file, "\(entry.zoom)", "\(entry.offsetX)", "\(entry.offsetY)"].joined(separator: "\t"))
++            }
++        }
++        LunagramSettings.settingIconsMap = lines.joined(separator: "\n")
++    }
++
++    /// Ключ строки — её текст. Табуляция и перенос строки — наши
++    /// разделители, в ключ их пускать нельзя.
++    static func normalizedKey(_ text: String) -> String {
++        return text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ")
++    }
++
++    static func entry(for key: String) -> Entry? {
++        return entries()[normalizedKey(key)]
++    }
++
++    /// Есть ли у строки своя картинка.
++    public static func hasCustom(_ key: String) -> Bool {
++        return entry(for: key) != nil
++    }
++
++    static func change(_ key: String, _ body: (inout Entry) -> Void) {
++        let key = normalizedKey(key)
++        var all = entries()
++        guard var entry = all[key] else {
++            return
++        }
++        let before = entry
++        body(&entry)
++        if entry == before {
++            return
++        }
++        all[key] = entry
++        save(all)
++    }
++
++    /// «Вернуть обычный»: убрать свою картинку у строки.
++    public static func reset(_ key: String) {
++        let key = normalizedKey(key)
++        var all = entries()
++        guard let entry = all.removeValue(forKey: key) else {
++            return
++        }
++        save(all)
++        removeIfUnused(entry.file)
++    }
++
++    /// Файл, на который больше не ссылается ни один значок, удаляем — иначе
++    /// папка засорялась бы при каждой смене картинки.
++    private static func removeIfUnused(_ file: String) {
++        if entries().values.contains(where: { $0.file == file }) {
++            return
++        }
++        originals.removeValue(forKey: file)
++        guard file.hasPrefix(filePrefix), let folder = try? LunagramSettings.lunagramFolder() else {
++            return
++        }
++        try? FileManager.default.removeItem(at: folder.appendingPathComponent(file))
++    }
++
++    /// Сохранить картинку и привязать к строке. Зовётся не с главного
++    /// потока: файл временный, забрать его надо сразу. Список меняем уже на
++    /// главном.
++    static func install(from source: URL, key: String, completion: @escaping (Bool) -> Void) {
++        let name = filePrefix + UUID().uuidString + ".png"
++        var written = false
++        if let folder = try? LunagramSettings.lunagramFolder() {
++            // PNG — чтобы прозрачный фон остался прозрачным, как у значка.
++            written = (try? LunagramSettings.writeScaledImage(from: source, to: folder.appendingPathComponent(name), asPNG: true, maxPixelSize: fileSide)) != nil
++        }
++        DispatchQueue.main.async {
++            guard written else {
++                completion(false)
++                return
++            }
++            let key = normalizedKey(key)
++            var all = entries()
++            let old = all[key]?.file
++            all[key] = Entry(file: name, zoom: zoomMin, offsetX: 0, offsetY: 0)
++            save(all)
++            if let old = old {
++                removeIfUnused(old)
++            }
++            completion(true)
++        }
++    }
++
++    // MARK: Картинки
++
++    /// Загруженные картинки держим сами, чтобы не читать файл с диска на
++    /// каждой перерисовке строки.
++    private static var originals: [String: UIImage] = [:]
++    private static let rendered: NSCache<NSString, UIImage> = {
++        let cache = NSCache<NSString, UIImage>()
++        cache.countLimit = 200
++        return cache
++    }()
++
++    static func original(_ file: String) -> UIImage? {
++        if let image = originals[file] {
++            return image
++        }
++        guard let folder = try? LunagramSettings.lunagramFolder(), let image = UIImage(contentsOfFile: folder.appendingPathComponent(file).path) else {
++            return nil
++        }
++        originals[file] = image
++        return image
++    }
++
++    /// Где лежит картинка внутри значка — та же расчётка, что на ПК. Меньше
++    /// места — посередине; больше — сдвиг долей от лишка: -100 прижимает к
++    /// левому или верхнему краю, +100 — к другому.
++    static func placement(original: CGSize, target: CGSize, entry: Entry) -> CGRect {
++        guard original.width > 0.0, original.height > 0.0, target.width > 0.0, target.height > 0.0 else {
++            return .zero
++        }
++        let zoom = CGFloat(max(zoomMin, min(zoomMax, entry.zoom))) / 100.0
++        let fit = min(target.width / original.width, target.height / original.height) * zoom
++        let size = CGSize(width: max(1.0, original.width * fit), height: max(1.0, original.height * fit))
++        func place(_ extra: CGFloat, _ percent: Int) -> CGFloat {
++            if extra <= 0.0 {
++                return -extra / 2.0
++            }
++            return -(extra / 2.0 * (1.0 + CGFloat(percent) / 100.0))
++        }
++        return CGRect(origin: CGPoint(x: place(size.width - target.width, entry.offsetX), y: place(size.height - target.height, entry.offsetY)), size: size)
++    }
++
++    /// Своя картинка строки в размер её значка. nil — своей нет или свои
++    /// значки выключены: тогда рисуется обычный.
++    public static func image(for key: String, size: CGSize) -> UIImage? {
++        guard enabled, size.width > 0.0, size.height > 0.0, let entry = entry(for: key), let image = original(entry.file) else {
++            return nil
++        }
++        let cacheKey = "\(entry.file)|\(entry.zoom)|\(entry.offsetX)|\(entry.offsetY)|\(size.width)x\(size.height)" as NSString
++        if let cached = rendered.object(forKey: cacheKey) {
++            return cached
++        }
++        let rect = placement(original: image.size, target: size, entry: entry)
++        let format = UIGraphicsImageRendererFormat()
++        format.opaque = false
++        // Как у рамки: чётко на любом айфоне, а значок крошечный — память не жалко.
++        format.scale = 3.0
++        let result = UIGraphicsImageRenderer(size: size, format: format).image { _ in
++            UIBezierPath(rect: CGRect(origin: CGPoint(), size: size)).addClip()
++            image.draw(in: rect)
++        }
++        rendered.setObject(result, forKey: cacheKey)
++        return result
++    }
++
++    // MARK: Меню и окна
++
++    /// Цвета темы Telegram — чтобы окошки не выпадали из оформления.
++    public struct Palette {
++        public let isDark: Bool
++        public let background: UIColor
++        public let card: UIColor
++        public let text: UIColor
++        public let secondaryText: UIColor
++        public let accent: UIColor
++
++        public init(isDark: Bool, background: UIColor, card: UIColor, text: UIColor, secondaryText: UIColor, accent: UIColor) {
++            self.isDark = isDark
++            self.background = background
++            self.card = card
++            self.text = text
++            self.secondaryText = secondaryText
++            self.accent = accent
++        }
++    }
++
++    /// Долгое нажатие по строке — меню своего значка, как правый щелчок на
++    /// ПК. icon — обычный значок строки: его видно в образце, пока своей
++    /// картинки нет.
++    public static func showMenu(key rawKey: String, icon: UIImage?, iconSize: CGSize, from view: UIView, palette: Palette) {
++        let key = normalizedKey(rawKey)
++        guard enabled, !key.isEmpty, let presenter = findPresenter(for: view) else {
++            return
++        }
++        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
++        let choose = {
++            chooseFile(key: key, icon: icon, iconSize: iconSize, palette: palette, presenter: presenter, openAdjust: true)
++        }
++        if hasCustom(key) {
++            sheet.addAction(UIAlertAction(title: "Подогнать значок", style: .default, handler: { _ in
++                DispatchQueue.main.async {
++                    showAdjust(key: key, icon: icon, iconSize: iconSize, palette: palette, presenter: presenter)
++                }
++            }))
++            sheet.addAction(UIAlertAction(title: "Другая картинка", style: .default, handler: { _ in
++                DispatchQueue.main.async {
++                    choose()
++                }
++            }))
++            sheet.addAction(UIAlertAction(title: "Вернуть обычный", style: .destructive, handler: { _ in
++                reset(key)
++            }))
++        } else {
++            sheet.addAction(UIAlertAction(title: "Свой значок", style: .default, handler: { _ in
++                DispatchQueue.main.async {
++                    choose()
++                }
++            }))
++        }
++        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: nil))
++        if let popover = sheet.popoverPresentationController {
++            popover.sourceView = view
++            popover.sourceRect = view.bounds
++        }
++        sheet.overrideUserInterfaceStyle = palette.isDark ? .dark : .light
++        sheet.view.tintColor = palette.accent
++        presenter.present(sheet, animated: true, completion: nil)
++    }
++
++    /// Экран, с которого показывать окошки: ближайший по цепочке ответчиков,
++    /// а поверх него — то, что уже открыто.
++    private static func findPresenter(for view: UIView) -> UIViewController? {
++        var responder: UIResponder? = view
++        var found: UIViewController?
++        while let current = responder {
++            if let controller = current as? UIViewController {
++                found = controller
++                break
++            }
++            responder = current.next
++        }
++        if found == nil {
++            found = view.window?.rootViewController
++        }
++        return found.map { topmost($0) }
++    }
++
++    private static func topmost(_ controller: UIViewController) -> UIViewController {
++        var result = controller
++        while let presented = result.presentedViewController, !presented.isBeingDismissed {
++            result = presented
++        }
++        return result
++    }
++
++    private static var pickerHolder: AnyObject?
++
++    /// Выбор картинки из галереи. openAdjust — после выбора открыть окно
++    /// подгонки; из самого окна подгонки не нужно: оно уже открыто и само
++    /// покажет новую картинку.
++    static func chooseFile(key: String, icon: UIImage?, iconSize: CGSize, palette: Palette, presenter: UIViewController, openAdjust: Bool) {
++        guard #available(iOS 14.0, *) else {
++            return
++        }
++        var configuration = PHPickerConfiguration()
++        configuration.filter = PHPickerFilter.images
++        configuration.selectionLimit = 1
++        let picker = PHPickerViewController(configuration: configuration)
++        let delegate = LunagramIconPickerDelegate(key: key, completion: { imported in
++            pickerHolder = nil
++            let top = topmost(presenter)
++            if !imported {
++                let alert = UIAlertController(title: nil, message: "Картинка не читается. Нужен PNG, JPG, HEIC или GIF.", preferredStyle: .alert)
++                alert.addAction(UIAlertAction(title: "Понятно", style: .default, handler: nil))
++                alert.overrideUserInterfaceStyle = palette.isDark ? .dark : .light
++                top.present(alert, animated: true, completion: nil)
++                return
++            }
++            if openAdjust {
++                showAdjust(key: key, icon: icon, iconSize: iconSize, palette: palette, presenter: top)
++            }
++        })
++        pickerHolder = delegate
++        picker.delegate = delegate
++        picker.overrideUserInterfaceStyle = palette.isDark ? .dark : .light
++        topmost(presenter).present(picker, animated: true, completion: nil)
++    }
++
++    static func showAdjust(key: String, icon: UIImage?, iconSize: CGSize, palette: Palette, presenter: UIViewController) {
++        let controller = LunagramIconAdjustController(key: key, icon: icon, iconSize: iconSize, palette: palette)
++        controller.chooseOther = { [weak controller] in
++            guard let controller = controller else {
++                return
++            }
++            chooseFile(key: key, icon: icon, iconSize: iconSize, palette: palette, presenter: controller, openAdjust: false)
++        }
++        let navigation = UINavigationController(rootViewController: controller)
++        // Окно закрывается только «Готово»: иначе движение пальцем по образцу
++        // вниз закрывало бы его вместо сдвига картинки.
++        navigation.isModalInPresentation = true
++        navigation.overrideUserInterfaceStyle = palette.isDark ? .dark : .light
++        let appearance = UINavigationBarAppearance()
++        appearance.configureWithOpaqueBackground()
++        appearance.backgroundColor = palette.background
++        appearance.titleTextAttributes = [.foregroundColor: palette.text]
++        appearance.shadowColor = .clear
++        navigation.navigationBar.standardAppearance = appearance
++        navigation.navigationBar.scrollEdgeAppearance = appearance
++        navigation.navigationBar.compactAppearance = appearance
++        navigation.navigationBar.tintColor = palette.accent
++        topmost(presenter).present(navigation, animated: true, completion: nil)
++    }
++}
++
++/// Выбор картинки для значка. Файл из галереи временный — сохраняем его
++/// прямо в ответе, а окно выбора закрываем раньше: так следом можно сразу
++/// показать окно подгонки.
++@available(iOS 14.0, *)
++private final class LunagramIconPickerDelegate: NSObject, PHPickerViewControllerDelegate {
++    private let key: String
++    private let completion: (Bool) -> Void
++
++    init(key: String, completion: @escaping (Bool) -> Void) {
++        self.key = key
++        self.completion = completion
++    }
++
++    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
++        let key = self.key
++        let completion = self.completion
++        guard let provider = results.first?.itemProvider else {
++            picker.dismiss(animated: true, completion: nil)
++            // Ничего не выбрали — просто закрыли, это не ошибка.
++            LunagramSettingIcons.releasePicker()
++            return
++        }
++        picker.dismiss(animated: true, completion: {
++            let imageType = "public.image"
++            guard provider.hasItemConformingToTypeIdentifier(imageType) else {
++                completion(false)
++                return
++            }
++            provider.loadFileRepresentation(forTypeIdentifier: imageType) { url, _ in
++                guard let url = url else {
++                    DispatchQueue.main.async {
++                        completion(false)
++                    }
++                    return
++                }
++                LunagramSettingIcons.install(from: url, key: key, completion: completion)
++            }
++        })
++    }
++}
++
++extension LunagramSettingIcons {
++    fileprivate static func releasePicker() {
++        pickerHolder = nil
++    }
++}
++
++/// Крупный образец значка: картинку двигают пальцем и приближают щипком —
++/// как мышью и колесом на ПК.
++private final class LunagramIconCanvasView: UIView {
++    var key: String = ""
++    var palette: LunagramSettingIcons.Palette?
++
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        self.isOpaque = false
++        self.contentMode = .redraw
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    override func draw(_ rect: CGRect) {
++        let bounds = self.bounds
++        let shape = UIBezierPath(roundedRect: bounds, cornerRadius: 12.0)
++        (self.palette?.card ?? UIColor.secondarySystemBackground).setFill()
++        shape.fill()
++        if let entry = LunagramSettingIcons.entry(for: self.key), let image = LunagramSettingIcons.original(entry.file) {
++            let place = LunagramSettingIcons.placement(original: image.size, target: bounds.size, entry: entry)
++            UIGraphicsGetCurrentContext()?.saveGState()
++            shape.addClip()
++            image.draw(in: place)
++            UIGraphicsGetCurrentContext()?.restoreGState()
++        } else {
++            let text = "нет картинки" as NSString
++            let attributes: [NSAttributedString.Key: Any] = [
++                .font: UIFont.systemFont(ofSize: 15.0),
++                .foregroundColor: self.palette?.secondaryText ?? UIColor.secondaryLabel
++            ]
++            let size = text.size(withAttributes: attributes)
++            text.draw(at: CGPoint(x: (bounds.width - size.width) / 2.0, y: (bounds.height - size.height) / 2.0), withAttributes: attributes)
++        }
++    }
++}
++
++/// Окно подгонки — как на ПК: крупный образец, рядом та же строка в
++/// настоящем размере, «Приближение», «Другая картинка», подсказка; вверху
++/// «Вернуть обычный» и «Готово».
++private final class LunagramIconAdjustController: UIViewController, UIGestureRecognizerDelegate {
++    private let key: String
++    private let icon: UIImage?
++    private let iconSize: CGSize
++    private let palette: LunagramSettingIcons.Palette
++
++    private let canvas = LunagramIconCanvasView()
++    private let rowIconView = UIImageView()
++    private let rowLabel = UILabel()
++    private let zoomLabel = UILabel()
++    private let slider = UISlider()
++    private let otherButton = UIButton(type: .system)
++    private let infoLabel = UILabel()
++
++    private var observer: NSObjectProtocol?
++    private var dragStart: (x: Int, y: Int)?
++    private var pinchStartZoom: Int?
++
++    var chooseOther: (() -> Void)?
++
++    init(key: String, icon: UIImage?, iconSize: CGSize, palette: LunagramSettingIcons.Palette) {
++        self.key = key
++        self.icon = icon
++        self.iconSize = iconSize
++        self.palette = palette
++        super.init(nibName: nil, bundle: nil)
++        self.title = "Свой значок"
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    deinit {
++        if let observer = self.observer {
++            NotificationCenter.default.removeObserver(observer)
++        }
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++        self.view.backgroundColor = self.palette.background
++
++        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Вернуть обычный", style: .plain, target: self, action: #selector(self.resetPressed))
++        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Готово", style: .done, target: self, action: #selector(self.donePressed))
++
++        self.canvas.key = self.key
++        self.canvas.palette = self.palette
++        self.view.addSubview(self.canvas)
++        let pan = UIPanGestureRecognizer(target: self, action: #selector(self.canvasPanned(_:)))
++        pan.delegate = self
++        self.canvas.addGestureRecognizer(pan)
++        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(self.canvasPinched(_:)))
++        pinch.delegate = self
++        self.canvas.addGestureRecognizer(pinch)
++
++        self.rowIconView.contentMode = .center
++        self.view.addSubview(self.rowIconView)
++        self.rowLabel.font = UIFont.systemFont(ofSize: 17.0)
++        self.rowLabel.textColor = self.palette.text
++        self.rowLabel.text = self.key
++        self.rowLabel.lineBreakMode = .byTruncatingTail
++        self.view.addSubview(self.rowLabel)
++
++        self.zoomLabel.font = UIFont.systemFont(ofSize: 13.0)
++        self.zoomLabel.textColor = self.palette.secondaryText
++        self.zoomLabel.text = "ПРИБЛИЖЕНИЕ"
++        self.view.addSubview(self.zoomLabel)
++
++        self.slider.minimumValue = Float(LunagramSettingIcons.zoomMin)
++        self.slider.maximumValue = Float(LunagramSettingIcons.zoomMax)
++        self.slider.minimumTrackTintColor = self.palette.accent
++        self.slider.addTarget(self, action: #selector(self.sliderChanged), for: .valueChanged)
++        self.view.addSubview(self.slider)
++
++        self.otherButton.setTitle("Другая картинка", for: .normal)
++        self.otherButton.setTitleColor(self.palette.accent, for: .normal)
++        self.otherButton.titleLabel?.font = UIFont.systemFont(ofSize: 17.0)
++        self.otherButton.contentHorizontalAlignment = .left
++        self.otherButton.addTarget(self, action: #selector(self.otherPressed), for: .touchUpInside)
++        self.view.addSubview(self.otherButton)
++
++        self.infoLabel.font = UIFont.systemFont(ofSize: 13.0)
++        self.infoLabel.textColor = self.palette.secondaryText
++        self.infoLabel.numberOfLines = 0
++        self.infoLabel.text = "Двигай картинку пальцем, чтобы выбрать кусок, щипок приближает. Картинка ложится как есть: PNG с прозрачным фоном смотрится как настоящий значок. Гифка встаёт первым кадром. Выключить все свои значки разом можно в «Оформлении» Lunagram."
++        self.view.addSubview(self.infoLabel)
++
++        self.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++            self?.refresh()
++        })
++        self.refresh()
++    }
++
++    override func viewDidLayoutSubviews() {
++        super.viewDidLayoutSubviews()
++        let bounds = self.view.bounds
++        let insets = self.view.safeAreaInsets
++        let side: CGFloat = 16.0
++        let width = bounds.width - insets.left - insets.right - side * 2.0
++        let left = insets.left + side
++        var y = insets.top + 20.0
++
++        let canvasSide = floor(min(160.0, width * 0.45))
++        self.canvas.frame = CGRect(x: left, y: y, width: canvasSide, height: canvasSide)
++
++        // Справа — строка настроек, как она выглядит на самом деле.
++        let rowLeft = left + canvasSide + 16.0
++        self.rowIconView.frame = CGRect(x: rowLeft, y: y + floor((canvasSide - self.iconSize.height) / 2.0), width: self.iconSize.width, height: self.iconSize.height)
++        let labelLeft = rowLeft + self.iconSize.width + 12.0
++        self.rowLabel.frame = CGRect(x: labelLeft, y: y + floor((canvasSide - 22.0) / 2.0), width: max(0.0, left + width - labelLeft), height: 22.0)
++        y += canvasSide + 28.0
++
++        self.zoomLabel.frame = CGRect(x: left, y: y, width: width, height: 18.0)
++        y += 24.0
++        self.slider.frame = CGRect(x: left, y: y, width: width, height: 32.0)
++        y += 48.0
++        self.otherButton.frame = CGRect(x: left, y: y, width: width, height: 44.0)
++        y += 52.0
++        let infoSize = self.infoLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
++        self.infoLabel.frame = CGRect(x: left, y: y, width: width, height: ceil(infoSize.height))
++    }
++
++    private func refresh() {
++        self.canvas.setNeedsDisplay()
++        self.rowIconView.image = LunagramSettingIcons.image(for: self.key, size: self.iconSize) ?? self.icon
++        if !self.slider.isTracking, let entry = LunagramSettingIcons.entry(for: self.key) {
++            self.slider.value = Float(entry.zoom)
++        }
++        let hasEntry = LunagramSettingIcons.hasCustom(self.key)
++        self.slider.isEnabled = hasEntry
++        self.navigationItem.leftBarButtonItem?.isEnabled = hasEntry
++    }
++
++    @objc private func canvasPanned(_ recognizer: UIPanGestureRecognizer) {
++        switch recognizer.state {
++        case .began:
++            if let entry = LunagramSettingIcons.entry(for: self.key) {
++                self.dragStart = (entry.offsetX, entry.offsetY)
++            }
++        case .changed:
++            guard let start = self.dragStart, let entry = LunagramSettingIcons.entry(for: self.key), let image = LunagramSettingIcons.original(entry.file) else {
++                return
++            }
++            let target = self.canvas.bounds.size
++            let place = LunagramSettingIcons.placement(original: image.size, target: target, entry: entry)
++            // Лишек — то, что не влезло. Нет лишка по оси — двигать нечего.
++            // Двести, а не сто: сдвиг идёт от -100 до +100.
++            let extraX = place.width - target.width
++            let extraY = place.height - target.height
++            let delta = recognizer.translation(in: self.canvas)
++            let offsetX = extraX > 0.0 ? max(-100, min(100, start.x - Int((delta.x * 200.0 / extraX).rounded()))) : entry.offsetX
++            let offsetY = extraY > 0.0 ? max(-100, min(100, start.y - Int((delta.y * 200.0 / extraY).rounded()))) : entry.offsetY
++            LunagramSettingIcons.change(self.key, { entry in
++                entry.offsetX = offsetX
++                entry.offsetY = offsetY
++            })
++        default:
++            self.dragStart = nil
++        }
++    }
++
++    @objc private func canvasPinched(_ recognizer: UIPinchGestureRecognizer) {
++        switch recognizer.state {
++        case .began:
++            self.pinchStartZoom = LunagramSettingIcons.entry(for: self.key)?.zoom
++        case .changed:
++            guard let start = self.pinchStartZoom else {
++                return
++            }
++            let zoom = max(LunagramSettingIcons.zoomMin, min(LunagramSettingIcons.zoomMax, Int((CGFloat(start) * recognizer.scale).rounded())))
++            LunagramSettingIcons.change(self.key, { entry in
++                entry.zoom = zoom
++            })
++        default:
++            self.pinchStartZoom = nil
++        }
++    }
++
++    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
++        return true
++    }
++
++    @objc private func sliderChanged() {
++        let zoom = Int(self.slider.value.rounded())
++        LunagramSettingIcons.change(self.key, { entry in
++            entry.zoom = zoom
++        })
++    }
++
++    @objc private func otherPressed() {
++        self.chooseOther?()
++    }
++
++    @objc private func resetPressed() {
++        LunagramSettingIcons.reset(self.key)
++        self.dismiss(animated: true, completion: nil)
++    }
++
++    @objc private func donePressed() {
++        self.dismiss(animated: true, completion: nil)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 83ff30f6..d2c1d082 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -110,6 +110,8 @@ public final class LunagramSettings {
+         static let composeColor = "lunagram.compose.color"
+         static let composeDensity = "lunagram.compose.density"
+         static let composeAuto = "lunagram.compose.auto"
++        static let settingIcons = "lunagram.settingIcons.enabled"
++        static let settingIconsMap = "lunagram.settingIcons.map"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -316,6 +318,34 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// «Свои значки в настройках» — общий выключатель, как на ПК. Включён
++    /// сразу: пока своих картинок нет, строки выглядят как обычно, а
++    /// долгое нажатие по строке со значком открывает «Свой значок».
++    public static var settingIcons: Bool {
++        get {
++            guard defaults.object(forKey: Key.settingIcons) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.settingIcons)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.settingIcons)
++            changed()
++        }
++    }
++
++    /// Список «строка → картинка» одной строкой, как на ПК: по строке на
++    /// значок, поля через табуляцию. Разбирает LunagramSettingIcons.
++    static var settingIconsMap: String {
++        get {
++            return defaults.string(forKey: Key.settingIconsMap) ?? ""
++        }
++        set {
++            defaults.set(newValue, forKey: Key.settingIconsMap)
++            changed()
++        }
++    }
++
+     /// Цвет своей плёнки с плотностью — или nil, если стекло родное. Как на
+     /// ПК: свой цвет, а без него — обычный цвет полосы, и плотность поверх.
+     public static func composeTintColor(fallback: UIColor) -> UIColor? {
+@@ -1721,11 +1751,11 @@ public final class LunagramSettings {
+     /// мегабайт, а шапка шириной с экран: больше 2048 точек по длинной
+     /// стороне ей не нужно. Заодно HEIC становится JPEG, а поворот из
+     /// пометок снимка впечатывается в сами точки — показывать проще.
+-    private static func writeScaledImage(from source: URL, to target: URL, asPNG: Bool = false) throws {
++    static func writeScaledImage(from source: URL, to target: URL, asPNG: Bool = false, maxPixelSize: Int = 2048) throws {
+         let options: [CFString: Any] = [
+             kCGImageSourceCreateThumbnailFromImageAlways: true,
+             kCGImageSourceCreateThumbnailWithTransform: true,
+-            kCGImageSourceThumbnailMaxPixelSize: 2048
++            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+         ]
+         guard let imageSource = CGImageSourceCreateWithURL(source as CFURL, nil), let image = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+             throw ImportError.unreadable
+@@ -1745,7 +1775,7 @@ public final class LunagramSettings {
+ 
+     /// Своя папка внутри приложения. В «Application Support», а не в
+     /// «Документах»: это данные приложения, человеку в файлах их видеть незачем.
+-    private static func lunagramFolder() throws -> URL {
++    static func lunagramFolder() throws -> URL {
+         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+         let folder = base.appendingPathComponent("Lunagram", isDirectory: true)
+         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/ListItems/PeerInfoScreenDisclosureItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/ListItems/PeerInfoScreenDisclosureItem.swift
+index f788f650..4e358897 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/ListItems/PeerInfoScreenDisclosureItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/ListItems/PeerInfoScreenDisclosureItem.swift
+@@ -6,6 +6,7 @@ import SwiftSignalKit
+ import TelegramPresentationData
+ import TextNodeWithEntities
+ import AccountContext
++import Lunagram
+ 
+ final class PeerInfoScreenDisclosureItem: PeerInfoScreenItem {
+     enum Label {
+@@ -88,7 +89,14 @@ private final class PeerInfoScreenDisclosureItemNode: PeerInfoScreenItemNode {
+     private var iconDisposable = MetaDisposable()
+     
+     private var item: PeerInfoScreenDisclosureItem?
+-    
++
++    // Lunagram: свои значки — как на ПК. Долгое нажатие по строке со значком
++    // открывает «Свой значок», а своя картинка рисуется вместо обычной.
++    private var lunagramLongPress: UILongPressGestureRecognizer?
++    private var lunagramSignalIcon: UIImage?
++    private var lunagramIconSize = CGSize(width: 30.0, height: 30.0)
++    private var lunagramPalette: LunagramSettingIcons.Palette?
++
+     override init() {
+         var bringToFrontForHighlightImpl: (() -> Void)?
+         self.selectionNode = PeerInfoScreenSelectableBackgroundNode(bringToFrontForHighlight: { bringToFrontForHighlightImpl?() })
+@@ -137,10 +145,61 @@ private final class PeerInfoScreenDisclosureItemNode: PeerInfoScreenItemNode {
+         self.addSubnode(self.textNode)
+         self.addSubnode(self.arrowNode)
+         self.addSubnode(self.activateArea)
++
++        NotificationCenter.default.addObserver(self, selector: #selector(self.lunagramSettingsChanged), name: LunagramSettings.didChangeNotification, object: nil)
+     }
+-    
++
+     deinit {
+         self.iconDisposable.dispose()
++        NotificationCenter.default.removeObserver(self)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++
++        let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.lunagramLongPressed(_:)))
++        recognizer.isEnabled = self.lunagramCanCustomize
++        self.view.addGestureRecognizer(recognizer)
++        self.lunagramLongPress = recognizer
++    }
++
++    private var lunagramCanCustomize: Bool {
++        guard let item = self.item else {
++            return false
++        }
++        return LunagramSettingIcons.enabled && (item.icon != nil || item.iconSignal != nil)
++    }
++
++    // Своя картинка, если есть, иначе обычный значок строки.
++    private func lunagramApplyIcon() {
++        self.lunagramLongPress?.isEnabled = self.lunagramCanCustomize
++        guard let item = self.item, item.icon != nil || item.iconSignal != nil else {
++            return
++        }
++        if let custom = LunagramSettingIcons.image(for: item.text, size: self.lunagramIconSize) {
++            self.iconNode.image = custom
++        } else if let icon = item.icon {
++            self.iconNode.image = icon
++        } else {
++            self.iconNode.image = self.lunagramSignalIcon
++        }
++    }
++
++    @objc private func lunagramSettingsChanged() {
++        if Thread.isMainThread {
++            self.lunagramApplyIcon()
++        } else {
++            DispatchQueue.main.async { [weak self] in
++                self?.lunagramApplyIcon()
++            }
++        }
++    }
++
++    @objc private func lunagramLongPressed(_ recognizer: UILongPressGestureRecognizer) {
++        guard recognizer.state == .began, let item = self.item, let palette = self.lunagramPalette else {
++            return
++        }
++        LunagramSettingIcons.showMenu(key: item.text, icon: item.icon ?? self.lunagramSignalIcon, iconSize: self.lunagramIconSize, from: self.view, palette: palette)
+     }
+     
+     override func update(context: AccountContext, width: CGFloat, safeInsets: UIEdgeInsets, presentationData: PresentationData, item: PeerInfoScreenItem, topItem: PeerInfoScreenItem?, bottomItem: PeerInfoScreenItem?, hasCorners: Bool, transition: ContainedViewLayoutTransition) -> CGFloat {
+@@ -150,8 +209,10 @@ private final class PeerInfoScreenDisclosureItemNode: PeerInfoScreenItemNode {
+         
+         let previousItem = self.item
+         self.item = item
+-        
++
+         self.selectionNode.pressed = item.action
++
++        self.lunagramPalette = LunagramSettingIcons.Palette(isDark: presentationData.theme.overallDarkAppearance, background: presentationData.theme.list.blocksBackgroundColor, card: presentationData.theme.list.itemBlocksBackgroundColor, text: presentationData.theme.list.itemPrimaryTextColor, secondaryText: presentationData.theme.list.itemSecondaryTextColor, accent: presentationData.theme.list.itemAccentColor)
+         
+         let sideInset: CGFloat = 16.0 + safeInsets.left
+         let leftInset = (item.icon == nil && item.iconSignal == nil ? sideInset : sideInset + 29.0 + 16.0)
+@@ -226,10 +287,13 @@ private final class PeerInfoScreenDisclosureItemNode: PeerInfoScreenItemNode {
+             } else if let iconSignal = item.iconSignal {
+                 if previousItem?.text != item.text {
+                     self.iconNode.image = nil
++                    self.lunagramSignalIcon = nil
+                     self.iconDisposable.set((iconSignal
+                     |> deliverOnMainQueue).startStrict(next: { [weak self] icon in
+                         if let self {
+                             self.iconNode.image = icon
++                            self.lunagramSignalIcon = icon
++                            self.lunagramApplyIcon()
+                         }
+                     }))
+                 }
+@@ -239,10 +303,13 @@ private final class PeerInfoScreenDisclosureItemNode: PeerInfoScreenItemNode {
+             }
+             let iconFrame = CGRect(origin: CGPoint(x: sideInset, y: floorToScreenPixels((height - iconSize.height) / 2.0)), size: iconSize)
+             transition.updateFrame(node: self.iconNode, frame: iconFrame)
++            self.lunagramIconSize = iconSize
++            self.lunagramApplyIcon()
+         } else if self.iconNode.supernode != nil {
+             self.iconNode.image = nil
+             self.iconNode.removeFromSupernode()
+         }
++        self.lunagramLongPress?.isEnabled = self.lunagramCanCustomize
+         
+         if item.hasArrow, let arrowImage = PresentationResourcesItemList.disclosureArrowImage(presentationData.theme) {
+             self.arrowNode.image = arrowImage
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 63c2d325..0930b214 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -60,6 +60,7 @@ private enum LunagramToggle: Int32 {
+     case typingAnimation
+     case avatarSingleCorner
+     case composeAuto
++    case settingIcons
+ 
+     var value: Bool {
+         switch self {
+@@ -143,6 +144,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.avatarSingleCorner
+         case .composeAuto:
+             return LunagramSettings.composeAuto
++        case .settingIcons:
++            return LunagramSettings.settingIcons
+         }
+     }
+ 
+@@ -228,6 +231,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.avatarSingleCorner = value
+         case .composeAuto:
+             LunagramSettings.composeAuto = value
++        case .settingIcons:
++            LunagramSettings.settingIcons = value
+         }
+     }
+ 
+@@ -313,6 +318,8 @@ private enum LunagramToggle: Int32 {
+             return "Единое закругление"
+         case .composeAuto:
+             return "Плёнка подстраивается сама"
++        case .settingIcons:
++            return "Свои значки в настройках"
+         }
+     }
+ 
+@@ -377,7 +384,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons:
+             return nil
+         }
+     }
+@@ -527,6 +534,8 @@ extension LunagramToggle {
+             return "square.on.circle"
+         case .composeAuto:
+             return "wand.and.stars"
++        case .settingIcons:
++            return "swatchpalette,paintpalette"
+         }
+     }
+ }
+@@ -2640,12 +2649,18 @@ private func lunagramFunctionsController(context: AccountContext, shared: Lunagr
+ /// открывают каждый свой набор.
+ private func lunagramCategoryController(context: AccountContext, category: LunagramSettingsCategory, shared: LunagramSharedState) -> ViewController {
+     let arguments = shared.arguments!
+-    let signal = context.sharedContext.presentationData
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get())
+     |> deliverOnMainQueue
+-    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
++    |> map { presentationData, currentValues -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         var entries = category.groups.map { LunagramSettingsEntry.menuItem($0) }
+         if category == .appearance {
+             entries.append(.info(.menu, 0, "Оформление профиля — баннер, рамка, фон, имя и статус — живёт в «Изменить профиль»: там его видно сразу на себе."))
++            // Свои картинки вместо значков у строк настроек. Сами значки
++            // меняются долгим нажатием по строке, здесь — общий выключатель.
++            var rows = LunagramRowsBuilder()
++            rows.row(.toggle(.settingIcons, currentValues[.settingIcons] ?? LunagramToggle.settingIcons.value, "Свои значки в настройках", "swatchpalette,paintpalette"))
++            rows.info("Долгое нажатие по любой строке настроек со значком — «Свой значок»: картинка из галереи, кадр подгоняется пальцем. Выключишь — вернутся обычные значки, выбранные картинки не сотрутся.")
++            entries.append(contentsOf: rows.entries)
+         }
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
