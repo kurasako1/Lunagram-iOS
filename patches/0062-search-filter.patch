@@ -274,7 +274,7 @@ index 6219f5ae..d1d29888 100644
      // Этого на экране ПК нет — айфонное. Внизу того же экрана, как решили.
      rows.header("Только на айфоне")
 diff --git a/submodules/TelegramUI/Sources/ChatControllerUpdateSearch.swift b/submodules/TelegramUI/Sources/ChatControllerUpdateSearch.swift
-index 925b489d..85939619 100644
+index 925b489d..96dcc91d 100644
 --- a/submodules/TelegramUI/Sources/ChatControllerUpdateSearch.swift
 +++ b/submodules/TelegramUI/Sources/ChatControllerUpdateSearch.swift
 @@ -4,6 +4,7 @@ import AccountContext
@@ -285,7 +285,7 @@ index 925b489d..85939619 100644
  
  extension ChatControllerImpl {    
      func updateSearch(_ interfaceState: ChatPresentationInterfaceState) -> ChatPresentationInterfaceState? {
-@@ -53,6 +54,43 @@ extension ChatControllerImpl {
+@@ -53,6 +54,44 @@ extension ChatControllerImpl {
              case let .member(peer):
                  derivedSearchState = ChatSearchState(query: search.query, location: .peer(peerId: peerId, fromId: peer.id, tags: nil, reactions: reactions, threadId: threadId, minDate: nil, maxDate: nil), loadMoreState: loadMoreStateFromResultsState(search.resultsState))
              }
@@ -301,7 +301,8 @@ index 925b489d..85939619 100644
 +                if lunagramFilter.author != 0, peerId.namespace == Namespaces.Peer.CloudUser, peerId != self.context.account.peerId {
 +                    lunagramFromId = lunagramFilter.author == 1 ? self.context.account.peerId : peerId
 +                }
-+                let lunagramTags: MessageTags?
++                // Тип тегов — через TelegramCore: Postbox этот файл не подключает.
++                let lunagramTags: EngineMessage.Tags?
 +                switch lunagramFilter.type {
 +                case .any:
 +                    lunagramTags = nil
@@ -329,7 +330,7 @@ index 925b489d..85939619 100644
          }
          
          if derivedSearchState != self.searchState {
-@@ -62,13 +100,18 @@ extension ChatControllerImpl {
+@@ -62,13 +101,18 @@ extension ChatControllerImpl {
                  if previousSearchState?.query != searchState.query || previousSearchState?.location != searchState.location {
                      var queryIsEmpty = false
                      if searchState.query.isEmpty {
