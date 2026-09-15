@@ -1,0 +1,234 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 7fd573a7..83ff30f6 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -107,6 +107,9 @@ public final class LunagramSettings {
+         static let typingAnimation = "lunagram.other.typingAnimation"
+         static let avatarCorners = "lunagram.avatars.corners"
+         static let avatarSingleCorner = "lunagram.avatars.singleCorner"
++        static let composeColor = "lunagram.compose.color"
++        static let composeDensity = "lunagram.compose.density"
++        static let composeAuto = "lunagram.compose.auto"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -273,6 +276,62 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Свой цвет полосы ввода, 0xRRGGBB. nil — обычный.
++    public static var composeColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.composeColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.composeColor)) & 0xFFFFFF
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue & 0xFFFFFF), forKey: Key.composeColor)
++            } else {
++                defaults.removeObject(forKey: Key.composeColor)
++            }
++            changed()
++        }
++    }
++
++    /// Плотность своей плёнки полосы ввода, 0…100. По умолчанию 75, как на ПК.
++    public static var composeDensity: Int {
++        get { return clamped(Key.composeDensity, 0, 100, 75) }
++        set { setClamped(newValue, Key.composeDensity, 0, 100) }
++    }
++
++    /// «Плёнка подстраивается сама» — как на ПК. На айфоне это родное стекло
++    /// Telegram: оно и так подбирается под то, что под ним. По умолчанию
++    /// включено — обычный вид Telegram не меняется, пока не выберешь своё.
++    public static var composeAuto: Bool {
++        get {
++            guard defaults.object(forKey: Key.composeAuto) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.composeAuto)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.composeAuto)
++            changed()
++        }
++    }
++
++    /// Цвет своей плёнки с плотностью — или nil, если стекло родное. Как на
++    /// ПК: свой цвет, а без него — обычный цвет полосы, и плотность поверх.
++    public static func composeTintColor(fallback: UIColor) -> UIColor? {
++        guard !composeAuto else {
++            return nil
++        }
++        let density = CGFloat(composeDensity) / 100.0
++        guard let rgb = composeColor else {
++            return fallback.withAlphaComponent(density)
++        }
++        let red = CGFloat((rgb >> 16) & 0xFF) / 255.0
++        let green = CGFloat((rgb >> 8) & 0xFF) / 255.0
++        let blue = CGFloat(rgb & 0xFF) / 255.0
++        return UIColor(red: red, green: green, blue: blue, alpha: density)
++    }
++
+     /// Закругление аватарок — ступень от 0 (квадрат) до 23 (круг), как на ПК.
+     /// По умолчанию круг: так аватарки выглядят как в обычном Telegram.
+     public static var avatarCorners: Int {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 54c3bda1..95f711ac 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -1655,7 +1655,11 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         
+         let defaultGlassTintColor: GlassBackgroundView.TintColor
+         let defaultGlassTintWithInnerColor: GlassBackgroundView.TintColor
+-        if case .clear = interfaceState.preferredGlassType {
++        if let lunagramTint = LunagramSettings.composeTintColor(fallback: interfaceState.theme.chat.inputPanel.panelBackgroundColor) {
++            // Lunagram: своя плёнка полосы ввода — цвет и плотность, как на ПК.
++            defaultGlassTintColor = .init(kind: .custom(style: .default, color: lunagramTint))
++            defaultGlassTintWithInnerColor = .init(kind: .custom(style: .default, color: lunagramTint), innerColor: interfaceState.theme.list.itemCheckColors.fillColor)
++        } else if case .clear = interfaceState.preferredGlassType {
+             defaultGlassTintColor = .init(kind: .clear)
+             defaultGlassTintWithInnerColor = .init(kind: .clear, innerColor: interfaceState.theme.list.itemCheckColors.fillColor)
+         } else {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 88271c10..63c2d325 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -59,6 +59,7 @@ private enum LunagramToggle: Int32 {
+     case searchFilterButton
+     case typingAnimation
+     case avatarSingleCorner
++    case composeAuto
+ 
+     var value: Bool {
+         switch self {
+@@ -140,6 +141,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.typingAnimation
+         case .avatarSingleCorner:
+             return LunagramSettings.avatarSingleCorner
++        case .composeAuto:
++            return LunagramSettings.composeAuto
+         }
+     }
+ 
+@@ -223,6 +226,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.typingAnimation = value
+         case .avatarSingleCorner:
+             LunagramSettings.avatarSingleCorner = value
++        case .composeAuto:
++            LunagramSettings.composeAuto = value
+         }
+     }
+ 
+@@ -306,6 +311,8 @@ private enum LunagramToggle: Int32 {
+             return "Плавное появление букв"
+         case .avatarSingleCorner:
+             return "Единое закругление"
++        case .composeAuto:
++            return "Плёнка подстраивается сама"
+         }
+     }
+ 
+@@ -370,7 +377,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto:
+             return nil
+         }
+     }
+@@ -518,6 +525,8 @@ extension LunagramToggle {
+             return "character.cursor.ibeam,textformat"
+         case .avatarSingleCorner:
+             return "square.on.circle"
++        case .composeAuto:
++            return "wand.and.stars"
+         }
+     }
+ }
+@@ -1266,6 +1275,7 @@ private struct LunagramMediaState: Equatable {
+     var musicDim: Int = 0
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
++    var composeDensity: Int = 75
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1279,6 +1289,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicDim = LunagramSettings.profileMusicBgDim
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
++        state.composeDensity = LunagramSettings.composeDensity
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1954,6 +1965,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case 70:
+             // Свечение имени — ползунком в процентах, как на ПК.
+             LunagramSettings.profileNameGlowPercent = value
++        case 24:
++            LunagramSettings.composeDensity = value
+         case 90:
+             // Закругление аватарок — ступенями от квадрата до круга, как на ПК.
+             LunagramSettings.avatarCorners = value
+@@ -2152,6 +2165,32 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case .musicReset:
+             LunagramSettings.clearProfileMusicBackground()
+             refreshMedia()
++        case .composeColor:
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            // Выбрал цвет — значит плёнка своя: «подстраивается сама» выключаем,
++            // иначе цвет бы не применился.
++            let picker = UIColorPickerViewController()
++            picker.supportsAlpha = false
++            if let current = LunagramSettings.composeColor {
++                picker.selectedColor = UIColor(rgb: current)
++            }
++            let delegate = LunagramColorPickerDelegate(changed: { color in
++                LunagramSettings.composeColor = lunagramPackColor(color)
++                LunagramToggle.composeAuto.set(false)
++                shared.values[.composeAuto] = false
++                shared.valuesPromise.set(shared.values)
++                refreshMedia()
++            }, finished: {
++                shared.pickerHolder.delegate = nil
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++        case .composeReset:
++            LunagramSettings.composeColor = nil
++            refreshMedia()
+         }
+     }, tile: { rawKind, id, isLongPress in
+         guard let kind = LunagramTileKind(rawValue: rawKind) else {
+@@ -2257,6 +2296,8 @@ private enum LunagramChoice: Int32 {
+     case musicPick = 40
+     case musicColor = 41
+     case musicReset = 42
++    case composeColor = 50
++    case composeReset = 51
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2443,9 +2484,14 @@ private func lunagramWallpaperEntries(values: [LunagramToggle: Bool], media: Lun
+     let mode = max(0, min(lunagramListTextModeTitles.count - 1, media.listTextMode))
+     rows.row(.value(LunagramChoice.listTextMode.rawValue, "Вид текста поверх обоев", lunagramListTextModeTitles[mode], "a.square"))
+     rows.row(.action(LunagramChoice.listTextColor.rawValue, "Цвет текста", "paintpalette,paintbrush"))
++    // Полоса ввода — как на ПК: плёнка сама, свой цвет, возврат, плотность.
++    rows.row(.toggle(.composeAuto, value(.composeAuto), "Плёнка подстраивается сама", nil))
++    rows.row(.action(LunagramChoice.composeColor.rawValue, "Цвет полосы ввода", "paintbrush.pointed,paintbrush"))
++    rows.row(.action(LunagramChoice.composeReset.rawValue, "Вернуть обычный цвет полосы", "arrow.uturn.backward"))
++    rows.row(.slider(24, "Плотность полосы ввода", media.composeDensity, 0, 100, 5))
+     rows.row(.slider(23, "Приближение", media.wallpaperZoom, 100, 300, 5))
+     rows.row(.slider(20, "Затемнение обоев", media.wallpaperDimPercent, 0, 100, 5))
+-    rows.info("Видео крутится по кругу за сообщениями. С включённым охватом на всё окно те же обои лежат и за списком переписок — картинка выходит единой. Затемнение и размытие списка идут сверх общего: без них имена на пёстром видео не прочитать.")
++    rows.info("Видео крутится по кругу за сообщениями. С включённым охватом на всё окно те же обои лежат и за списком переписок — картинка выходит единой. Затемнение и размытие списка идут сверх общего: без них имена на пёстром видео не прочитать.\n\nПолоса ввода: пока «Плёнка подстраивается сама», стекло родное — оно и так подбирается под то, что под ним. Выключишь — плёнка твоя: свой цвет (без него — обычный цвет полосы), а плотность задаёт, насколько она густая. Выбор цвета сам выключает «подстраивается сама».")
+     return rows.entries
+ }
+ 
