@@ -1,0 +1,201 @@
+diff --git a/submodules/ChatListUI/Sources/ChatListControllerNode.swift b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+index 4567bcb5..9ef5f287 100644
+--- a/submodules/ChatListUI/Sources/ChatListControllerNode.swift
++++ b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+@@ -29,6 +29,7 @@ import LiveLocationHeaderPanelComponent
+ import ChatListHeaderNoticeComponent
+ import ChatListFilterTabContainerNode
+ import GlassControls
++import Lunagram
+ 
+ public enum ChatListContainerNodeFilter: Equatable {
+     case all
+@@ -1789,6 +1790,11 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                 }
+             }
+         }
++        // Lunagram: лента историй не раскрывается протягиванием списка — как
++        // «только щелчком» на ПК. Касание свёрнутых кружков открывает истории.
++        if LunagramSettings.storiesClickOnly {
++            allowAvatarsExpansion = false
++        }
+         
+         if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+             navigationBarComponentView.applyScroll(offset: offset, allowAvatarsExpansion: allowAvatarsExpansion, forceUpdate: false, transition: ComponentTransition(transition).withUserData(ChatListNavigationBar.AnimationHint(
+diff --git a/submodules/ChatListUI/Sources/Node/ChatListItemStrings.swift b/submodules/ChatListUI/Sources/Node/ChatListItemStrings.swift
+index a87986bb..27732bd8 100644
+--- a/submodules/ChatListUI/Sources/Node/ChatListItemStrings.swift
++++ b/submodules/ChatListUI/Sources/Node/ChatListItemStrings.swift
+@@ -5,6 +5,7 @@ import TelegramUIPreferences
+ import TelegramStringFormatting
+ import LocalizedPeerData
+ import TextFormat
++import Lunagram
+ 
+ private enum MessageGroupType {
+     case photos
+@@ -230,14 +231,19 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder:
+                                     messageText = strings.Message_Animation
+                                     processed = true
+                                     break inner
+-                                case let .Audio(isVoice, _, title, performer, _):
++                                case let .Audio(isVoice, duration, title, performer, _):
+                                     if !message.text.isEmpty {
+                                         if enableMediaEmoji {
+                                             messageText = "🎤 \(messageText)"
+                                         }
+                                         processed = true
+                                     } else if isVoice {
+-                                        messageText = strings.Message_Audio
++                                        // Lunagram: длина голосового прямо в списке — как на ПК.
++                                        if LunagramSettings.voiceLengthInList && duration > 0 {
++                                            messageText = "Голосовое · " + LunagramSettings.voiceLengthText(seconds: duration)
++                                        } else {
++                                            messageText = strings.Message_Audio
++                                        }
+                                         processed = true
+                                         break inner
+                                     } else {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index c48bb7ce..407fb82e 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -100,6 +100,9 @@ public final class LunagramSettings {
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+         static let profileMusicBgDim = "lunagram.profile.musicBgDim"
+         static let profileMusicBgBlur = "lunagram.profile.musicBgBlur"
++        // «Ещё в списке» — как на ПК.
++        static let voiceLengthInList = "lunagram.list.voiceLength"
++        static let storiesClickOnly = "lunagram.list.storiesClickOnly"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -236,6 +239,49 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Длина голосового прямо в списке переписок: «Голосовое · 0:42» — как на
++    /// ПК. По умолчанию включено: хозяин сам попросил.
++    public static var voiceLengthInList: Bool {
++        get {
++            guard defaults.object(forKey: Key.voiceLengthInList) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.voiceLengthInList)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.voiceLengthInList)
++            changed()
++        }
++    }
++
++    /// Лента историй не раскрывается сама, когда тянешь список вниз, — как
++    /// «только щелчком» на ПК. Касание свёрнутых кружков открывает истории.
++    public static var storiesClickOnly: Bool {
++        get {
++            guard defaults.object(forKey: Key.storiesClickOnly) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.storiesClickOnly)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.storiesClickOnly)
++            changed()
++        }
++    }
++
++    /// Длина голосового для списка: «0:42», «12:05», «1:02:03» — минуты без
++    /// ведущего нуля, как пишет сам Telegram в сообщениях.
++    public static func voiceLengthText(seconds: Int) -> String {
++        let total = max(seconds, 1)
++        let hours = total / 3600
++        let minutes = (total % 3600) / 60
++        let rest = total % 60
++        if hours > 0 {
++            return String(format: "%ld:%02ld:%02ld", hours, minutes, rest)
++        }
++        return String(format: "%ld:%02ld", minutes, rest)
++    }
++
+     /// Заглушённое показывать с пометкой (да) или прятать совсем (нет).
+     public static var showMutedDeleted: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index ba0a8518..6219f5ae 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -54,6 +54,8 @@ private enum LunagramToggle: Int32 {
+     case replyToDeleted
+     case ghostAutoOffline
+     case showMutedDeleted
++    case voiceLengthInList
++    case storiesClickOnly
+ 
+     var value: Bool {
+         switch self {
+@@ -125,6 +127,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.ghostAutoOffline
+         case .showMutedDeleted:
+             return LunagramSettings.showMutedDeleted
++        case .voiceLengthInList:
++            return LunagramSettings.voiceLengthInList
++        case .storiesClickOnly:
++            return LunagramSettings.storiesClickOnly
+         }
+     }
+ 
+@@ -198,6 +204,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.ghostAutoOffline = value
+         case .showMutedDeleted:
+             LunagramSettings.showMutedDeleted = value
++        case .voiceLengthInList:
++            LunagramSettings.voiceLengthInList = value
++        case .storiesClickOnly:
++            LunagramSettings.storiesClickOnly = value
+         }
+     }
+ 
+@@ -271,6 +281,10 @@ private enum LunagramToggle: Int32 {
+             return "Автоматический «офлайн»"
+         case .showMutedDeleted:
+             return "Показывать заглушённое"
++        case .voiceLengthInList:
++            return "Длина голосовых"
++        case .storiesClickOnly:
++            return "Истории раскрываются щелчком"
+         }
+     }
+ 
+@@ -335,6 +349,8 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
++        case .voiceLengthInList, .storiesClickOnly:
++            return nil
+         }
+     }
+ 
+@@ -471,6 +487,10 @@ extension LunagramToggle {
+             return "arrowshape.turn.up.left"
+         case .showMutedDeleted:
+             return "square.grid.2x2"
++        case .voiceLengthInList:
++            return "speaker.wave.1"
++        case .storiesClickOnly:
++            return "play.circle"
+         }
+     }
+ }
+@@ -2392,6 +2412,12 @@ private func lunagramCardsEntries(values: [LunagramToggle: Bool], media: Lunagra
+     rows.row(.slider(3, "Заметность обводки", media.cardsStroke, 0, 100, 5))
+     rows.row(.toggle(.dialogCardsFadeMuted, value(.dialogCardsFadeMuted), "Гасить приглушённые переписки", nil))
+     rows.row(.slider(6, "Яркость приглушённых", media.cardsMuteOpacity, 0, 100, 5))
++
++    rows.header("Ещё в списке")
++    rows.row(.toggle(.voiceLengthInList, value(.voiceLengthInList), "Длина голосовых", "speaker.wave.1"))
++    rows.info("В списке переписок вместо «Голосовое сообщение» будет «Голосовое · 0:42».")
++    rows.row(.toggle(.storiesClickOnly, value(.storiesClickOnly), "Истории раскрываются щелчком", "play.circle"))
++    rows.info("Лента историй над списком не раскрывается сама, когда тянешь список вниз, — только касанием кружков.")
+     return rows.entries
+ }
+ 
