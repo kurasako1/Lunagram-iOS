@@ -1,0 +1,197 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 50f46caf..c51d2444 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -104,6 +104,7 @@ public final class LunagramSettings {
+         static let voiceLengthInList = "lunagram.list.voiceLength"
+         static let storiesClickOnly = "lunagram.list.storiesClickOnly"
+         static let searchFilterButton = "lunagram.messages.searchFilterButton"
++        static let typingAnimation = "lunagram.other.typingAnimation"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -270,6 +271,18 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Плавное появление набираемых букв — как на ПК. Видно только себе, на
++    /// отправку не влияет. По умолчанию выключено, как на ПК.
++    public static var typingAnimation: Bool {
++        get {
++            return defaults.bool(forKey: Key.typingAnimation)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.typingAnimation)
++            changed()
++        }
++    }
++
+     /// Кнопка «Фильтр» в поиске по переписке: период, автор, тип — как на ПК.
+     public static var searchFilterButton: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/BUILD b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/BUILD
+index 9ccc3492..7fc653b2 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/BUILD
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/BUILD
+@@ -68,6 +68,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/StarsParticleEffect",
+         "//submodules/TelegramUI/Components/Calls/VideoChatMicButtonComponent",
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEditorUIKit",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 826bdb40..54c3bda1 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -59,6 +59,7 @@ import ChatRecordingPreviewInputPanelNode
+ import ChatInputContextPanelNode
+ import RasterizedCompositionComponent
+ import RichTextEditorUIKit
++import Lunagram
+ 
+ /// The chat composer's inline custom-emoji view already exposes `dynamicColor` (forwarding to its backing
+ /// `InlineStickerItemLayer`), so it satisfies the editor's emoji-view contract as-is. Declared here (the one
+@@ -4003,6 +4004,67 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         parentController.present(tooltipController, in: .current)
+     }
+     
++    /// Lunagram: сколько было символов — чтобы понять, сколько добавилось.
++    private var lunagramTypedLength = 0
++
++    /// Lunagram: плавное появление набираемых букв — как на ПК.
++    ///
++    /// На ПК поверх новой буквы кладут заплатку цвета фона и растворяют её. Здесь
++    /// поле ввода стеклянное, и сплошная заплатка была бы видна прямоугольником,
++    /// поэтому делаем маской: место новых букв сперва прозрачное и за миг
++    /// проявляется. Сам набор текста не трогаем — пострадать может только
++    /// картинка, но не ввод.
++    private func lunagramAnimateTyping() {
++        guard let node = self.richTextInputNode else {
++            return
++        }
++        let length = (node.text as NSString).length
++        let delta = length - self.lunagramTypedLength
++        self.lunagramTypedLength = length
++        guard LunagramSettings.typingAnimation, delta > 0, delta <= 8 else {
++            return
++        }
++        let caret = node.selectedRange.location
++        guard caret >= delta, let rect = node.firstSelectionRect(forCharacterRange: NSRange(location: caret - delta, length: delta)), rect.width > 0.0, rect.height > 0.0 else {
++            return
++        }
++        let layer = node.asNode.layer
++        // Чужую маску не трогаем — только свою прошлую.
++        if let current = layer.mask, current.name != "lunagramTyping" {
++            return
++        }
++        let bounds = layer.bounds
++        let hole = rect.insetBy(dx: -1.0, dy: -1.0).offsetBy(dx: -bounds.minX, dy: -bounds.minY)
++        let mask = CALayer()
++        mask.name = "lunagramTyping"
++        mask.frame = bounds
++        let outside = CAShapeLayer()
++        outside.frame = CGRect(origin: CGPoint(), size: bounds.size)
++        let path = UIBezierPath(rect: CGRect(origin: CGPoint(), size: bounds.size))
++        path.append(UIBezierPath(rect: hole))
++        outside.path = path.cgPath
++        outside.fillRule = .evenOdd
++        outside.fillColor = UIColor.white.cgColor
++        mask.addSublayer(outside)
++        let reveal = CALayer()
++        reveal.frame = hole
++        reveal.backgroundColor = UIColor.white.cgColor
++        mask.addSublayer(reveal)
++        layer.mask = mask
++        CATransaction.begin()
++        CATransaction.setCompletionBlock({ [weak layer] in
++            if let layer = layer, layer.mask === mask {
++                layer.mask = nil
++            }
++        })
++        let animation = CABasicAnimation(keyPath: "opacity")
++        animation.fromValue = 0.0
++        animation.toValue = 1.0
++        animation.duration = 0.16
++        reveal.add(animation, forKey: "lunagramReveal")
++        CATransaction.commit()
++    }
++
+     public func chatInputTextNodeDidUpdateText() {
+         if self.ignoreChatInputTextNodeDidUpdateText {
+             return
+@@ -4019,6 +4081,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             self.interfaceInteraction?.updateTextInputStateAndMode({ _, inputMode in return (inputTextState, inputMode) })
+             self.interfaceInteraction?.updateInputLanguage({ _ in return self.richTextInputNode?.primaryLanguage })
+             self.updateTextNodeText(animated: true)
++            self.lunagramAnimateTyping()
+         }
+     }
+     
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d1d29888..f228d127 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -57,6 +57,7 @@ private enum LunagramToggle: Int32 {
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
++    case typingAnimation
+ 
+     var value: Bool {
+         switch self {
+@@ -134,6 +135,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.storiesClickOnly
+         case .searchFilterButton:
+             return LunagramSettings.searchFilterButton
++        case .typingAnimation:
++            return LunagramSettings.typingAnimation
+         }
+     }
+ 
+@@ -213,6 +216,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.storiesClickOnly = value
+         case .searchFilterButton:
+             LunagramSettings.searchFilterButton = value
++        case .typingAnimation:
++            LunagramSettings.typingAnimation = value
+         }
+     }
+ 
+@@ -292,6 +297,8 @@ private enum LunagramToggle: Int32 {
+             return "Истории раскрываются щелчком"
+         case .searchFilterButton:
+             return "Фильтр в поиске по переписке"
++        case .typingAnimation:
++            return "Плавное появление букв"
+         }
+     }
+ 
+@@ -356,7 +363,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation:
+             return nil
+         }
+     }
+@@ -500,6 +507,8 @@ extension LunagramToggle {
+             return "play.circle"
+         case .searchFilterButton:
+             return "magnifyingglass"
++        case .typingAnimation:
++            return "character.cursor.ibeam,textformat"
+         }
+     }
+ }
+@@ -2480,6 +2489,8 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Позволяет снять сообщение в аккуратную картинку: зажми его → «Снимок сообщения».")
+     rows.row(.toggle(.streamerMode, value(.streamerMode), "Режим стримера", "dot.radiowaves.left.and.right"))
+     rows.info("Прячет содержимое, пока айфон записывает или транслирует экран. Срабатывает само — айфон сам говорит, что экран пишется.")
++    rows.row(.toggle(.typingAnimation, value(.typingAnimation), "Плавное появление букв", "character.cursor.ibeam,textformat"))
++    rows.info("Набираемые буквы будут проявляться, а не возникать разом. Видно только тебе, на отправку не влияет.")
+     rows.row(.toggle(.hideOwnPhone, value(.hideOwnPhone), "Скрыть свой номер", "phone"))
+     rows.info("В твоём профиле вместо номера будут точки. Сам номер не меняется — прячется только показ на экране.")
+ 
