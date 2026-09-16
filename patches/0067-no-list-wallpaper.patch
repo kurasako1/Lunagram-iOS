@@ -1,0 +1,500 @@
+diff --git a/submodules/ChatListUI/Sources/ChatListControllerNode.swift b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+index 9ef5f287..103543f8 100644
+--- a/submodules/ChatListUI/Sources/ChatListControllerNode.swift
++++ b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+@@ -526,7 +526,7 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
+         
+         super.init()
+         
+-        self.backgroundColor = lunagramListBackgroundColor(presentationData.theme.chatList.backgroundColor)
++        self.backgroundColor = presentationData.theme.chatList.backgroundColor
+         
+         let itemNode = ChatListContainerItemNode(context: self.context, controller: self.controller, location: self.location, filter: nil, chatListMode: chatListMode, previewing: self.previewing, isInlineMode: self.isInlineMode, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
+             self?.filterBecameEmpty(filter)
+@@ -784,9 +784,9 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
+         
+         if let validLayout = self.validLayout {
+             if let _ = validLayout.inlineNavigationLocation {
+-                self.backgroundColor = lunagramListBackgroundColor(self.presentationData.theme.chatList.backgroundColor.mixedWith(self.presentationData.theme.chatList.pinnedItemBackgroundColor, alpha: validLayout.inlineNavigationTransitionFraction))
++                self.backgroundColor = self.presentationData.theme.chatList.backgroundColor.mixedWith(self.presentationData.theme.chatList.pinnedItemBackgroundColor, alpha: validLayout.inlineNavigationTransitionFraction)
+             } else {
+-                self.backgroundColor = lunagramListBackgroundColor(self.presentationData.theme.chatList.backgroundColor)
++                self.backgroundColor = self.presentationData.theme.chatList.backgroundColor
+             }
+         }
+         
+@@ -1125,7 +1125,6 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     private var presentationData: PresentationData
+ 
+     // Lunagram: обои на всё окно — под списком переписок.
+-    let lunagramWallpaperState = LunagramListWallpaperState()
+     private let animationCache: AnimationCache
+     private let animationRenderer: MultiAnimationRenderer
+     
+@@ -1219,7 +1218,7 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             return UITracingLayerView()
+         })
+         
+-        self.backgroundColor = lunagramListBackgroundColor(presentationData.theme.chatList.backgroundColor)
++        self.backgroundColor = presentationData.theme.chatList.backgroundColor
+         
+         self.addSubnode(self.mainContainerNode)
+         
+@@ -1405,7 +1404,7 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     func updatePresentationData(_ presentationData: PresentationData) {
+         self.presentationData = presentationData
+         
+-        self.backgroundColor = lunagramListBackgroundColor(self.presentationData.theme.chatList.backgroundColor)
++        self.backgroundColor = self.presentationData.theme.chatList.backgroundColor
+         
+         self.mainContainerNode.updatePresentationData(presentationData)
+         self.inlineStackContainerNode?.updatePresentationData(presentationData)
+@@ -1853,16 +1852,6 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+         
+         self.containerLayout = (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, storiesInset)
+ 
+-        // Lunagram: обои на всё окно — тот же рисовальщик, что в переписке.
+-        self.backgroundColor = lunagramListBackgroundColor(self.presentationData.theme.chatList.backgroundColor)
+-        lunagramUpdateListWallpaper(state: self.lunagramWallpaperState, container: self, context: self.context, presentationData: self.presentationData, size: layout.size, transition: transition)
+-        lunagramObserveListWallpaper(state: self.lunagramWallpaperState, update: { [weak self] in
+-            guard let self, let containerLayout = self.containerLayout else {
+-                return
+-            }
+-            self.containerLayoutUpdated(containerLayout.layout, navigationBarHeight: containerLayout.navigationBarHeight, visualNavigationHeight: containerLayout.visualNavigationHeight, cleanNavigationBarHeight: containerLayout.cleanNavigationBarHeight, storiesInset: containerLayout.storiesInset, transition: .immediate)
+-        })
+-
+         var insets = layout.insets(options: [.input])
+         insets.top += navigationBarHeight
+         insets.left += layout.safeInsets.left
+diff --git a/submodules/ChatListUI/Sources/Node/ChatListItem.swift b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+index 99e21862..76018f81 100644
+--- a/submodules/ChatListUI/Sources/Node/ChatListItem.swift
++++ b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+@@ -5422,10 +5422,10 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+                         // Lunagram: поверх обоев на всё окно закреплённые делаем
+                         // полупрозрачными — иначе они лежат на обоях полосой.
+                         if case let .groupReference(groupReferenceData) = item.content, groupReferenceData.hiddenByDefault {
+-                            backgroundColor = lunagramPinnedItemBackgroundColor(groupReferenceData.appearsPinned ? theme.pinnedItemBackgroundColor : theme.itemBackgroundColor)
++                            backgroundColor = groupReferenceData.appearsPinned ? theme.pinnedItemBackgroundColor : theme.itemBackgroundColor
+                             highlightedBackgroundColor = groupReferenceData.appearsPinned ? theme.pinnedItemHighlightedBackgroundColor : theme.itemHighlightedBackgroundColor
+                         } else {
+-                            backgroundColor = lunagramPinnedItemBackgroundColor(theme.pinnedItemBackgroundColor)
++                            backgroundColor = theme.pinnedItemBackgroundColor
+                             highlightedBackgroundColor = theme.pinnedItemHighlightedBackgroundColor
+                         }
+                     } else {
+diff --git a/submodules/ChatListUI/Sources/Node/LunagramListTextLook.swift b/submodules/ChatListUI/Sources/Node/LunagramListTextLook.swift
+index 40b74997..9edc0a69 100644
+--- a/submodules/ChatListUI/Sources/Node/LunagramListTextLook.swift
++++ b/submodules/ChatListUI/Sources/Node/LunagramListTextLook.swift
+@@ -5,12 +5,13 @@ import Display
+ import TelegramPresentationData
+ import Lunagram
+ 
+-// Lunagram: вид текста поверх обоев на всё окно.
++// Lunagram: вид текста поверх плиток списка переписок.
+ //
+-// Как на ПК — пять видов для имён и отрывков в списке переписок: как обычно,
+-// тёмная подложка, свечение вокруг букв, свой цвет, переливающийся. Всё это
+-// включается только поверх обоев: на обычном фоне цвета темы подобраны и
+-// без нас, и трогать их незачем.
++// Пять видов для имён и отрывков: как обычно, тёмная подложка, свечение
++// вокруг букв, свой цвет, переливающийся. Включается только поверх плиток
++// с размытой аватаркой: на обычном фоне цвета темы подобраны и без нас, и
++// трогать их незачем. На ПК то же самое лежит поверх обоев — там обои
++// заходят и за список, на айфоне списку они ни к чему.
+ //
+ // В самой строке списка — три вызова: тема для раскладки, подложка со
+ // свечением после расстановки текста и одно новое поле. Всё остальное здесь.
+@@ -23,7 +24,7 @@ enum LunagramListTextLook: Int {
+     case rainbow = 4
+ 
+     static var current: LunagramListTextLook {
+-        guard LunagramSettings.wallpaperEverywhere else {
++        guard LunagramSettings.dialogCardsEnabled else {
+             return .plain
+         }
+         return LunagramListTextLook(rawValue: LunagramSettings.listTextMode) ?? .plain
+diff --git a/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift b/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift
+deleted file mode 100644
+index 401afd63..00000000
+--- a/submodules/ChatListUI/Sources/Node/LunagramListWallpaper.swift
++++ /dev/null
+@@ -1,149 +0,0 @@
+-import Foundation
+-import UIKit
+-import AsyncDisplayKit
+-import Display
+-import TelegramCore
+-import TelegramPresentationData
+-import AccountContext
+-import WallpaperBackgroundNode
+-import Lunagram
+-
+-// Lunagram: обои на всё окно.
+-//
+-// На ПК обои видно не только в переписке, но и за списком переписок. Здесь то
+-// же самое: под список кладётся тот же рисовальщик обоев, что работает в
+-// переписке, — значит и однотонные, и узорчатые, и градиентные, и живое видео
+-// появятся там сами, без отдельного кода на каждый случай.
+-//
+-// Почему вышло дёшево: в этой версии Telegram строка списка уже рисуется
+-// прозрачной (цвет ей даёт подложка всего экрана). Поэтому достаточно сделать
+-// прозрачной подложку и положить обои под неё — трогать сами строки не нужно.
+-// Исключение одно: закреплённые переписки рисуют свой цвет, и поверх обоев он
+-// смотрелся бы полосой, поэтому ему добавляется прозрачность.
+-
+-/// Всё, что экрану нужно для обоев. Одним предметом — чтобы в самом экране
+-/// было одно новое поле.
+-final class LunagramListWallpaperState {
+-    var node: WallpaperBackgroundNode?
+-    var dimNode: ASDisplayNode?
+-    var wallpaper: TelegramWallpaper?
+-    var observer: NSObjectProtocol?
+-    /// Последний размер — чтобы перерисоваться по смене настройки, не дожидаясь
+-    /// следующей раскладки.
+-    var size: CGSize?
+-    /// Слепок наших настроек на момент последней раскладки.
+-    var appliedSnapshot: Int?
+-
+-    deinit {
+-        if let observer = self.observer {
+-            NotificationCenter.default.removeObserver(observer)
+-        }
+-    }
+-}
+-
+-/// Цвет подложки: прозрачный, когда обои на всё окно.
+-func lunagramListBackgroundColor(_ color: UIColor) -> UIColor {
+-    return LunagramSettings.wallpaperEverywhere ? .clear : color
+-}
+-
+-/// Цвет закреплённой переписки: поверх обоев — полупрозрачный.
+-func lunagramPinnedItemBackgroundColor(_ color: UIColor) -> UIColor {
+-    return LunagramSettings.wallpaperEverywhere ? color.withAlphaComponent(0.55) : color
+-}
+-
+-/// Заводит, обновляет или убирает обои под списком.
+-///
+-/// Зовётся из раскладки экрана и из подписки на смену настроек, поэтому всё
+-/// состояние — в `state`, а не в переменных этой функции.
+-func lunagramUpdateListWallpaper(state: LunagramListWallpaperState, container: ASDisplayNode, context: AccountContext, presentationData: PresentationData, size: CGSize, transition: ContainedViewLayoutTransition) {
+-    state.size = size
+-
+-    guard LunagramSettings.wallpaperEverywhere else {
+-        state.node?.removeFromSupernode()
+-        state.node = nil
+-        state.dimNode?.removeFromSupernode()
+-        state.dimNode = nil
+-        state.wallpaper = nil
+-        return
+-    }
+-
+-    let node: WallpaperBackgroundNode
+-    if let current = state.node {
+-        node = current
+-    } else {
+-        // forChatDisplay: false — нам не нужны подложки под пузырями, только
+-        // сами обои.
+-        node = createWallpaperBackgroundNode(context: context, forChatDisplay: false)
+-        state.node = node
+-        container.insertSubnode(node, at: 0)
+-
+-        let dimNode = ASDisplayNode()
+-        dimNode.isLayerBacked = true
+-        state.dimNode = dimNode
+-        container.insertSubnode(dimNode, aboveSubnode: node)
+-    }
+-
+-    if state.wallpaper != presentationData.chatWallpaper {
+-        state.wallpaper = presentationData.chatWallpaper
+-        node.update(wallpaper: presentationData.chatWallpaper, animated: false)
+-    }
+-
+-    let frame = CGRect(origin: CGPoint(), size: size)
+-
+-    // Размытие под списком — фильтром самого Telegram, тем же, которым он
+-    // размывает экран поиска. Сила — до 30 точек, как у него. Размытие
+-    // тянет прозрачность с краёв внутрь, поэтому обои шире экрана на столько
+-    // же: края остаются плотными.
+-    let blurRadius = CGFloat(LunagramSettings.listWallpaperBlur) / 100.0 * 30.0
+-    let wallpaperFrame = blurRadius > 0.0 ? frame.insetBy(dx: -blurRadius, dy: -blurRadius) : frame
+-    transition.updateFrame(node: node, frame: wallpaperFrame)
+-    node.updateLayout(size: wallpaperFrame.size, displayMode: .aspectFill, transition: transition)
+-    // Через обёртку из Display: сама makeBlurFilter живёт в модуле
+-    // UIKitRuntimeUtils, которого этот модуль не видит (на этом упала
+-    // сборка №56).
+-    if blurRadius > 0.0, let filter = CALayer.blur() {
+-        filter.setValue(blurRadius as NSNumber, forKey: "inputRadius")
+-        node.layer.filters = [filter]
+-    } else if node.layer.filters != nil {
+-        node.layer.filters = nil
+-    }
+-
+-    if let dimNode = state.dimNode {
+-        transition.updateFrame(node: dimNode, frame: frame)
+-        // Затемнение — не украшение: в списке текст мелкий, и на пёстрых обоях
+-        // без него не прочитать. Цвет берём у темы, чтобы в светлой оно было
+-        // белёсым, а в тёмной — тёмным.
+-        let dim = CGFloat(max(0, min(100, LunagramSettings.listWallpaperDim))) / 100.0
+-        dimNode.backgroundColor = presentationData.theme.chatList.backgroundColor.withAlphaComponent(dim)
+-    }
+-}
+-
+-/// Подписка на смену настроек: включили обои — экран перерисуется сам.
+-///
+-/// Рассылка приходит на любую нашу галочку, а перекладывать весь список
+-/// переписок из-за чужой настройки незачем — это не бесплатно. Поэтому держим
+-/// слепок своих двух значений и будим экран, только когда поменялись они.
+-func lunagramObserveListWallpaper(state: LunagramListWallpaperState, update: @escaping () -> Void) {
+-    guard state.observer == nil else {
+-        return
+-    }
+-    state.appliedSnapshot = lunagramListWallpaperSnapshot()
+-    // Слабо: подписку держит само состояние, и сильная ссылка отсюда замкнула
+-    // бы круг — состояние не освободилось бы никогда. В 0050 так и было.
+-    state.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak state] _ in
+-        guard let state else {
+-            return
+-        }
+-        let snapshot = lunagramListWallpaperSnapshot()
+-        guard snapshot != state.appliedSnapshot else {
+-            return
+-        }
+-        state.appliedSnapshot = snapshot
+-        update()
+-    })
+-}
+-
+-/// Слепок настроек, которые здесь что-то меняют.
+-private func lunagramListWallpaperSnapshot() -> Int {
+-    return (LunagramSettings.wallpaperEverywhere ? 1 : 0) &+ LunagramSettings.listWallpaperDim &* 2 &+ LunagramSettings.listWallpaperBlur &* 1000
+-}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index d2c1d082..73a20aaf 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -44,9 +44,6 @@ public final class LunagramSettings {
+         static let liveWallpaperOffsetX = "lunagram.liveWallpaper.offsetX"
+         static let liveWallpaperOffsetY = "lunagram.liveWallpaper.offsetY"
+         static let liveWallpaperZoom = "lunagram.liveWallpaper.zoom"
+-        static let wallpaperEverywhere = "lunagram.liveWallpaper.everywhere"
+-        static let listWallpaperDim = "lunagram.liveWallpaper.listDim"
+-        static let listWallpaperBlur = "lunagram.liveWallpaper.listBlur"
+         static let listTextMode = "lunagram.liveWallpaper.listTextMode"
+         static let listTextColor = "lunagram.liveWallpaper.listTextColor"
+         static let avatarFrameEnabled = "lunagram.avatarFrame.enabled"
+@@ -982,47 +979,6 @@ public final class LunagramSettings {
+         }
+     }
+ 
+-    /// Обои не только в переписке, но и за списком переписок — как на ПК.
+-    public static var wallpaperEverywhere: Bool {
+-        get {
+-            return defaults.bool(forKey: Key.wallpaperEverywhere)
+-        }
+-        set {
+-            defaults.set(newValue, forKey: Key.wallpaperEverywhere)
+-            changed()
+-        }
+-    }
+-
+-    /// Затемнение обоев под списком переписок, 0…100.
+-    ///
+-    /// По умолчанию заметное: в списке текст мельче, чем в переписке, и на
+-    /// пёстрых обоях без затемнения его не прочитать.
+-    public static var listWallpaperDim: Int {
+-        get {
+-            guard defaults.object(forKey: Key.listWallpaperDim) != nil else {
+-                return 55
+-            }
+-            return max(0, min(100, defaults.integer(forKey: Key.listWallpaperDim)))
+-        }
+-        set {
+-            defaults.set(max(0, min(100, newValue)), forKey: Key.listWallpaperDim)
+-            changed()
+-        }
+-    }
+-
+-    /// Размытие обоев под списком переписок, 0…100. Размытие читаемость
+-    /// чинит лучше затемнения: убирает мелкие детали, о которые спотыкается
+-    /// глаз.
+-    public static var listWallpaperBlur: Int {
+-        get {
+-            return max(0, min(100, defaults.integer(forKey: Key.listWallpaperBlur)))
+-        }
+-        set {
+-            defaults.set(max(0, min(100, newValue)), forKey: Key.listWallpaperBlur)
+-            changed()
+-        }
+-    }
+-
+     /// Вид имён и отрывков поверх обоев: 0 — как обычно, 1 — подложка,
+     /// 2 — свечение, 3 — свой цвет, 4 — переливающийся. Как на ПК.
+     public static var listTextMode: Int {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 0930b214..d7ca1958 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -47,7 +47,6 @@ private enum LunagramToggle: Int32 {
+     case markReadAfterPoll
+     case useScheduledSend
+     case showMessageShot
+-    case wallpaperEverywhere
+     case showDeletedGifts
+     case giftTheSame
+     case sendSoldOutGifts
+@@ -118,8 +117,6 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.useScheduledSend
+         case .showMessageShot:
+             return LunagramSettings.showMessageShot
+-        case .wallpaperEverywhere:
+-            return LunagramSettings.wallpaperEverywhere
+         case .showDeletedGifts:
+             return LunagramSettings.showDeletedGifts
+         case .giftTheSame:
+@@ -205,8 +202,6 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.useScheduledSend = value
+         case .showMessageShot:
+             LunagramSettings.showMessageShot = value
+-        case .wallpaperEverywhere:
+-            LunagramSettings.wallpaperEverywhere = value
+         case .showDeletedGifts:
+             LunagramSettings.showDeletedGifts = value
+         case .giftTheSame:
+@@ -292,8 +287,6 @@ private enum LunagramToggle: Int32 {
+             return "Использовать отложку"
+         case .showMessageShot:
+             return "Показывать снимок сообщений"
+-        case .wallpaperEverywhere:
+-            return "Обои на всё окно"
+         case .showDeletedGifts:
+             return "Снятые с продажи подарки"
+         case .giftTheSame:
+@@ -370,8 +363,6 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.notifications
+         case .showMessageShot:
+             return PresentationResourcesSettings.appearance
+-        case .wallpaperEverywhere:
+-            return PresentationResourcesSettings.appearance
+         case .showDeletedGifts:
+             return PresentationResourcesSettings.premiumGift
+         case .giftTheSame:
+@@ -441,8 +432,6 @@ private enum LunagramToggle: Int32 {
+             return "Родной Telegram на распроданный подарок показывает справку и до сервера не доходит. С этой настройкой открывается обычное окно отправки: список на экране бывает устаревшим, а решает сервер. Если тираж и правда кончился — он откажет, и звёзды не спишутся."
+         case .showDeletedGifts:
+             return "Подарки, которых больше нет в продаже, — наверху окна «Подарить», как на ПК. Выбираются и отправляются как обычные: серверу нужен только номер подарка.\n\nСписок номеров — тот же, что у ПК; если сайт не открывается, берём его из канала Telegram, а на крайний случай есть копия в самом приложении.\n\nПеред оплатой сверяем цену: если сервер попросит больше, чем написано на кнопке, подарок не уйдёт и звёзды не спишутся."
+-        case .wallpaperEverywhere:
+-            return "Обои видно не только в переписке, но и за списком переписок — как на ПК. Показываются твои нынешние обои: и однотонные, и узорчатые, и выбранное видео.\n\nЗатемнение за списком по умолчанию заметное: там текст мельче, чем в переписке, и на пёстрых обоях без него не прочитать."
+         case .showMessageShot:
+             return "Зажми сообщение → «Снимок сообщения». Получится картинка с самим пузырём, обоями и реакциями, но без панели ввода и шапки. Дальше — сохранить, скопировать или отправить.\n\nСнимается то, что на экране: если пузырь уехал за край, сначала пролистай к нему."
+         default:
+@@ -510,8 +499,6 @@ extension LunagramToggle {
+             return "clock"
+         case .showMessageShot:
+             return "eye"
+-        case .wallpaperEverywhere:
+-            return "rectangle.expand.vertical,arrow.up.left.and.arrow.down.right"
+         case .showDeletedGifts:
+             return "gift"
+         case .giftTheSame:
+@@ -1264,8 +1251,6 @@ private struct LunagramMediaState: Equatable {
+     var hasProfileBackground: Bool
+     var profileBgDim: Int
+     var profileBgBlur: Int
+-    var listWallpaperDim: Int
+-    var listWallpaperBlur: Int
+     var listTextMode: Int
+     var listTextColor: Int
+     var cardsBlur: Int
+@@ -1306,7 +1291,7 @@ private struct LunagramMediaState: Equatable {
+     }
+ 
+     private static func legacyCurrent() -> LunagramMediaState {
+-        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim,hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, sendWithoutSound: LunagramSettings.sendWithoutSound, sendFontStyle: LunagramSettings.sendFontStyle, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur, listWallpaperDim: LunagramSettings.listWallpaperDim, listWallpaperBlur: LunagramSettings.listWallpaperBlur, listTextMode: LunagramSettings.listTextMode, listTextColor: LunagramSettings.listTextColor, cardsBlur: LunagramSettings.dialogCardsBlur, cardsStrokeWidth: LunagramSettings.dialogCardsStrokeWidth, particlesOpacity: LunagramSettings.particlesOpacity, particlesRotation: LunagramSettings.particlesRotation)
++        return LunagramMediaState(wallpaperDim: LunagramSettings.liveWallpaperDim,hasWallpaper: LunagramSettings.liveWallpaperURL != nil, bannerDim: LunagramSettings.profileBannerDim, hasBanner: LunagramSettings.profileBannerURL != nil, cardsDim: LunagramSettings.dialogCardsDim, particlesKind: LunagramSettings.particlesKind, particlesDensity: LunagramSettings.particlesDensity, particlesSpeed: LunagramSettings.particlesSpeed, avatarFrameStyle: LunagramSettings.avatarFrameStyle, hasAvatarFrameImage: LunagramSettings.avatarFrameImageURL != nil, fontTitle: LunagramSettings.customFontTitle, fontStyle: LunagramSettings.fontStyle, fontHasCyrillic: LunagramSettings.customFontHasCyrillic, wordingPack: LunagramSettings.wordingPack, nameColor: LunagramSettings.profileNameColor, nameGlow: LunagramSettings.profileNameGlow, frameSize: LunagramSettings.avatarFrameScale, frameBright: LunagramSettings.avatarFrameBrightness, frameGlow: LunagramSettings.avatarFrameGlow, bannerPreset: LunagramSettings.profileBannerPreset, deviceMask: LunagramSettings.deviceMaskIndex, cardsRadius: LunagramSettings.dialogCardsRadius, cardsStroke: LunagramSettings.dialogCardsStroke, cardsMuteOpacity: LunagramSettings.dialogCardsMuteOpacity, bannerBlur: LunagramSettings.profileBannerBlur, sendWithoutSound: LunagramSettings.sendWithoutSound, sendFontStyle: LunagramSettings.sendFontStyle, hasProfileBackground: LunagramSettings.hasProfileBackground, profileBgDim: LunagramSettings.profileBackgroundDim, profileBgBlur: LunagramSettings.profileBackgroundBlur, listTextMode: LunagramSettings.listTextMode, listTextColor: LunagramSettings.listTextColor, cardsBlur: LunagramSettings.dialogCardsBlur, cardsStrokeWidth: LunagramSettings.dialogCardsStrokeWidth, particlesOpacity: LunagramSettings.particlesOpacity, particlesRotation: LunagramSettings.particlesRotation)
+     }
+ }
+ 
+@@ -1544,7 +1529,6 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .preview(.liveWallpaper, .wallpaper, media.wallpaperDimPercent &* 10 &+ (media.hasWallpaper ? 1 : 0)),
+             .header(.liveWallpaper, 0, "ЖИВЫЕ ОБОИ"),
+             tgl(.liveWallpaper, .liveWallpaper),
+-            tgl(.liveWallpaper, .wallpaperEverywhere),
+             .action(.liveWallpaper, 0, media.hasWallpaper ? "Заменить видео" : "Выбрать видео")
+         ]
+         if media.hasWallpaper {
+@@ -1552,10 +1536,6 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             // Затемнение — ползунком, как на ПК.
+             entries.append(.slider(.liveWallpaper, 20, "Затемнение", media.wallpaperDimPercent, 0, 100, 5, "\(media.wallpaperDimPercent)%"))
+         }
+-        if value(.wallpaperEverywhere) {
+-            entries.append(.slider(.liveWallpaper, 21, "Затемнение за списком", media.listWallpaperDim, 0, 100, 10, "\(media.listWallpaperDim)%"))
+-            entries.append(.slider(.liveWallpaper, 22, "Размытие под списком", media.listWallpaperBlur, 0, 100, 10, "\(media.listWallpaperBlur)%"))
+-        }
+         entries.append(.info(.liveWallpaper, 0, media.hasWallpaper
+             ? "Видео играет по кругу вместо обоев, без звука. «Подогнать кадр» — двигай и приближай, как на ПК. Затемнение — чтобы на пёстром ролике читались сообщения."
+             : "Выбери ролик из галереи — он будет играть по кругу вместо обоев, без звука."))
+@@ -1608,12 +1588,12 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         entries.append(.info(.particlesSpeed, 0, "Падают поверх фона переписки — те же пять видов, что на ПК. Рисует их сама система, поэтому батарею они почти не тратят."))
+         return entries
+     case .listText:
+-        // Только поверх обоев на всё окно: на обычном фоне цвета темы и так
+-        // подобраны, подбирать вид текста не к чему.
+-        guard value(.wallpaperEverywhere) else {
++        // Только поверх плиток: на обычном фоне цвета темы и так подобраны,
++        // подбирать вид текста не к чему.
++        guard value(.dialogCards) else {
+             return []
+         }
+-        var entries: [LunagramSettingsEntry] = [.header(.listText, 0, "ВИД ТЕКСТА ПОВЕРХ ОБОЕВ")]
++        var entries: [LunagramSettingsEntry] = [.header(.listText, 0, "ВИД ТЕКСТА ПОВЕРХ ПЛИТОК")]
+         for (index, title) in lunagramListTextModeTitles.enumerated() {
+             entries.append(.dim(.listText, Int32(index), title, index == media.listTextMode))
+         }
+@@ -1990,10 +1970,6 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.avatarFrameBrightness = value
+         case 62:
+             LunagramSettings.avatarFrameGlow = value
+-        case 21:
+-            LunagramSettings.listWallpaperDim = value
+-        case 22:
+-            LunagramSettings.listWallpaperBlur = value
+         case 40:
+             LunagramSettings.profileBackgroundDim = value
+         case 41:
+@@ -2487,12 +2463,6 @@ private func lunagramWallpaperEntries(values: [LunagramToggle: Bool], media: Lun
+     // Кадр выбирают прямо в образце — пальцем и щипком, как мышью на ПК.
+     rows.row(.action(LunagramChoice.pickWallpaper.rawValue, "Видео фоном переписки", "photo"))
+     rows.row(.action(LunagramChoice.removeWallpaper.rawValue, "Убрать обои", "trash"))
+-    rows.row(.toggle(.wallpaperEverywhere, value(.wallpaperEverywhere), "На всё окно, а не только на переписку", nil))
+-    rows.row(.slider(21, "Затемнение списка переписок", media.listWallpaperDim, 0, 100, 5))
+-    rows.row(.slider(22, "Размытие под списком", media.listWallpaperBlur, 0, 100, 5))
+-    let mode = max(0, min(lunagramListTextModeTitles.count - 1, media.listTextMode))
+-    rows.row(.value(LunagramChoice.listTextMode.rawValue, "Вид текста поверх обоев", lunagramListTextModeTitles[mode], "a.square"))
+-    rows.row(.action(LunagramChoice.listTextColor.rawValue, "Цвет текста", "paintpalette,paintbrush"))
+     // Полоса ввода — как на ПК: плёнка сама, свой цвет, возврат, плотность.
+     rows.row(.toggle(.composeAuto, value(.composeAuto), "Плёнка подстраивается сама", nil))
+     rows.row(.action(LunagramChoice.composeColor.rawValue, "Цвет полосы ввода", "paintbrush.pointed,paintbrush"))
+@@ -2500,7 +2470,7 @@ private func lunagramWallpaperEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.slider(24, "Плотность полосы ввода", media.composeDensity, 0, 100, 5))
+     rows.row(.slider(23, "Приближение", media.wallpaperZoom, 100, 300, 5))
+     rows.row(.slider(20, "Затемнение обоев", media.wallpaperDimPercent, 0, 100, 5))
+-    rows.info("Видео крутится по кругу за сообщениями. С включённым охватом на всё окно те же обои лежат и за списком переписок — картинка выходит единой. Затемнение и размытие списка идут сверх общего: без них имена на пёстром видео не прочитать.\n\nПолоса ввода: пока «Плёнка подстраивается сама», стекло родное — оно и так подбирается под то, что под ним. Выключишь — плёнка твоя: свой цвет (без него — обычный цвет полосы), а плотность задаёт, насколько она густая. Выбор цвета сам выключает «подстраивается сама».")
++    rows.info("Видео крутится по кругу за сообщениями, вместо обычных обоев. Кадр и приближение выбираются прямо в образце.\n\nПолоса ввода: пока «Плёнка подстраивается сама», стекло родное — оно и так подбирается под то, что под ним. Выключишь — плёнка твоя: свой цвет (без него — обычный цвет полосы), а плотность задаёт, насколько она густая. Выбор цвета сам выключает «подстраивается сама».")
+     return rows.entries
+ }
+ 
+@@ -2520,6 +2490,12 @@ private func lunagramCardsEntries(values: [LunagramToggle: Bool], media: Lunagra
+     rows.row(.slider(3, "Заметность обводки", media.cardsStroke, 0, 100, 5))
+     rows.row(.toggle(.dialogCardsFadeMuted, value(.dialogCardsFadeMuted), "Гасить приглушённые переписки", nil))
+     rows.row(.slider(6, "Яркость приглушённых", media.cardsMuteOpacity, 0, 100, 5))
++    // Вид текста — поверх плиток: на пёстрой аватарке имена теряются так же,
++    // как на ПК теряются поверх обоев.
++    let mode = max(0, min(lunagramListTextModeTitles.count - 1, media.listTextMode))
++    rows.row(.value(LunagramChoice.listTextMode.rawValue, "Вид текста поверх плиток", lunagramListTextModeTitles[mode], "a.square"))
++    rows.row(.action(LunagramChoice.listTextColor.rawValue, "Цвет текста", "paintpalette,paintbrush"))
++    rows.info("Фон каждой переписки — её размытая аватарка. Вид текста нужен, когда имена на пёстрой аватарке читаются плохо: подложка, свечение, свой цвет или переливание.")
+ 
+     rows.header("Ещё в списке")
+     rows.row(.toggle(.voiceLengthInList, value(.voiceLengthInList), "Длина голосовых", "speaker.wave.1"))
