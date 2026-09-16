@@ -1,0 +1,277 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettingIcons.swift b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+index 0baa5d3a..e80590fb 100644
+--- a/submodules/Lunagram/Sources/LunagramSettingIcons.swift
++++ b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+@@ -6,9 +6,12 @@ import PhotosUI
+ ///
+ /// Строку узнаём по её тексту, как ПК — по надписи кнопки. Картинка лежит в
+ /// папке Lunagram (сторона до 256 точек, как на ПК), а приближение и сдвиг —
+-/// в настройках одной строкой. Картинка ложится как есть: при 100% целиком
+-/// помещается в значок, прозрачные края остаются прозрачными; приближение
+-/// увеличивает её, и лишнее уходит за край, а сдвиг выбирает видимый кусок.
++/// в настройках одной строкой.
++///
++/// Форма — как у родных значков Telegram: квадрат со скруглением. При 100%
++/// картинка заполняет его целиком, лишнее по длинной стороне обрезается;
++/// приближение увеличивает её дальше, а сдвиг выбирает видимый кусок. Так
++/// строка выглядит ровно, даже если вставил обычное фото.
+ public enum LunagramSettingIcons {
+     /// Приближение в процентах: 100 — картинка целиком в значке. Как на ПК.
+     static let zoomMin = 100
+@@ -16,6 +19,8 @@ public enum LunagramSettingIcons {
+ 
+     /// Сторона сохранённой картинки — как у значков на ПК.
+     private static let fileSide = 256
++    /// Скругление значка — доля стороны. Столько же у значков самого iOS.
++    static let cornerFactor: CGFloat = 0.2237
+     private static let filePrefix = "icon-"
+ 
+     struct Entry: Equatable {
+@@ -172,15 +177,15 @@ public enum LunagramSettingIcons {
+         return image
+     }
+ 
+-    /// Где лежит картинка внутри значка — та же расчётка, что на ПК. Меньше
+-    /// места — посередине; больше — сдвиг долей от лишка: -100 прижимает к
+-    /// левому или верхнему краю, +100 — к другому.
++    /// Где лежит картинка внутри значка. Она заполняет значок целиком, а
++    /// лишнее уходит за край; сдвиг выбирает, какой кусок виден: -100
++    /// прижимает к левому или верхнему краю, +100 — к другому.
+     static func placement(original: CGSize, target: CGSize, entry: Entry) -> CGRect {
+         guard original.width > 0.0, original.height > 0.0, target.width > 0.0, target.height > 0.0 else {
+             return .zero
+         }
+         let zoom = CGFloat(max(zoomMin, min(zoomMax, entry.zoom))) / 100.0
+-        let fit = min(target.width / original.width, target.height / original.height) * zoom
++        let fit = max(target.width / original.width, target.height / original.height) * zoom
+         let size = CGSize(width: max(1.0, original.width * fit), height: max(1.0, original.height * fit))
+         func place(_ extra: CGFloat, _ percent: Int) -> CGFloat {
+             if extra <= 0.0 {
+@@ -207,7 +212,9 @@ public enum LunagramSettingIcons {
+         // Как у рамки: чётко на любом айфоне, а значок крошечный — память не жалко.
+         format.scale = 3.0
+         let result = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+-            UIBezierPath(rect: CGRect(origin: CGPoint(), size: size)).addClip()
++            // Обрезаем по квадрату со скруглением — как родные значки Telegram.
++            let side = min(size.width, size.height)
++            UIBezierPath(roundedRect: CGRect(origin: CGPoint(), size: size), cornerRadius: side * cornerFactor).addClip()
+             image.draw(in: rect)
+         }
+         rendered.setObject(result, forKey: cacheKey)
+@@ -428,7 +435,7 @@ private final class LunagramIconCanvasView: UIView {
+ 
+     override func draw(_ rect: CGRect) {
+         let bounds = self.bounds
+-        let shape = UIBezierPath(roundedRect: bounds, cornerRadius: 12.0)
++        let shape = UIBezierPath(roundedRect: bounds, cornerRadius: min(bounds.width, bounds.height) * LunagramSettingIcons.cornerFactor)
+         (self.palette?.card ?? UIColor.secondarySystemBackground).setFill()
+         shape.fill()
+         if let entry = LunagramSettingIcons.entry(for: self.key), let image = LunagramSettingIcons.original(entry.file) {
+@@ -537,7 +544,7 @@ private final class LunagramIconAdjustController: UIViewController, UIGestureRec
+         self.infoLabel.font = UIFont.systemFont(ofSize: 13.0)
+         self.infoLabel.textColor = self.palette.secondaryText
+         self.infoLabel.numberOfLines = 0
+-        self.infoLabel.text = "Двигай картинку пальцем, чтобы выбрать кусок, щипок приближает. Картинка ложится как есть: PNG с прозрачным фоном смотрится как настоящий значок. Гифка встаёт первым кадром. Выключить все свои значки разом можно в «Оформлении» Lunagram."
++        self.infoLabel.text = "Двигай картинку пальцем, чтобы выбрать кусок, щипок приближает. Картинка обрезается по квадрату со скруглением — как родные значки Telegram, поэтому строка выглядит ровно. Гифка встаёт первым кадром. Выключить все свои значки разом можно в «Оформлении» Lunagram."
+         self.view.addSubview(self.infoLabel)
+ 
+         self.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 36276c05..e97baf06 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -7,6 +7,9 @@ import SwiftSignalKit
+ import TelegramPresentationData
+ import ItemListUI
+ import PresentationDataUtils
++import AccountContext
++import AvatarNode
++import TelegramCore
+ import Lunagram
+ 
+ /// Что показываем в образце.
+@@ -29,13 +32,15 @@ enum LunagramPreviewKind {
+ /// ПК. Рисуют его те же куски, что рисуют настоящий интерфейс, поэтому
+ /// образец не врёт: что видно здесь, то и получится.
+ final class LunagramPreviewItem: ListViewItem, ItemListItem {
++    let context: AccountContext
+     let presentationData: ItemListPresentationData
+     let kind: LunagramPreviewKind
+     /// Слепок настроек: меняется — значит образец надо перерисовать.
+     let token: Int
+     let sectionId: ItemListSectionId
+ 
+-    init(presentationData: ItemListPresentationData, kind: LunagramPreviewKind, token: Int, sectionId: ItemListSectionId) {
++    init(context: AccountContext, presentationData: ItemListPresentationData, kind: LunagramPreviewKind, token: Int, sectionId: ItemListSectionId) {
++        self.context = context
+         self.presentationData = presentationData
+         self.kind = kind
+         self.token = token
+@@ -104,6 +109,14 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+ 
+     private var item: LunagramPreviewItem?
+ 
++    // Своя аватарка для образцов: круглая — в строку, плоская — под размытие
++    // плитки. Без неё образец был ровным пятном цвета темы, и по нему не было
++    // видно ни размытия, ни затемнения, ни закругления.
++    private var lunagramAvatarDisposable: MetaDisposable?
++    private var lunagramOwnAvatar: UIImage?
++    private var lunagramFlatAvatar: UIImage?
++    private var lunagramAvatarFallback: UIColor = .clear
++
+     init() {
+         self.backgroundNode = ASDisplayNode()
+         self.backgroundNode.isLayerBacked = true
+@@ -265,6 +278,49 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+     }
+ 
+     /// Собственно образец: у каждого вида своя раскладка.
++    /// Просит свою аватарку — один раз на узел.
++    private func lunagramLoadOwnAvatar(context: AccountContext) {
++        guard self.lunagramAvatarDisposable == nil else {
++            return
++        }
++        let disposable = MetaDisposable()
++        self.lunagramAvatarDisposable = disposable
++        disposable.set((context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
++        |> mapToSignal { peer -> Signal<(UIImage?, UIImage?), NoError> in
++            guard let peer = peer else {
++                return .single((nil, nil))
++            }
++            return combineLatest(
++                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 46.0, height: 46.0), round: false, drawLetters: true),
++                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 32.0, height: 32.0), round: false, drawLetters: false)
++            )
++        }
++        |> deliverOnMainQueue).startStrict(next: { [weak self] own, flat in
++            guard let self else {
++                return
++            }
++            self.lunagramOwnAvatar = own
++            self.lunagramFlatAvatar = flat
++            // Картинка пришла позже раскладки — ставим её на место сами.
++            self.lunagramApplyOwnAvatar()
++            if let flat = flat {
++                self.cardView?.setAvatar(flat, key: "lunagram-own")
++            }
++        }))
++    }
++
++    /// Ставит свою аватарку в кружок образца; нет своей — цвет темы.
++    private func lunagramApplyOwnAvatar() {
++        if let image = self.lunagramOwnAvatar {
++            self.avatarView.backgroundColor = .clear
++            self.avatarView.layer.contents = image.cgImage
++            self.avatarView.layer.contentsGravity = .resizeAspectFill
++        } else {
++            self.avatarView.layer.contents = nil
++            self.avatarView.backgroundColor = self.lunagramAvatarFallback
++        }
++    }
++
+     private func updateContent(item: LunagramPreviewItem, rowSize: CGSize, titleSize: CGSize, subtitleSize: CGSize, leftInset: CGFloat, params: ListViewItemLayoutParams) {
+         let theme = item.presentationData.theme
+         // По умолчанию образец не трогается — жесты только у выбора кадра.
+@@ -276,6 +332,7 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+         switch item.kind {
+         case .dialogCard:
+             // Настоящая плитка из списка переписок — с теми же настройками.
++            self.lunagramLoadOwnAvatar(context: item.context)
+             let card: LunagramDialogCardView
+             if let current = self.cardView {
+                 card = current
+@@ -284,7 +341,11 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 self.cardView = card
+                 self.previewContainer.insertSubview(card, at: 0)
+             }
+-            card.setColor(theme.list.itemAccentColor)
++            if let flat = self.lunagramFlatAvatar {
++                card.setAvatar(flat, key: "lunagram-own")
++            } else {
++                card.setColor(theme.list.itemAccentColor)
++            }
+             card.update(rowSize: rowSize, themeBackgroundColor: theme.list.plainBackgroundColor, isMuted: false)
+             card.applySettings()
+ 
+@@ -292,9 +353,11 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             self.frameHost.isHidden = true
+             let avatarSize: CGFloat = 44.0
+             self.avatarView.frame = CGRect(x: 14.0, y: floor((rowSize.height - avatarSize) / 2.0), width: avatarSize, height: avatarSize)
+-            self.avatarView.layer.cornerRadius = avatarSize / 2.0
+-            self.avatarView.backgroundColor = theme.list.itemAccentColor
++            self.avatarView.layer.cornerRadius = LunagramAvatarShape.cornerRadius(side: avatarSize)
++            self.avatarView.layer.masksToBounds = true
+             self.avatarView.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
++            self.lunagramAvatarFallback = theme.list.itemAccentColor
++            self.lunagramApplyOwnAvatar()
+ 
+             let textX = leftInset + avatarSize + 12.0
+             self.titleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) - titleSize.height - 2.0, width: titleSize.width, height: titleSize.height)
+@@ -345,15 +408,19 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 10.0, width: subtitleSize.width, height: subtitleSize.height)
+ 
+         case .avatar:
+-            // Как образец на ПК: аватарка и название канала рядом.
++            // Как образец на ПК: аватарка и название канала рядом. Аватарка
++            // своя — на ней закругление видно сразу.
++            self.lunagramLoadOwnAvatar(context: item.context)
+             self.cardView?.isHidden = true
+             self.frameHost.isHidden = true
+             self.avatarView.isHidden = false
+             let avatarSize: CGFloat = 46.0
+             self.avatarView.frame = CGRect(x: 16.0, y: floor((rowSize.height - avatarSize) / 2.0), width: avatarSize, height: avatarSize)
+             self.avatarView.layer.cornerRadius = LunagramAvatarShape.cornerRadius(side: avatarSize)
+-            self.avatarView.backgroundColor = theme.list.itemAccentColor
++            self.avatarView.layer.masksToBounds = true
+             self.avatarView.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
++            self.lunagramAvatarFallback = theme.list.itemAccentColor
++            self.lunagramApplyOwnAvatar()
+             let textX = 16.0 + avatarSize + 12.0
+             self.titleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) - titleSize.height - 1.0, width: titleSize.width, height: titleSize.height)
+             self.subtitleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) + 2.0, width: subtitleSize.width, height: subtitleSize.height)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 6bb9840c..fb652967 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -672,10 +672,13 @@ private final class LunagramSettingsControllerArguments {
+     let openChoice: (Int32) -> Void
+     // Плитка: чьи плитки, какая, долгое ли нажатие.
+     let tile: (Int32, String, Bool) -> Void
++    // Нужен образцам: по нему берётся своя аватарка.
++    let context: AccountContext
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, context: AccountContext) {
+         self.openChoice = openChoice
+         self.tile = tile
++        self.context = context
+         self.toggle = toggle
+         self.pick = pick
+         self.setDim = setDim
+@@ -1122,7 +1125,7 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+                 arguments.setDim(section, Int(index))
+             })
+         case let .preview(_, kind, token):
+-            return LunagramPreviewItem(presentationData: presentationData, kind: kind, token: token, sectionId: self.section)
++            return LunagramPreviewItem(context: arguments.context, presentationData: presentationData, kind: kind, token: token, sectionId: self.section)
+         case let .slider(_, id, title, value, minValue, maxValue, step, label):
+             return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in label }, sectionId: self.section, updated: { newValue in
+                 arguments.setSlider(id, newValue)
+@@ -2079,7 +2082,7 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             setEnabled(true)
+         }
+         refreshMedia()
+-    })
++    }, context: context)
+ }
+ 
+ /// Выбор ступени, как окошко на ПК: список подписей, отмечена ближайшая.
+@@ -2232,7 +2235,7 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+             arguments.openChoice(id)
+         })
+     case let .preview(kind, token):
+-        return LunagramPreviewItem(presentationData: presentationData, kind: kind, token: token, sectionId: sectionId)
++        return LunagramPreviewItem(context: arguments.context, presentationData: presentationData, kind: kind, token: token, sectionId: sectionId)
+     case let .slider(id, title, value, minValue, maxValue, step):
+         return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in "" }, sectionId: sectionId, updated: { newValue in
+             arguments.setSlider(id, newValue)
