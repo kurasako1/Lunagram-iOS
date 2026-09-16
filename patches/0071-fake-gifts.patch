@@ -1,0 +1,224 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index fbafde27..09435e08 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -105,6 +105,7 @@ public final class LunagramSettings {
+         static let composeAuto = "lunagram.compose.auto"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+         static let settingIconsMap = "lunagram.settingIcons.map"
++        static let fakeGifts = "lunagram.gifts.fake"
+     }
+ 
+     /// Густота частиц по умолчанию — если человек её ещё не трогал.
+@@ -355,6 +356,20 @@ public final class LunagramSettings {
+         return UIColor(red: red, green: green, blue: blue, alpha: density)
+     }
+ 
++    /// Скопированные себе подарки — как они записаны на диск. Разбирает их
++    /// тот, кто умеет читать подарки Telegram; здесь просто место хранения.
++    public static var fakeGiftsData: Data? {
++        get { return defaults.data(forKey: Key.fakeGifts) }
++        set {
++            if let newValue = newValue {
++                defaults.set(newValue, forKey: Key.fakeGifts)
++            } else {
++                defaults.removeObject(forKey: Key.fakeGifts)
++            }
++            changed()
++        }
++    }
++
+     /// Закругление аватарок — ступень от 0 (квадрат) до 23 (круг), как на ПК.
+     /// По умолчанию круг: так аватарки выглядят как в обычном Telegram.
+     public static var avatarCorners: Int {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
+index 4e1503b7..5e9ccf5e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/BUILD
+@@ -13,6 +13,7 @@ swift_library(
+         "//submodules/SSignalKit/SwiftSignalKit",
+         "//submodules/AsyncDisplayKit",
+         "//submodules/TelegramCore",
++        "//submodules/Lunagram",
+         "//submodules/Postbox",
+         "//submodules/TelegramPresentationData",
+         "//submodules/AccountContext",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+index e1c98a1a..f0f27caa 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+@@ -68,6 +68,10 @@ final class GiftsListView: UIView {
+     }
+             
+     private var starsProducts: [ProfileGiftsContext.State.StarGift]?
++    // Lunagram: настоящие подарки, как их прислал сервер, — чтобы добавить к
++    // ним свои скопированные, когда те поменяются.
++    private var lunagramServerGifts: [ProfileGiftsContext.State.StarGift] = []
++    private var lunagramFakeObserver: NSObjectProtocol?
+     private var starsItems: [AnyHashable: (StarGiftReference?, ComponentView<Empty>)] = [:]
+ 
+     private(set) var resultsAreEmpty = false
+@@ -186,7 +190,14 @@ final class GiftsListView: UIView {
+                 self.starsProducts = stateItems
+                 self.pinnedReferences = Array(stateItems.filter { $0.pinnedToTop }.compactMap { $0.reference })
+             } else {
+-                self.starsProducts = state.filteredGifts
++                // Lunagram: свои скопированные подарки — первыми, как самые
++                // свежие. Только в своём профиле и только у себя на экране.
++                self.lunagramServerGifts = state.filteredGifts
++                if self.peerId == self.context.account.peerId {
++                    self.starsProducts = LunagramFakeGifts.stored() + state.filteredGifts
++                } else {
++                    self.starsProducts = state.filteredGifts
++                }
+                 self.pinnedReferences = Array(state.gifts.filter { $0.pinnedToTop }.compactMap { $0.reference })
+             }
+             
+@@ -205,6 +216,18 @@ final class GiftsListView: UIView {
+             }
+         })
+         
++        // Lunagram: скопировал или убрал свой подарок — список пересобирается.
++        if peerId == context.account.peerId {
++            self.lunagramFakeObserver = NotificationCenter.default.addObserver(forName: LunagramFakeGifts.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++                guard let self, !self.isReordering else {
++                    return
++                }
++                self.starsProducts = LunagramFakeGifts.stored() + self.lunagramServerGifts
++                let _ = self.updateScrolling(transition: .easeInOut(duration: 0.25))
++                self.onContentUpdated()
++            })
++        }
++
+         self.emptyResultsClippingView.clipsToBounds = true
+         self.emptyResultsClippingView.isHidden = true
+         self.addSubview(self.emptyResultsClippingView)
+@@ -250,6 +273,9 @@ final class GiftsListView: UIView {
+     
+     deinit {
+         self.dataDisposable?.dispose()
++        if let observer = self.lunagramFakeObserver {
++            NotificationCenter.default.removeObserver(observer)
++        }
+     }
+         
+     func item(at point: CGPoint) -> (AnyHashable, ComponentView<Empty>)? {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/LunagramFakeGifts.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/LunagramFakeGifts.swift
+new file mode 100644
+index 00000000..845188c7
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/LunagramFakeGifts.swift
+@@ -0,0 +1,79 @@
++import Foundation
++import TelegramCore
++import Lunagram
++
++// Lunagram: свои подарки в профиле — понарошку.
++//
++// Зажал чужой подарок → «Скопировать себе», и такой же ложится в твой
++// профиль первым. Видно его только тебе: на сервер ничего не уходит,
++// подарок нигде не появляется и никому не приходит.
++//
++// Ссылку на настоящий подарок при копировании выбрасываем: без неё карточка
++// открывается, но кнопки вроде «Продать» ни во что не упираются — иначе они
++// целились бы в чужой подарок, и сервер ругался бы в ответ.
++
++enum LunagramFakeGifts {
++    static let didChangeNotification = Notification.Name("LunagramFakeGiftsDidChange")
++
++    /// Все скопированные подарки, свежие первыми.
++    static func stored() -> [ProfileGiftsContext.State.StarGift] {
++        guard let data = LunagramSettings.fakeGiftsData else {
++            return []
++        }
++        return (try? JSONDecoder().decode([ProfileGiftsContext.State.StarGift].self, from: data)) ?? []
++    }
++
++    /// Скопировать подарок себе.
++    static func add(_ source: ProfileGiftsContext.State.StarGift) {
++        let copy = ProfileGiftsContext.State.StarGift(
++            gift: source.gift,
++            reference: nil,
++            fromPeer: nil,
++            date: Int32(Date().timeIntervalSince1970),
++            text: nil,
++            entities: nil,
++            nameHidden: true,
++            savedToProfile: true,
++            pinnedToTop: false,
++            convertStars: nil,
++            canUpgrade: false,
++            canExportDate: nil,
++            upgradeStars: nil,
++            transferStars: nil,
++            canTransferDate: nil,
++            canResaleDate: nil,
++            collectionIds: nil,
++            prepaidUpgradeHash: nil,
++            upgradeSeparate: false,
++            dropOriginalDetailsStars: nil,
++            number: source.number,
++            isRefunded: false,
++            canCraftAt: nil
++        )
++        var all = stored()
++        all.insert(copy, at: 0)
++        save(all)
++    }
++
++    /// Убрать свой подарок из профиля.
++    static func remove(_ gift: ProfileGiftsContext.State.StarGift) {
++        var all = stored()
++        if let index = all.firstIndex(where: { $0 == gift }) {
++            all.remove(at: index)
++            save(all)
++        }
++    }
++
++    /// Наш ли это подарок: у скопированных нет ни ссылки, ни дарителя.
++    static func isFake(_ gift: ProfileGiftsContext.State.StarGift) -> Bool {
++        guard gift.reference == nil, gift.fromPeer == nil else {
++            return false
++        }
++        return stored().contains(where: { $0 == gift })
++    }
++
++    private static func save(_ gifts: [ProfileGiftsContext.State.StarGift]) {
++        LunagramSettings.fakeGiftsData = try? JSONEncoder().encode(gifts)
++        NotificationCenter.default.post(name: didChangeNotification, object: nil)
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+index db6d0c07..3ea13c69 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+@@ -1,5 +1,6 @@
+ import AsyncDisplayKit
+ import UIKit
++import Lunagram
+ import Display
+ import ComponentFlow
+ import TelegramCore
+@@ -989,6 +990,22 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+         }
+         
+         var items: [ContextMenuItem] = []
++
++        // Lunagram: свои подарки — понарошку. Чужой копируется себе одним
++        // нажатием, свой скопированный так же убирается. На сервер ничего не
++        // уходит: видно только тебе.
++        if LunagramFakeGifts.isFake(gift) {
++            items.append(.action(ContextMenuActionItem(text: "Убрать из профиля", textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { c, _ in
++                c?.dismiss(completion: nil)
++                LunagramFakeGifts.remove(gift)
++            })))
++        } else {
++            items.append(.action(ContextMenuActionItem(text: "Скопировать себе", icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.contextMenu.primaryColor) }, action: { c, _ in
++                c?.dismiss(completion: nil)
++                LunagramFakeGifts.add(gift)
++            })))
++        }
++
+         if canManage {
+             items.append(.action(ContextMenuActionItem(text: strings.PeerInfo_Gifts_Context_AddToCollection, textLayout: .twoLinesMax, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Peer Info/Gifts/AddToCollection"), color: theme.contextMenu.primaryColor) }, action: { [weak self] c, f in
+                 var subItems: [ContextMenuItem] = []
