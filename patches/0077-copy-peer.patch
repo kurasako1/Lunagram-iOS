@@ -75,10 +75,10 @@ index e89161c0..951cbdd3 100644
      public static var fakeGiftsData: Data? {
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
 new file mode 100644
-index 00000000..6ca93a39
+index 00000000..c4f5602c
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,219 @@
 +import Foundation
 +import UIKit
 +import SwiftSignalKit
@@ -100,6 +100,20 @@ index 00000000..6ca93a39
 +// Чужой @ник скопировать нельзя: он занят, такого в Telegram не бывает.
 +// Премиум-оформление (цвет имени, фон профиля, значок-статус) сервер примет
 +// только при своём премиуме — без него эта часть просто не применится.
++
++/// Номер готового цвета имени. Коллекционные (купленные) не копируем: их
++/// сервер к чужому имени и не прицепит.
++private func lunagramPresetColor(_ color: PeerColor?) -> Int32? {
++    guard let color = color else {
++        return nil
++    }
++    switch color {
++    case let .preset(value):
++        return value.rawValue
++    case .collectible:
++        return nil
++    }
++}
 +
 +/// Номер картинки статуса: он лежит и у обычного значка, и у подарочного.
 +private func lunagramStatusFileId(_ status: PeerEmojiStatus?) -> Int64? {
@@ -212,7 +226,7 @@ index 00000000..6ca93a39
 +                firstName: ownPeer.compactDisplayTitle,
 +                lastName: "",
 +                about: "",
-+                nameColor: ownPeer.nameColor?.rawValue,
++                nameColor: lunagramPresetColor(ownPeer.nameColor),
 +                profileColor: ownPeer.profileColor?.rawValue,
 +                backgroundEmojiId: ownPeer.backgroundEmojiId,
 +                profileBackgroundEmojiId: ownPeer.profileBackgroundEmojiId,
@@ -250,7 +264,7 @@ index 00000000..6ca93a39
 +        if case let .known(text) = targetAbout {
 +            let _ = context.engine.accountData.updateAbout(about: text ?? "").startStandalone()
 +        }
-+        lunagramApplyColors(context: context, nameColor: peer.nameColor?.rawValue, backgroundEmojiId: peer.backgroundEmojiId, profileColor: peer.profileColor?.rawValue, profileBackgroundEmojiId: peer.profileBackgroundEmojiId)
++        lunagramApplyColors(context: context, nameColor: lunagramPresetColor(peer.nameColor), backgroundEmojiId: peer.backgroundEmojiId, profileColor: peer.profileColor?.rawValue, profileBackgroundEmojiId: peer.profileBackgroundEmojiId)
 +        lunagramApplyStatus(context: context, fileId: lunagramStatusFileId(peer.emojiStatus))
 +        let _ = (lunagramAvatarImage(context: context, peer: peer)
 +        |> deliverOnMainQueue).startStandalone(next: { image in
@@ -285,7 +299,7 @@ index 00000000..6ca93a39
 +    completion()
 +}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
-index 013fce18..06b059ca 100644
+index 013fce18..53bda46f 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
 @@ -17,6 +17,7 @@ import AvatarNode
@@ -305,7 +319,7 @@ index 013fce18..06b059ca 100644
          let ItemUsername = 3001
          let ItemBirthdate = 3002
          let ItemAbout = 3003
-@@ -201,6 +204,32 @@ func infoItems(
+@@ -201,6 +204,33 @@ func infoItems(
              items[.peerInfoTrailing]!.append(PeerInfoScreenCommentItem(id: ItemLunagramHideInfo, text: isHidden
                  ? "Он не видит твою аватарку, описание, время в сети и номер. Переписке это не мешает: из его списка чатов ты не пропал. Своё время в сети скрыто — значит, и его время ты не видишь: так устроен сам Telegram."
                  : "Закроет от него аватарку, описание, время в сети и номер — по-настоящему, через настройки Telegram. Писать друг другу можно по-прежнему."))
@@ -325,7 +339,8 @@ index 013fce18..06b059ca 100644
 +                            })
 +                        })
 +                    ], actionLayout: .vertical)
-+                    (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(alert, in: .window(.root))
++                    // Спрашиваем поверх всего: окно профиля само может закрыться.
++                    ((context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? ViewController)?.present(alert, in: .window(.root))
 +                } else {
 +                    lunagramRestoreOwnProfile(context: context, completion: {
 +                        interaction.requestLayout(true)
