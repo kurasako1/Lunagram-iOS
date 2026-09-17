@@ -189,7 +189,7 @@ index 00000000..543ca7f5
 +    })
 +}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index 0af02179..f870dcb2 100644
+index 0af02179..278fb198 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -57,6 +57,7 @@ private enum LunagramToggle: Int32 {
@@ -245,7 +245,23 @@ index 0af02179..f870dcb2 100644
          }
      }
  }
-@@ -1635,6 +1644,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+@@ -1212,6 +1221,7 @@ private struct LunagramMediaState: Equatable {
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
+     var wordingPack: Int = 0
++    var deletedIconColor: UInt32 = 0xFF3B30
+     var composeDensity: Int = 75
+ 
+     static func current() -> LunagramMediaState {
+@@ -1227,6 +1237,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
+         state.wordingPack = LunagramWording.pack
++        state.deletedIconColor = LunagramSettings.deletedIconColor
+         state.composeDensity = LunagramSettings.composeDensity
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+@@ -1635,6 +1646,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
          toggle.set(value)
          shared.values[toggle] = value
          shared.valuesPromise.set(shared.values)
@@ -256,15 +272,54 @@ index 0af02179..f870dcb2 100644
      }, pick: { section in
          if section == .profileStatus {
              shared.push?(lunagramStatusController(context: context))
-@@ -2464,6 +2477,12 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+@@ -2025,6 +2040,23 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             refreshMedia()
+         case .wordingEditor:
+             shared.push?(lunagramWordingEditor(context: context))
++        case .deletedIconColor:
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            // Та же палитра, что у цвета имени: корзинка перекрашивается на ходу.
++            let picker = UIColorPickerViewController()
++            picker.supportsAlpha = false
++            picker.selectedColor = UIColor(rgb: LunagramSettings.deletedIconColor)
++            let delegate = LunagramColorPickerDelegate(changed: { color in
++                LunagramSettings.deletedIconColor = lunagramPackColor(color)
++                refreshMedia()
++            }, finished: {
++                shared.pickerHolder.delegate = nil
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
+         }
+     }, tile: { rawKind, id, isLongPress in
+         guard let kind = LunagramTileKind(rawValue: rawKind) else {
+@@ -2135,6 +2167,7 @@ private enum LunagramChoice: Int32 {
+     case composeColor = 50
+     case composeReset = 51
+     case wordingEditor = 60
++    case deletedIconColor = 70
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2447,6 +2480,8 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.header("Мут")
+     rows.row(.toggle(.showMutedDeleted, value(.showMutedDeleted), "Показывать удалённые в чате", "square.grid.2x2"))
+     rows.info("Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения приходят с корзинкой, как удалённые. Выключи — и не будут появляться у тебя вовсе.")
++    rows.row(.color(LunagramChoice.deletedIconColor.rawValue, "Цвет корзинки", media.deletedIconColor))
++    rows.info("Корзинка у удалённых сообщений. Цветом времени она сливалась с самим сообщением, поэтому по умолчанию красная.")
+     rows.row(.toggle(.showMessageSeconds, value(.showMessageSeconds), "Время с секундами", "stopwatch"))
+     rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
+     let fonts = LunagramSendFont.allCases
+@@ -2464,6 +2499,10 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
      rows.row(.toggle(.searchFilterButton, value(.searchFilterButton), "Фильтр в поиске по переписке", "magnifyingglass"))
      rows.info("Внизу поиска рядом с календарём появится кнопка: период, автор и тип сообщений. Отбор сбрасывается, когда закрываешь поиск.")
  
 +    rows.header("Скрытность")
 +    rows.row(.toggle(.hideFromEveryone, value(.hideFromEveryone), "Скрыть меня от всех", "eye.slash"))
-+    rows.info("Аватарка, описание, время в сети и номер закрываются от всех разом — по-настоящему, настройками самого Telegram. Выключишь — всё вернётся, а те, кого ты скрыл поимённо в их профилях, останутся скрытыми.
-+
-+Переписке это не мешает: писать друг другу можно по-прежнему. Но пока твоё время в сети скрыто, ты не видишь и чужое — так устроен сам Telegram.")
++    rows.info("Аватарка, описание, время в сети и номер закрываются от всех разом — по-настоящему, настройками самого Telegram. Выключишь — всё вернётся, а те, кого ты скрыл поимённо в их профилях, останутся скрытыми.\n\nПереписке это не мешает: писать друг другу можно по-прежнему. Но пока твоё время в сети скрыто, ты не видишь и чужое — так устроен сам Telegram.")
 +
      // Этого на экране ПК нет — айфонное. Внизу того же экрана, как решили.
      rows.header("Только на айфоне")
