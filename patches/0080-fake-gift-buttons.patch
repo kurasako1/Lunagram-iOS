@@ -1,0 +1,55 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+index a1b7dcce..409c7242 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+@@ -652,25 +652,25 @@ final class GiftsListView: UIView {
+                                             self.profileGifts.updateStarGiftAddedToProfile(reference: reference, added: added)
+                                         },
+                                         convertToStars: { [weak self] reference in
+-                                            guard let self else {
++                                            guard let self, !LunagramFakeGifts.isFake(reference: reference) else {
+                                                 return
+                                             }
+                                             self.profileGifts.convertStarGift(reference: reference)
+                                         },
+                                         dropOriginalDetails: { [weak self] reference in
+-                                            guard let self else {
++                                            guard let self, !LunagramFakeGifts.isFake(reference: reference) else {
+                                                 return .complete()
+                                             }
+                                             return self.profileGifts.dropOriginalDetails(reference: reference)
+                                         },
+                                         transferGift: { [weak self] prepaid, reference, peerId in
+-                                            guard let self else {
++                                            guard let self, !LunagramFakeGifts.isFake(reference: reference) else {
+                                                 return .complete()
+                                             }
+                                             return self.profileGifts.transferStarGift(prepaid: prepaid, reference: reference, peerId: peerId)
+                                         },
+                                         upgradeGift: { [weak self] formId, reference, keepOriginalInfo in
+-                                            guard let self else {
++                                            guard let self, !LunagramFakeGifts.isFake(reference: reference) else {
+                                                 return .never()
+                                             }
+                                             return self.profileGifts.upgradeStarGift(formId: formId, reference: reference, keepOriginalInfo: keepOriginalInfo)
+@@ -682,7 +682,7 @@ final class GiftsListView: UIView {
+                                             return self.profileGifts.buyStarGift(slug: slug, peerId: peerId, price: price)
+                                         },
+                                         updateResellStars: { [weak self] reference, price in
+-                                            guard let self else {
++                                            guard let self, !LunagramFakeGifts.isFake(reference: reference) else {
+                                                 return .never()
+                                             }
+                                             return self.profileGifts.updateStarGiftResellPrice(reference: reference, price: price)
+@@ -691,6 +691,11 @@ final class GiftsListView: UIView {
+                                             guard let self else {
+                                                 return false
+                                             }
++                                            // Свои копии и так стоят первыми: открепить их сервер
++                                            // не может, а трогать настоящие из-за них незачем.
++                                            if LunagramFakeGifts.isFake(reference: reference) {
++                                                return true
++                                            }
+                                             if pinnedToTop && self.pinnedReferences.count >= self.maxPinnedCount {
+                                                 self.displayUnpinScreen?(product, {
+                                                     dismissImpl?()
