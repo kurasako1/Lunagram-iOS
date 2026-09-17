@@ -1,0 +1,995 @@
+diff --git a/build-system/GenerateStrings/GenerateStrings.py b/build-system/GenerateStrings/GenerateStrings.py
+index e10ff2b8..5ef16e01 100644
+--- a/build-system/GenerateStrings/GenerateStrings.py
++++ b/build-system/GenerateStrings/GenerateStrings.py
+@@ -302,6 +302,25 @@ static _FormattedString * _Nonnull getFormatted{num_arguments}(_PresentationStri
+ 
+ @end
+ 
++// Lunagram: свои надписи вместо телеграмовских.
++//
++// Таблицу «ключ надписи — свой текст» ставит сам клиент: набор плюс твои
++// правки. Дальше её читает каждый запрос надписи, поэтому она лежит рядом с
++// самими надписями, а не где-то в Swift.
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++void LunagramSetWordingDict(NSDictionary<NSString *, NSString *> * _Nullable dict);
++
++/// Родная надпись Telegram по ключу — мимо наших правок. Нужна редактору,
++/// чтобы показать, как было.
++NSString * _Nullable LunagramOriginalString(_PresentationStrings * _Nonnull strings, NSString * _Nonnull key);
++
++#ifdef __cplusplus
++}
++#endif
++
+ ''')
+ 
+         write_string(source_file, '''// Automatically-generated file, do not edit
+@@ -309,6 +328,7 @@ static _FormattedString * _Nonnull getFormatted{num_arguments}(_PresentationStri
+ #import <PresentationStrings/PresentationStrings.h>
+ #import <NumberPluralizationForm/NumberPluralizationForm.h>
+ #import <AppBundle/AppBundle.h>
++#import <os/lock.h>
+ 
+ @implementation _FormattedStringRange
+ 
+@@ -445,8 +465,43 @@ static NSString * _Nonnull getPluralizationSuffix(uint32_t lc, int32_t value) {
+     }
+ }
+ 
++// Lunagram: таблица своих надписей. Меняется редко, читается часто — отсюда
++// замок, а не очередь: под ним только взятие указателя.
++static NSDictionary<NSString *, NSString *> *lunagramWordingDict = nil;
++static os_unfair_lock lunagramWordingLock = OS_UNFAIR_LOCK_INIT;
++
++void LunagramSetWordingDict(NSDictionary<NSString *, NSString *> * _Nullable dict) {
++    NSDictionary<NSString *, NSString *> *copied = [dict copy];
++    os_unfair_lock_lock(&lunagramWordingLock);
++    lunagramWordingDict = copied;
++    os_unfair_lock_unlock(&lunagramWordingLock);
++}
++
++static NSString * _Nullable lunagramWording(NSString * _Nonnull key) {
++    os_unfair_lock_lock(&lunagramWordingLock);
++    NSString *result = lunagramWordingDict[key];
++    os_unfair_lock_unlock(&lunagramWordingLock);
++    return result;
++}
++
++NSString * _Nullable LunagramOriginalString(_PresentationStrings * _Nonnull strings, NSString * _Nonnull key) {
++    NSString *result = strings.primaryComponent.dict[key];
++    if (!result) {
++        result = strings.secondaryComponent.dict[key];
++    }
++    return result;
++}
++
+ static NSString * _Nonnull getSingle(_PresentationStrings * _Nullable strings, NSString * _Nonnull key,
+     bool * _Nullable isFound) {
++    // Lunagram: своя надпись перебивает телеграмовскую.
++    NSString *lunagram = lunagramWording(key);
++    if (lunagram) {
++        if (isFound) {
++            *isFound = true;
++        }
++        return lunagram;
++    }
+     NSString *result = nil;
+     if (strings) {
+         result = strings.primaryComponent.dict[key];
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 09435e08..91d231f4 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -1627,7 +1627,7 @@ public final class LunagramSettings {
+         return folder
+     }
+ 
+-    private static func changed() {
++    static func changed() {
+         NotificationCenter.default.post(name: didChangeNotification, object: nil)
+     }
+ }
+diff --git a/submodules/Lunagram/Sources/LunagramWording.swift b/submodules/Lunagram/Sources/LunagramWording.swift
+new file mode 100644
+index 00000000..12b9af1b
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramWording.swift
+@@ -0,0 +1,688 @@
++import Foundation
++
++/// Свои надписи вместо телеграмовских — те самые «языки», но внутри клиента.
++///
++/// Готовые наборы лежат здесь, свои правки — в настройках; правки кладутся
++/// поверх набора, поэтому можно взять «Мурлыкающий» и поменять в нём одну
++/// строчку. Таблица уходит в генератор строк Telegram: он смотрит в неё
++/// раньше, чем в свои словари.
++public enum LunagramWording {
++    /// Надпись, которую можно поменять: ключ Telegram и человеческое название.
++    public struct Entry {
++        public let key: String
++        public let title: String
++
++        public init(key: String, title: String) {
++            self.key = key
++            self.title = title
++        }
++    }
++
++    /// Готовый набор надписей.
++    public struct Pack {
++        public let id: Int
++        public let title: String
++        /// Пара слов из набора — видно прямо в списке, как на ПК.
++        public let sample: String
++        public let strings: [String: String]
++
++        public init(id: Int, title: String, sample: String, strings: [String: String]) {
++            self.id = id
++            self.title = title
++            self.sample = sample
++            self.strings = strings
++        }
++    }
++
++    /// Ходовые надписи — те, что видно каждый день.
++    public static let entries: [Entry] = [
++        Entry(key: "DialogList.Title", title: "Заголовок «Чаты»"),
++        Entry(key: "Contacts.Title", title: "Вкладка «Контакты»"),
++        Entry(key: "Calls.TabTitle", title: "Вкладка «Звонки»"),
++        Entry(key: "Settings.Title", title: "Вкладка «Настройки»"),
++        Entry(key: "DialogList.SavedMessages", title: "«Избранное» в списке"),
++        Entry(key: "Settings.SavedMessages", title: "«Избранное» в настройках"),
++        Entry(key: "Conversation.SavedMessages", title: "«Избранное» в переписке"),
++        Entry(key: "ChatList.Archive", title: "Архив"),
++        Entry(key: "ChatList.UnarchiveAction", title: "Убрать из архива"),
++        Entry(key: "Common.Search", title: "Поиск"),
++        Entry(key: "Settings.Search", title: "Поиск по настройкам"),
++        Entry(key: "DialogList.SearchLabel", title: "Подсказка в поиске"),
++        Entry(key: "Conversation.SearchPlaceholder", title: "Поиск по переписке"),
++        Entry(key: "Conversation.InputTextPlaceholder", title: "Поле ввода"),
++        Entry(key: "Conversation.typing", title: "«печатает» в шапке"),
++        Entry(key: "Conversation.StatusTyping", title: "«печатает» рядом с именем"),
++        Entry(key: "DialogList.Typing", title: "«печатает» в списке"),
++        Entry(key: "Presence.online", title: "«в сети»"),
++        Entry(key: "LastSeen.JustNow", title: "«был только что»"),
++        Entry(key: "LastSeen.Lately", title: "«был недавно»"),
++        Entry(key: "LastSeen.WithinAWeek", title: "«был на неделе»"),
++        Entry(key: "LastSeen.WithinAMonth", title: "«был в этом месяце»"),
++        Entry(key: "Conversation.ContextMenuReply", title: "Ответить"),
++        Entry(key: "Conversation.ContextMenuForward", title: "Переслать"),
++        Entry(key: "Conversation.ContextMenuCopy", title: "Копировать"),
++        Entry(key: "Conversation.ContextMenuDelete", title: "Удалить"),
++        Entry(key: "Conversation.ContextMenuSelect", title: "Выбрать"),
++        Entry(key: "Conversation.ContextMenuShare", title: "Поделиться"),
++        Entry(key: "Conversation.ContextMenuCopyLink", title: "Копировать ссылку"),
++        Entry(key: "Conversation.ContextMenuMore", title: "Ещё"),
++        Entry(key: "Conversation.Pin", title: "Закрепить"),
++        Entry(key: "Conversation.Unpin", title: "Открепить"),
++        Entry(key: "Conversation.Mute", title: "Выключить звук"),
++        Entry(key: "Conversation.Unmute", title: "Включить звук"),
++        Entry(key: "Conversation.Edit", title: "Изменить"),
++        Entry(key: "Conversation.Info", title: "Сведения"),
++        Entry(key: "Conversation.Search", title: "Искать в переписке"),
++        Entry(key: "Conversation.ClearAll", title: "Удалить всё"),
++        Entry(key: "Conversation.Report", title: "Пожаловаться"),
++        Entry(key: "Common.Delete", title: "Удалить (кнопка)"),
++        Entry(key: "Common.Edit", title: "Изменить (кнопка)"),
++        Entry(key: "Common.Cancel", title: "Отмена"),
++        Entry(key: "Common.Done", title: "Готово"),
++        Entry(key: "Common.Yes", title: "Да"),
++        Entry(key: "Common.No", title: "Нет"),
++        Entry(key: "Common.Back", title: "Назад"),
++        Entry(key: "Common.Next", title: "Далее"),
++        Entry(key: "Common.Close", title: "Закрыть"),
++        Entry(key: "Common.OK", title: "ОК"),
++        Entry(key: "ChatList.Read", title: "Прочитать"),
++        Entry(key: "ChatList.Mute", title: "Заглушить переписку"),
++        Entry(key: "ChatList.Unmute", title: "Вернуть звук переписке"),
++        Entry(key: "ChatList.DeleteChat", title: "Удалить чат"),
++        Entry(key: "Message.Photo", title: "Фото (в списке)"),
++        Entry(key: "Message.Video", title: "Видео (в списке)"),
++        Entry(key: "Message.File", title: "Файл (в списке)"),
++        Entry(key: "Message.Audio", title: "Голосовое (в списке)"),
++        Entry(key: "Message.Sticker", title: "Стикер (в списке)"),
++        Entry(key: "Message.Animation", title: "Гифка (в списке)"),
++        Entry(key: "Message.Location", title: "Место (в списке)"),
++        Entry(key: "Message.Contact", title: "Контакт (в списке)"),
++        Entry(key: "Message.VideoMessage", title: "Кружок (в списке)"),
++        Entry(key: "Attachment.Gallery", title: "Галерея"),
++        Entry(key: "Attachment.File", title: "Файл (вложение)"),
++        Entry(key: "Attachment.Location", title: "Место (вложение)"),
++        Entry(key: "Settings.ChatBackground", title: "Обои"),
++        Entry(key: "Settings.Appearance", title: "Оформление"),
++        Entry(key: "Settings.Devices", title: "Устройства"),
++        Entry(key: "Settings.Proxy", title: "Прокси"),
++        Entry(key: "Settings.Logout", title: "Выйти"),
++        Entry(key: "UserInfo.SendMessage", title: "Написать"),
++    ]
++
++    /// Готовые наборы. Нулевого нет: ноль — родные надписи Telegram.
++    public static let packs: [Pack] = [
++        Pack(id: 1, title: "Мурлыкающий", sample: "Мурр-чаты · Сохры (лапкой тык)", strings: [
++            "DialogList.Title": "Мурр-чаты",
++            "Contacts.Title": "Знакомые коты",
++            "Calls.TabTitle": "Мяу-звонки",
++            "Settings.Title": "Когтеточка",
++            "DialogList.SavedMessages": "Сохры (лапкой тык)",
++            "Settings.SavedMessages": "Сохры (лапкой тык)",
++            "Conversation.SavedMessages": "Сохры (лапкой тык)",
++            "ChatList.Archive": "Коробка",
++            "ChatList.UnarchiveAction": "Достать из коробки",
++            "Common.Search": "Вынюхать",
++            "Settings.Search": "Вынюхать в когтеточке",
++            "DialogList.SearchLabel": "Вынюхать котиков и сообщения",
++            "Conversation.SearchPlaceholder": "Вынюхать в этой мурр-беседе",
++            "Conversation.InputTextPlaceholder": "Тапни лапкой…",
++            "Conversation.typing": "мурлыкает",
++            "Conversation.StatusTyping": "мурлыкает",
++            "DialogList.Typing": "мурлыкает",
++            "Presence.online": "на подоконнике",
++            "LastSeen.JustNow": "грелся только что",
++            "LastSeen.Lately": "грелся недавно",
++            "LastSeen.WithinAWeek": "грелся на неделе",
++            "LastSeen.WithinAMonth": "грелся в этом месяце",
++            "Conversation.ContextMenuReply": "Мяукнуть в ответ",
++            "Conversation.ContextMenuForward": "Притащить",
++            "Conversation.ContextMenuCopy": "Слизать",
++            "Conversation.ContextMenuDelete": "Смахнуть лапкой",
++            "Conversation.ContextMenuSelect": "Пометить лапкой",
++            "Conversation.ContextMenuShare": "Поделиться вкусняшкой",
++            "Conversation.ContextMenuCopyLink": "Слизать ссылку",
++            "Conversation.ContextMenuMore": "Ещё мурр…",
++            "Conversation.Pin": "Прижать лапой",
++            "Conversation.Unpin": "Отпустить",
++            "Conversation.Mute": "Прижать ушки",
++            "Conversation.Unmute": "Развернуть ушки",
++            "Conversation.Edit": "Подправить когтем",
++            "Conversation.Info": "Досье на котика",
++            "Conversation.Search": "Вынюхать здесь",
++            "Conversation.ClearAll": "Смахнуть всё со стола",
++            "Conversation.Report": "Нажаловаться хозяину",
++            "Common.Delete": "Смахнуть",
++            "Common.Edit": "Подправить",
++            "Common.Cancel": "Мимо",
++            "Common.Done": "Мурр!",
++            "Common.Yes": "Мяу",
++            "Common.No": "Ш-ш-ш",
++            "Common.Back": "Назад в корзинку",
++            "Common.Next": "Дальше по полке",
++            "Common.Close": "Свернуться клубком",
++            "Common.OK": "Мурр",
++            "ChatList.Read": "Обнюхать",
++            "ChatList.Mute": "Прижать ушки",
++            "ChatList.Unmute": "Развернуть ушки",
++            "ChatList.DeleteChat": "Смахнуть беседу",
++            "Message.Photo": "Фоточка",
++            "Message.Video": "Видосик",
++            "Message.File": "Коробочка",
++            "Message.Audio": "Мурчалка",
++            "Message.Sticker": "Наклейка с лапкой",
++            "Message.Animation": "Дрыгалка",
++            "Message.Location": "Тёплое местечко",
++            "Message.Contact": "Знакомый кот",
++            "Message.VideoMessage": "Кружок с мордочкой",
++            "Attachment.Gallery": "Альбом с котиками",
++            "Attachment.File": "Коробочка",
++            "Attachment.Location": "Тёплое местечко",
++            "Settings.ChatBackground": "Подстилка",
++            "Settings.Appearance": "Наведение красоты",
++            "Settings.Devices": "Лежанки",
++            "Settings.Proxy": "Тайный лаз",
++            "Settings.Logout": "Уйти гулять",
++            "UserInfo.SendMessage": "Мяукнуть",
++        ]),
++        Pack(id: 2, title: "Майнкрафт", sample: "Миры · Сундук", strings: [
++            "DialogList.Title": "Миры",
++            "Contacts.Title": "Игроки",
++            "Calls.TabTitle": "Связь по редстоуну",
++            "Settings.Title": "Верстак",
++            "DialogList.SavedMessages": "Сундук",
++            "Settings.SavedMessages": "Сундук",
++            "Conversation.SavedMessages": "Сундук",
++            "ChatList.Archive": "Эндер-сундук",
++            "ChatList.UnarchiveAction": "Достать из эндер-сундука",
++            "Common.Search": "Копать",
++            "Settings.Search": "Копать в верстаке",
++            "DialogList.SearchLabel": "Копать игроков и сообщения",
++            "Conversation.SearchPlaceholder": "Копать в этом мире",
++            "Conversation.InputTextPlaceholder": "Написать в чат…",
++            "Conversation.typing": "крафтит",
++            "Conversation.StatusTyping": "крафтит",
++            "DialogList.Typing": "крафтит",
++            "Presence.online": "в игре",
++            "LastSeen.JustNow": "вышел только что",
++            "LastSeen.Lately": "был в игре недавно",
++            "LastSeen.WithinAWeek": "был в игре на неделе",
++            "LastSeen.WithinAMonth": "был в игре в этом месяце",
++            "Conversation.ContextMenuReply": "Ответить в чат",
++            "Conversation.ContextMenuForward": "Скрафтить копию",
++            "Conversation.ContextMenuCopy": "Скопировать блок",
++            "Conversation.ContextMenuDelete": "Сломать блок",
++            "Conversation.ContextMenuSelect": "Выделить область",
++            "Conversation.ContextMenuShare": "Выбросить из инвентаря",
++            "Conversation.ContextMenuCopyLink": "Скопировать портал",
++            "Conversation.ContextMenuMore": "Ещё рецепты…",
++            "Conversation.Pin": "Забить в стену",
++            "Conversation.Unpin": "Выдернуть",
++            "Conversation.Mute": "Заглушить нотный блок",
++            "Conversation.Unmute": "Включить нотный блок",
++            "Conversation.Edit": "Починить на наковальне",
++            "Conversation.Info": "Сведения о мире",
++            "Conversation.Search": "Копать здесь",
++            "Conversation.ClearAll": "Взорвать всё",
++            "Conversation.Report": "Позвать админа",
++            "Common.Delete": "Сломать",
++            "Common.Edit": "Починить",
++            "Common.Cancel": "Выйти без сохранения",
++            "Common.Done": "Готово, крафт собран",
++            "Common.Yes": "Да",
++            "Common.No": "Нет",
++            "Common.Back": "Назад в мир",
++            "Common.Next": "Дальше",
++            "Common.Close": "Закрыть сундук",
++            "Common.OK": "Ага",
++            "ChatList.Read": "Прочитать табличку",
++            "ChatList.Mute": "Заглушить мир",
++            "ChatList.Unmute": "Вернуть звук миру",
++            "ChatList.DeleteChat": "Удалить мир",
++            "Message.Photo": "Скриншот",
++            "Message.Video": "Запись игры",
++            "Message.File": "Ресурспак",
++            "Message.Audio": "Нотный блок",
++            "Message.Sticker": "Табличка",
++            "Message.Animation": "Дрыгающийся моб",
++            "Message.Location": "Координаты",
++            "Message.Contact": "Игрок",
++            "Message.VideoMessage": "Кружок из-под шлема",
++            "Attachment.Gallery": "Сундук со скриншотами",
++            "Attachment.File": "Ресурспак",
++            "Attachment.Location": "Координаты",
++            "Settings.ChatBackground": "Текстуры",
++            "Settings.Appearance": "Ресурспак",
++            "Settings.Devices": "Подключённые клиенты",
++            "Settings.Proxy": "Портал",
++            "Settings.Logout": "Выйти из игры",
++            "UserInfo.SendMessage": "Написать в чат",
++        ]),
++        Pack(id: 3, title: "T3L3GR4M", sample: "C0EД1Н3Н1Я · 13БР4НН03", strings: [
++            "DialogList.Title": "C0EД1Н3Н1Я",
++            "Contacts.Title": "К0НТ4КТЫ",
++            "Calls.TabTitle": "3В0НК1",
++            "Settings.Title": "К0НФ1Г",
++            "DialogList.SavedMessages": "13БР4НН03",
++            "Settings.SavedMessages": "13БР4НН03",
++            "Conversation.SavedMessages": "13БР4НН03",
++            "ChatList.Archive": "4РХ1В",
++            "ChatList.UnarchiveAction": "13 4РХ1В4",
++            "Common.Search": "СК4Н",
++            "Settings.Search": "СК4Н К0НФ1Г4",
++            "DialogList.SearchLabel": "СК4Н: л10д1 1 с00бщ3н1я",
++            "Conversation.SearchPlaceholder": "СК4Н К4Н4Л4",
++            "Conversation.InputTextPlaceholder": "вв0д…",
++            "Conversation.typing": "вв0д1т д4нны3",
++            "Conversation.StatusTyping": "вв0д1т д4нны3",
++            "DialogList.Typing": "вв0д1т д4нны3",
++            "Presence.online": "в с3т1",
++            "LastSeen.JustNow": "в×0д с3кунду н4з4д",
++            "LastSeen.Lately": "п0сл3дн1й в×0д н3д4вн0",
++            "LastSeen.WithinAWeek": "в×0д н4 эт01 н3д3л3",
++            "LastSeen.WithinAMonth": "в×0д в эт0м м3сяц3",
++            "Conversation.ContextMenuReply": "0ТВ3Т",
++            "Conversation.ContextMenuForward": "П3Р3Н4ПР4В1ТЬ",
++            "Conversation.ContextMenuCopy": "К0П1Я",
++            "Conversation.ContextMenuDelete": "С7ЕР3ТЬ",
++            "Conversation.ContextMenuSelect": "0ТМ3Т1ТЬ",
++            "Conversation.ContextMenuShare": "СЛ1ТЬ Н4РУЖУ",
++            "Conversation.ContextMenuCopyLink": "К0П1Я ССЫЛК1",
++            "Conversation.ContextMenuMore": "3ЩЁ…",
++            "Conversation.Pin": "П1Н",
++            "Conversation.Unpin": "СНЯТЬ П1Н",
++            "Conversation.Mute": "ГЛУШ1ТЬ",
++            "Conversation.Unmute": "СНЯТЬ ГЛУШ3Н13",
++            "Conversation.Edit": "П4ТЧ",
++            "Conversation.Info": "Д4ННЫ3 0БЪ3КТ4",
++            "Conversation.Search": "СК4Н 3Д3СЬ",
++            "Conversation.ClearAll": "W1P3 ВСЁ",
++            "Conversation.Report": "Д0Н0С",
++            "Common.Delete": "С7ЕР3ТЬ",
++            "Common.Edit": "П4ТЧ",
++            "Common.Cancel": "0ТБ01",
++            "Common.Done": "ГОТ0В0",
++            "Common.Yes": "Y3S",
++            "Common.No": "N0",
++            "Common.Back": "Н434Д",
++            "Common.Next": "Д4ЛЬШ3",
++            "Common.Close": "3АКРЫТЬ",
++            "Common.OK": "0К",
++            "ChatList.Read": "ПР0Ч1Т4Н0",
++            "ChatList.Mute": "ГЛУШ1ТЬ К4Н4Л",
++            "ChatList.Unmute": "СНЯТЬ ГЛУШ3Н13",
++            "ChatList.DeleteChat": "W1P3 К4Н4Л",
++            "Message.Photo": "1М4Г",
++            "Message.Video": "В1Д30",
++            "Message.File": "Ф41Л",
++            "Message.Audio": "4УД10",
++            "Message.Sticker": "СТ1К3Р",
++            "Message.Animation": "G1F",
++            "Message.Location": "К00РД1Н4ТЫ",
++            "Message.Contact": "К0НТ4КТ",
++            "Message.VideoMessage": "В1Д30-КРУЖ0К",
++            "Attachment.Gallery": "Г4Л3Р3Я",
++            "Attachment.File": "Ф41Л",
++            "Attachment.Location": "К00РД1Н4ТЫ",
++            "Settings.ChatBackground": "Ф0Н",
++            "Settings.Appearance": "1НТ3РФ315",
++            "Settings.Devices": "УСТР01СТВ4",
++            "Settings.Proxy": "ПР0КС1",
++            "Settings.Logout": "В1Х0Д 13 С1СТ3МЫ",
++            "UserInfo.SendMessage": "0ТПР4В1ТЬ П4К3Т",
++        ]),
++        Pack(id: 4, title: "Готический", sample: "Склепы · Тайник", strings: [
++            "DialogList.Title": "Склепы",
++            "Contacts.Title": "Родственные души",
++            "Calls.TabTitle": "Зовы",
++            "Settings.Title": "Ритуалы",
++            "DialogList.SavedMessages": "Тайник",
++            "Settings.SavedMessages": "Тайник",
++            "Conversation.SavedMessages": "Тайник",
++            "ChatList.Archive": "Усыпальница",
++            "ChatList.UnarchiveAction": "Воскресить",
++            "Common.Search": "Взывать",
++            "Settings.Search": "Взывать к ритуалам",
++            "DialogList.SearchLabel": "Взывать к душам и письменам",
++            "Conversation.SearchPlaceholder": "Взывать в этом склепе",
++            "Conversation.InputTextPlaceholder": "Изложи послание…",
++            "Conversation.typing": "выводит письмена",
++            "Conversation.StatusTyping": "выводит письмена",
++            "DialogList.Typing": "выводит письмена",
++            "Presence.online": "бодрствует",
++            "LastSeen.JustNow": "являлся только что",
++            "LastSeen.Lately": "являлся недавно",
++            "LastSeen.WithinAWeek": "являлся на этой неделе",
++            "LastSeen.WithinAMonth": "являлся в этом месяце",
++            "Conversation.ContextMenuReply": "Отозваться",
++            "Conversation.ContextMenuForward": "Разослать по ветру",
++            "Conversation.ContextMenuCopy": "Переписать",
++            "Conversation.ContextMenuDelete": "Предать забвению",
++            "Conversation.ContextMenuSelect": "Отметить печатью",
++            "Conversation.ContextMenuShare": "Огласить",
++            "Conversation.ContextMenuCopyLink": "Переписать заклятие",
++            "Conversation.ContextMenuMore": "Прочие обряды…",
++            "Conversation.Pin": "Пригвоздить",
++            "Conversation.Unpin": "Снять",
++            "Conversation.Mute": "Наложить тишину",
++            "Conversation.Unmute": "Снять тишину",
++            "Conversation.Edit": "Переписать набело",
++            "Conversation.Info": "Летопись",
++            "Conversation.Search": "Взывать здесь",
++            "Conversation.ClearAll": "Предать забвению всё",
++            "Conversation.Report": "Донести старшим",
++            "Common.Delete": "Предать забвению",
++            "Common.Edit": "Переписать",
++            "Common.Cancel": "Отступить",
++            "Common.Done": "Свершилось",
++            "Common.Yes": "Да будет так",
++            "Common.No": "Ни за что",
++            "Common.Back": "Назад во тьму",
++            "Common.Next": "Далее",
++            "Common.Close": "Затворить",
++            "Common.OK": "Быть посему",
++            "ChatList.Read": "Прочесть",
++            "ChatList.Mute": "Наложить тишину",
++            "ChatList.Unmute": "Снять тишину",
++            "ChatList.DeleteChat": "Замуровать склеп",
++            "Message.Photo": "Портрет",
++            "Message.Video": "Видение",
++            "Message.File": "Свиток",
++            "Message.Audio": "Шёпот",
++            "Message.Sticker": "Печать",
++            "Message.Animation": "Морок",
++            "Message.Location": "Место сбора",
++            "Message.Contact": "Знакомая душа",
++            "Message.VideoMessage": "Зеркальце",
++            "Attachment.Gallery": "Галерея портретов",
++            "Attachment.File": "Свиток",
++            "Attachment.Location": "Место сбора",
++            "Settings.ChatBackground": "Убранство склепа",
++            "Settings.Appearance": "Облик",
++            "Settings.Devices": "Сосуды",
++            "Settings.Proxy": "Потайной ход",
++            "Settings.Logout": "Покинуть орден",
++            "UserInfo.SendMessage": "Послать весть",
++        ]),
++        Pack(id: 5, title: "Кавай", sample: "Чатики ♡ · Мои няшки", strings: [
++            "DialogList.Title": "Чатики ♡",
++            "Contacts.Title": "Друзяшки",
++            "Calls.TabTitle": "Звоночки",
++            "Settings.Title": "Настроечки",
++            "DialogList.SavedMessages": "Мои няшки",
++            "Settings.SavedMessages": "Мои няшки",
++            "Conversation.SavedMessages": "Мои няшки",
++            "ChatList.Archive": "Коробочка",
++            "ChatList.UnarchiveAction": "Достать из коробочки",
++            "Common.Search": "Найти-найти",
++            "Settings.Search": "Найти настроечку",
++            "DialogList.SearchLabel": "Найти друзяшек и сообщеньица",
++            "Conversation.SearchPlaceholder": "Найти в чатике",
++            "Conversation.InputTextPlaceholder": "Напиши что-нибудь милое…",
++            "Conversation.typing": "тыкает в кнопочки",
++            "Conversation.StatusTyping": "тыкает в кнопочки",
++            "DialogList.Typing": "тыкает в кнопочки",
++            "Presence.online": "тут ♡",
++            "LastSeen.JustNow": "забегал только что",
++            "LastSeen.Lately": "забегал недавно",
++            "LastSeen.WithinAWeek": "забегал на неделе",
++            "LastSeen.WithinAMonth": "забегал в этом месяце",
++            "Conversation.ContextMenuReply": "Ответить ✧",
++            "Conversation.ContextMenuForward": "Поделиться ✧",
++            "Conversation.ContextMenuCopy": "Скопировать ♡",
++            "Conversation.ContextMenuDelete": "Стереть ノ(°д°ノ)",
++            "Conversation.ContextMenuSelect": "Выбрать",
++            "Conversation.ContextMenuShare": "Показать всем ✧",
++            "Conversation.ContextMenuCopyLink": "Скопировать ссылочку",
++            "Conversation.ContextMenuMore": "Ещё чуть-чуть…",
++            "Conversation.Pin": "Приколоть бантиком",
++            "Conversation.Unpin": "Снять бантик",
++            "Conversation.Mute": "Тишинка",
++            "Conversation.Unmute": "Вернуть звоночки",
++            "Conversation.Edit": "Подправить",
++            "Conversation.Info": "Всё о друзяшке",
++            "Conversation.Search": "Найти тут",
++            "Conversation.ClearAll": "Убрать всё-всё",
++            "Conversation.Report": "Пожаловаться (╥﹏╥)",
++            "Common.Delete": "Стереть",
++            "Common.Edit": "Подправить",
++            "Common.Cancel": "Не-а",
++            "Common.Done": "Готовенько!",
++            "Common.Yes": "Ага ♡",
++            "Common.No": "Неа",
++            "Common.Back": "Назадик",
++            "Common.Next": "Дальше ✧",
++            "Common.Close": "Закрыть",
++            "Common.OK": "Окей ♡",
++            "ChatList.Read": "Прочитать",
++            "ChatList.Mute": "Тишинка",
++            "ChatList.Unmute": "Вернуть звоночки",
++            "ChatList.DeleteChat": "Удалить чатик",
++            "Message.Photo": "Фоточка",
++            "Message.Video": "Видосик",
++            "Message.File": "Файлик",
++            "Message.Audio": "Голосовушка",
++            "Message.Sticker": "Стикерочек",
++            "Message.Animation": "Гифочка",
++            "Message.Location": "Местечко",
++            "Message.Contact": "Друзяшка",
++            "Message.VideoMessage": "Кружочек",
++            "Attachment.Gallery": "Галерейка",
++            "Attachment.File": "Файлик",
++            "Attachment.Location": "Местечко",
++            "Settings.ChatBackground": "Фончик",
++            "Settings.Appearance": "Красотулечки",
++            "Settings.Devices": "Устройствица",
++            "Settings.Proxy": "Проксечка",
++            "Settings.Logout": "Выйти (╥﹏╥)",
++            "UserInfo.SendMessage": "Написать ♡",
++        ]),
++        Pack(id: 6, title: "Дореволюціонный", sample: "Бесѣды · Собраніе", strings: [
++            "DialogList.Title": "Бесѣды",
++            "Contacts.Title": "Знакомства",
++            "Calls.TabTitle": "Телефонъ",
++            "Settings.Title": "Настроенія",
++            "DialogList.SavedMessages": "Собраніе",
++            "Settings.SavedMessages": "Собраніе",
++            "Conversation.SavedMessages": "Собраніе",
++            "ChatList.Archive": "Архивъ",
++            "ChatList.UnarchiveAction": "Изъ архива",
++            "Common.Search": "Сыскъ",
++            "Settings.Search": "Сыскъ по настроеніямъ",
++            "DialogList.SearchLabel": "Сыскъ особъ и посланій",
++            "Conversation.SearchPlaceholder": "Сыскъ въ сей бесѣдѣ",
++            "Conversation.InputTextPlaceholder": "Извольте писать…",
++            "Conversation.typing": "изволитъ писать",
++            "Conversation.StatusTyping": "изволитъ писать",
++            "DialogList.Typing": "изволитъ писать",
++            "Presence.online": "на связи",
++            "LastSeen.JustNow": "являлся сей мигъ",
++            "LastSeen.Lately": "являлся намедни",
++            "LastSeen.WithinAWeek": "являлся на сей недѣлѣ",
++            "LastSeen.WithinAMonth": "являлся въ семъ мѣсяцѣ",
++            "Conversation.ContextMenuReply": "Отвѣтствовать",
++            "Conversation.ContextMenuForward": "Препроводить",
++            "Conversation.ContextMenuCopy": "Списать",
++            "Conversation.ContextMenuDelete": "Истребить",
++            "Conversation.ContextMenuSelect": "Отмѣтить",
++            "Conversation.ContextMenuShare": "Огласить",
++            "Conversation.ContextMenuCopyLink": "Списать адресъ",
++            "Conversation.ContextMenuMore": "Прочее…",
++            "Conversation.Pin": "Приколоть",
++            "Conversation.Unpin": "Отколоть",
++            "Conversation.Mute": "Заставить молчать",
++            "Conversation.Unmute": "Дозволить гласъ",
++            "Conversation.Edit": "Поправить",
++            "Conversation.Info": "Свѣдѣнія",
++            "Conversation.Search": "Сыскъ здѣсь",
++            "Conversation.ClearAll": "Истребить всё",
++            "Conversation.Report": "Донести куда слѣдуетъ",
++            "Common.Delete": "Истребить",
++            "Common.Edit": "Поправить",
++            "Common.Cancel": "Отмѣнить",
++            "Common.Done": "Исполнено",
++            "Common.Yes": "Такъ точно",
++            "Common.No": "Никакъ нѣтъ",
++            "Common.Back": "Обратно",
++            "Common.Next": "Далѣе",
++            "Common.Close": "Затворить",
++            "Common.OK": "Извольте",
++            "ChatList.Read": "Прочесть",
++            "ChatList.Mute": "Заставить молчать",
++            "ChatList.Unmute": "Дозволить гласъ",
++            "ChatList.DeleteChat": "Истребить бесѣду",
++            "Message.Photo": "Фотографическая карточка",
++            "Message.Video": "Синематографъ",
++            "Message.File": "Бумага",
++            "Message.Audio": "Голосовое посланіе",
++            "Message.Sticker": "Картинка",
++            "Message.Animation": "Движущаяся картинка",
++            "Message.Location": "Мѣсто",
++            "Message.Contact": "Особа",
++            "Message.VideoMessage": "Синематографическій кругъ",
++            "Attachment.Gallery": "Альбомъ",
++            "Attachment.File": "Бумага",
++            "Attachment.Location": "Мѣсто",
++            "Settings.ChatBackground": "Обои",
++            "Settings.Appearance": "Убранство",
++            "Settings.Devices": "Аппараты",
++            "Settings.Proxy": "Тайный ходъ",
++            "Settings.Logout": "Откланяться",
++            "UserInfo.SendMessage": "Отписать",
++        ]),
++        Pack(id: 7, title: "Доксграм", sample: "Сливы · Досье", strings: [
++            "DialogList.Title": "Сливы",
++            "Contacts.Title": "База",
++            "Calls.TabTitle": "Прозвоны",
++            "Settings.Title": "Панель",
++            "DialogList.SavedMessages": "Досье",
++            "Settings.SavedMessages": "Досье",
++            "Conversation.SavedMessages": "Досье",
++            "ChatList.Archive": "Холодная папка",
++            "ChatList.UnarchiveAction": "Достать из папки",
++            "Common.Search": "Пробить",
++            "Settings.Search": "Пробить настройку",
++            "DialogList.SearchLabel": "Пробить людей и переписки",
++            "Conversation.SearchPlaceholder": "Пробить по этой переписке",
++            "Conversation.InputTextPlaceholder": "Пиши, не отсвечивай…",
++            "Conversation.typing": "пробивает",
++            "Conversation.StatusTyping": "пробивает",
++            "DialogList.Typing": "пробивает",
++            "Presence.online": "на линии",
++            "LastSeen.JustNow": "засветился только что",
++            "LastSeen.Lately": "засветился недавно",
++            "LastSeen.WithinAWeek": "засветился на неделе",
++            "LastSeen.WithinAMonth": "засветился в этом месяце",
++            "Conversation.ContextMenuReply": "Ответить",
++            "Conversation.ContextMenuForward": "Слить",
++            "Conversation.ContextMenuCopy": "Скопировать в досье",
++            "Conversation.ContextMenuDelete": "Затереть",
++            "Conversation.ContextMenuSelect": "Пометить",
++            "Conversation.ContextMenuShare": "Слить наружу",
++            "Conversation.ContextMenuCopyLink": "Скопировать наводку",
++            "Conversation.ContextMenuMore": "Ещё варианты…",
++            "Conversation.Pin": "Прикрепить к доске",
++            "Conversation.Unpin": "Снять с доски",
++            "Conversation.Mute": "Заглушить",
++            "Conversation.Unmute": "Снять глушилку",
++            "Conversation.Edit": "Подчистить",
++            "Conversation.Info": "Досье",
++            "Conversation.Search": "Пробить здесь",
++            "Conversation.ClearAll": "Затереть всё",
++            "Conversation.Report": "Сдать",
++            "Common.Delete": "Затереть",
++            "Common.Edit": "Подчистить",
++            "Common.Cancel": "Отбой",
++            "Common.Done": "Сделано",
++            "Common.Yes": "Ага",
++            "Common.No": "Не",
++            "Common.Back": "Назад",
++            "Common.Next": "Дальше",
++            "Common.Close": "Свернуть",
++            "Common.OK": "Принял",
++            "ChatList.Read": "Прочитано",
++            "ChatList.Mute": "Заглушить",
++            "ChatList.Unmute": "Снять глушилку",
++            "ChatList.DeleteChat": "Затереть переписку",
++            "Message.Photo": "Снимок",
++            "Message.Video": "Запись",
++            "Message.File": "Документ",
++            "Message.Audio": "Диктофон",
++            "Message.Sticker": "Наклейка",
++            "Message.Animation": "Гифка",
++            "Message.Location": "Точка",
++            "Message.Contact": "Контакт из базы",
++            "Message.VideoMessage": "Кружок",
++            "Attachment.Gallery": "Архив снимков",
++            "Attachment.File": "Документ",
++            "Attachment.Location": "Точка",
++            "Settings.ChatBackground": "Фон",
++            "Settings.Appearance": "Вид",
++            "Settings.Devices": "Точки входа",
++            "Settings.Proxy": "Прокладка",
++            "Settings.Logout": "Замести следы",
++            "UserInfo.SendMessage": "Написать",
++        ]),
++    ]
++
++    private static let packKey = "lunagram.wording.pack"
++    private static let overridesKey = "lunagram.wording.own"
++
++    /// Какой набор выбран: 0 — родные надписи Telegram.
++    public static var pack: Int {
++        get { return UserDefaults.standard.integer(forKey: packKey) }
++        set {
++            UserDefaults.standard.set(newValue, forKey: packKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Свои правки поверх набора: ключ надписи — свой текст.
++    public static var overrides: [String: String] {
++        get { return (UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: String]) ?? [:] }
++        set {
++            if newValue.isEmpty {
++                UserDefaults.standard.removeObject(forKey: overridesKey)
++            } else {
++                UserDefaults.standard.set(newValue, forKey: overridesKey)
++            }
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Правка одной надписи; пустая строка убирает правку.
++    public static func setOverride(key: String, text: String?) {
++        var all = overrides
++        if let text = text, !text.isEmpty {
++            all[key] = text
++        } else {
++            all.removeValue(forKey: key)
++        }
++        overrides = all
++    }
++
++    /// Убрать все свои правки, набор остаётся.
++    public static func clearOverrides() {
++        overrides = [:]
++    }
++
++    /// Что показывать сейчас: набор, а поверх него свои правки.
++    public static func effective() -> [String: String] {
++        var result: [String: String] = [:]
++        if let selected = packs.first(where: { $0.id == pack }) {
++            result = selected.strings
++        }
++        for (key, value) in overrides {
++            result[key] = value
++        }
++        return result
++    }
++
++    /// Какой текст сейчас у надписи по нашим правилам; nil — родной.
++    public static func currentText(for key: String) -> String? {
++        if let own = overrides[key] {
++            return own
++        }
++        return packs.first(where: { $0.id == pack })?.strings[key]
++    }
++}
++
+diff --git a/submodules/TelegramPresentationData/BUILD b/submodules/TelegramPresentationData/BUILD
+index 75689afa..d722a1df 100644
+--- a/submodules/TelegramPresentationData/BUILD
++++ b/submodules/TelegramPresentationData/BUILD
+@@ -22,6 +22,7 @@ swift_library(
+         "//submodules/TinyThumbnail:TinyThumbnail",
+         "//submodules/FastBlur:FastBlur",
+         "//Telegram:PresentationStrings",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift b/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift
+new file mode 100644
+index 00000000..a3ffca0c
+--- /dev/null
++++ b/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift
+@@ -0,0 +1,31 @@
++import Foundation
++import PresentationStrings
++import Lunagram
++
++// Lunagram: свои надписи поверх телеграмовских.
++//
++// Сам список живёт в LunagramWording, а сюда он попадает потому, что только
++// отсюда виден генератор строк Telegram. Таблицу ставим один раз при запуске
++// и потом при каждой смене настроек.
++
++private var lunagramWordingObserver: NSObjectProtocol?
++
++/// Ставит нынешнюю таблицу надписей и следит за её сменой.
++public func lunagramStartWording() {
++    lunagramApplyWording()
++    if lunagramWordingObserver == nil {
++        lunagramWordingObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { _ in
++            lunagramApplyWording()
++        })
++    }
++}
++
++private func lunagramApplyWording() {
++    let table = LunagramWording.effective()
++    LunagramSetWordingDict(table.isEmpty ? nil : table)
++}
++
++/// Родная надпись Telegram по ключу — мимо наших правок, для редактора.
++public func lunagramOriginalString(_ strings: PresentationStrings, key: String) -> String? {
++    return LunagramOriginalString(strings, key)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index fb652967..75aaf53b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -560,6 +560,8 @@ private enum LunagramRow: Equatable {
+     case color(Int32, String, UInt32)
+     // Ползунок закругления аватарок: справа «Квадрат», число или «Круг».
+     case cornerSlider(Int)
++    // Строка выбора с галочкой: что выбираем, название, выбрано ли.
++    case choice(Int, String, Bool)
+     case info(String)
+ }
+ 
+@@ -672,12 +674,15 @@ private final class LunagramSettingsControllerArguments {
+     let openChoice: (Int32) -> Void
+     // Плитка: чьи плитки, какая, долгое ли нажатие.
+     let tile: (Int32, String, Bool) -> Void
++    // Выбран набор надписей.
++    let chooseWording: (Int) -> Void
+     // Нужен образцам: по нему берётся своя аватарка.
+     let context: AccountContext
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, context: AccountContext) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, chooseWording: @escaping (Int) -> Void, context: AccountContext) {
+         self.openChoice = openChoice
+         self.tile = tile
++        self.chooseWording = chooseWording
+         self.context = context
+         self.toggle = toggle
+         self.pick = pick
+@@ -760,7 +765,7 @@ private enum LunagramSettingsCategory: Int32, CaseIterable {
+             // Баннер, рамка и всё про имя/статус переехали в «Изменить
+             // профиль» — как на ПК. Здесь остаётся то, что видно в переписке
+             // и в списке.
+-            return [.liveWallpaper, .dialogCards, .particles, .avatars]
++            return [.liveWallpaper, .dialogCards, .particles, .avatars, .wording]
+         }
+     }
+ }
+@@ -778,6 +783,7 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+     case dialogCards
+     case particles
+     case avatars
++    case wording
+ 
+     var title: String {
+         switch self {
+@@ -803,6 +809,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return "Частицы"
+         case .avatars:
+             return "Аватарки"
++        case .wording:
++            return "Надписи"
+         }
+     }
+ 
+@@ -832,6 +840,8 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return "face.smiling"
+         case .avatars:
+             return "person.crop.circle"
++        case .wording:
++            return "textformat.abc,textformat"
+         }
+     }
+ 
+@@ -858,8 +868,9 @@ private enum LunagramSettingsGroup: Int32, CaseIterable {
+             return [.dialogCards]
+         case .particles:
+             return [.appearance, .particlesDensity, .particlesSpeed]
+-        case .avatars:
+-            // Собирается своим построителем (lunagramAvatarsEntries).
++        case .avatars, .wording:
++            // Собираются своими построителями (lunagramAvatarsEntries,
++            // lunagramWordingEntries).
+             return []
+         }
+     }
+@@ -1200,6 +1211,7 @@ private struct LunagramMediaState: Equatable {
+     var musicDim: Int = 0
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
++    var wordingPack: Int = 0
+     var composeDensity: Int = 75
+ 
+     static func current() -> LunagramMediaState {
+@@ -1214,6 +1226,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicDim = LunagramSettings.profileMusicBgDim
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
++        state.wordingPack = LunagramWording.pack
+         state.composeDensity = LunagramSettings.composeDensity
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+@@ -2082,6 +2095,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             setEnabled(true)
+         }
+         refreshMedia()
++    }, chooseWording: { pack in
++        LunagramWording.pack = pack
++        refreshMedia()
+     }, context: context)
+ }
+ 
+@@ -2250,6 +2266,10 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+         return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: sectionId, action: {
+             arguments.toggle(toggle, !value)
+         })
++    case let .choice(id, title, selected):
++        return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: sectionId, action: {
++            arguments.chooseWording(id)
++        })
+     case let .cornerSlider(value):
+         return LunagramSliderItem(presentationData: presentationData, title: "Закругление", value: value, minValue: 0, maxValue: LunagramAvatarShape.maxCorners, step: 1, valueText: { current in
+             if current <= 0 {
+@@ -2338,6 +2358,19 @@ private func lunagramCardsEntries(values: [LunagramToggle: Bool], media: Lunagra
+     return rows.entries
+ }
+ 
++/// Экран «Надписи» — свои слова вместо телеграмовских, как чужие «языки» для
++/// Telegram, только внутри клиента и без ссылок.
++private func lunagramWordingEntries(media: LunagramMediaState) -> [LunagramSettingsEntry] {
++    var rows = LunagramRowsBuilder()
++    rows.header("Набор надписей")
++    rows.row(.choice(0, "Обычные — как в Telegram", media.wordingPack == 0))
++    for pack in LunagramWording.packs {
++        rows.row(.choice(pack.id, "\(pack.title) — \(pack.sample)", media.wordingPack == pack.id))
++    }
++    rows.info("Набор меняет надписи внутри Lunagram: вкладки, меню сообщения, кнопки, «печатает…», «был недавно». Это не язык Telegram: ставить по ссылке ничего не надо и на собеседников это не влияет — они видят свои обычные надписи.\n\nЧасть надписей встанет сразу, остальные — после перезапуска Lunagram.")
++    return rows.entries
++}
++
+ /// Экран «Аватарки» — как на ПК: образец, ползунок закругления (с подписью
+ /// «Квадрат» и «Круг» по краям), «Единое закругление». Бокового меню с ПК
+ /// здесь нет: у айфона его нет, вместо него вкладки внизу.
+@@ -2494,6 +2527,8 @@ private func lunagramGroupController(context: AccountContext, group: LunagramSet
+             entries = lunagramParticlesEntries(values: currentValues, media: media)
+         case .avatars:
+             entries = lunagramAvatarsEntries(values: currentValues, media: media)
++        case .wording:
++            entries = lunagramWordingEntries(media: media)
+         default:
+             for section in group.sections {
+                 entries.append(contentsOf: lunagramSectionEntries(section: section, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles))
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index 9f992e88..80e40783 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -329,6 +329,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         // Lunagram: следим за записью экрана для режима стримера.
+         LunagramStreamerMode.shared.start()
+ 
++        // Lunagram: свои надписи — ставим таблицу до того, как соберётся первый экран.
++        lunagramStartWording()
++
+         let _ = voipTokenPromise.get().start(next: { token in
+             self.voipDeviceToken.set(.single(token))
+         })
