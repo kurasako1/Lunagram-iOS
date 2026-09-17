@@ -1,0 +1,62 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+index c4f5602c..6ef2117d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+@@ -160,14 +160,23 @@ func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, completion: @es
+             if case let .known(text) = ownAbout, let text = text {
+                 backup.about = text
+             }
+-            // Своё лицо кладём в свою папку: вернуть его иначе будет нечем.
++            // Сохраняем сразу, не дожидаясь своей аватарки: она может и не
++            // скачаться, а имя с описанием тогда вернуть было бы нечем.
++            lunagramSaveBackup(backup)
++
++            // Своё лицо кладём в свою папку следом: вернуть его иначе неоткуда.
+             let _ = (lunagramAvatarImage(context: context, peer: ownPeer)
+             |> deliverOnMainQueue).startStandalone(next: { image in
+-                var backup = backup
+-                if let image = image, let data = image.jpegData(compressionQuality: 0.85) {
+-                    backup.avatarFile = LunagramSettings.storeOwnAvatar(data)
++                guard let image = image, let data = image.jpegData(compressionQuality: 0.85) else {
++                    return
++                }
++                // Пока картинка ехала, копию могли и снять — тогда запаса уже
++                // нет, и дописывать в него нечего.
++                guard var saved = lunagramLoadBackup(), saved.avatarFile == nil else {
++                    return
+                 }
+-                lunagramSaveBackup(backup)
++                saved.avatarFile = LunagramSettings.storeOwnAvatar(data)
++                lunagramSaveBackup(saved)
+             })
+         }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+index 6ad3ab48..a1b7dcce 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+@@ -327,9 +327,12 @@ final class GiftsListView: UIView {
+                     // отдаём только настоящие подарки — придуманных номеров
+                     // он не знает.
+                     LunagramFakeGifts.reorder(starsProducts)
++                    // Свои копии из счёта убираем совсем: закреплённых у
++                    // Telegram ограниченное число, и занимать его выдумками
++                    // нельзя — иначе настоящие закреплённые сорвало бы.
+                     var pinnedReferences: [StarGiftReference] = []
+-                    for gift in starsProducts.prefix(self.maxPinnedCount) {
+-                        if gift.pinnedToTop, let reference = gift.reference, !LunagramFakeGifts.isFake(reference: reference) {
++                    for gift in starsProducts.filter({ !LunagramFakeGifts.isFake($0) }).prefix(self.maxPinnedCount) {
++                        if gift.pinnedToTop, let reference = gift.reference {
+                             pinnedReferences.append(reference)
+                         }
+                     }
+@@ -595,7 +598,8 @@ final class GiftsListView: UIView {
+                                     self.updateScrolling(transition: .easeInOut(duration: 0.25))
+                                 } else if self.isReordering {
+                                     if case .unique = product.gift, !product.pinnedToTop, let reference = product.reference, let items = self.starsProducts {
+-                                        if self.pinnedReferences.count >= self.maxPinnedCount {
++                                        // Свои копии в счёт не идут: сервер о них не знает.
++                                        if self.pinnedReferences.filter({ !LunagramFakeGifts.isFake(reference: $0) }).count >= self.maxPinnedCount {
+                                             self.parentController?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: presentationData.strings.PeerInfo_Gifts_ToastPinLimit_Text(Int32(self.maxPinnedCount)), timeout: nil, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                                             return
+                                         }
