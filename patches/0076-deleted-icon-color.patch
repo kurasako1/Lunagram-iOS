@@ -1,0 +1,80 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 14acf19e..e89161c0 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -103,6 +103,7 @@ public final class LunagramSettings {
+         static let composeColor = "lunagram.compose.color"
+         static let composeDensity = "lunagram.compose.density"
+         static let composeAuto = "lunagram.compose.auto"
++        static let deletedIconColor = "lunagram.other.deletedIconColor"
+         static let hiddenPeers = "lunagram.hide.peers"
+         static let hiddenFromEveryone = "lunagram.hide.everyone"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+@@ -314,6 +315,21 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Цвет корзинки у удалённых сообщений, 0xRRGGBB. По умолчанию красный:
++    /// цветом времени корзинка сливалась с самим сообщением.
++    public static var deletedIconColor: UInt32 {
++        get {
++            guard defaults.object(forKey: Key.deletedIconColor) != nil else {
++                return 0xFF3B30
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.deletedIconColor)) & 0xFFFFFF
++        }
++        set {
++            defaults.set(Int(newValue & 0xFFFFFF), forKey: Key.deletedIconColor)
++            changed()
++        }
++    }
++
+     /// Кого я скрыл от себя: аватарка, описание, время в сети и номер для них
+     /// закрыты по-настоящему, через настройки Telegram. Список держим у себя —
+     /// по нему рисуется ползунок в профиле и по нему же возвращаем всё назад,
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+index 6d73e17f..ea749ef9 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+@@ -545,7 +545,7 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
+             let lunagramDeleted = updatedDateText.hasPrefix(lunagramDeletedDateMarker)
+             if lunagramDeleted {
+                 updatedDateText = updatedDateText.replacingOccurrences(of: lunagramDeletedDateMarker, with: "")
+-                impressionImage = lunagramDeletedIcon(color: dateColor, baseFontSize: arguments.presentationData.fontSize.baseDisplaySize)
++                impressionImage = lunagramDeletedIcon(baseFontSize: arguments.presentationData.fontSize.baseDisplaySize)
+             }
+             if arguments.edited {
+                 if let useEditedTimestamp = arguments.context.getAppConfigValue("message_primary_edited_date") as? Bool, useEditedTimestamp {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+index efa1bc63..b67ee98c 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+@@ -1,5 +1,7 @@
+ import Foundation
+ import UIKit
++import Display
++import Lunagram
+ 
+ // Lunagram: значок удалённого — корзинка, как в AyuGram.
+ //
+@@ -8,14 +10,16 @@ import UIKit
+ // она почти такая же — залитый бак с крышкой, — а разрешение на неё даёт
+ // сама Apple всем приложениям.
+ //
+-// Цвет — цвет времени рядом, размер — от шрифта времени. Готовые картинки
+-// запоминаются: сообщений с корзинкой на экране может быть много, а цветов
+-// и размеров — пара штук.
++// Цвет — свой, из настроек (по умолчанию красный): цветом времени корзинка
++// сливалась с сообщением и была незаметна. Размер — от шрифта времени.
++// Готовые картинки запоминаются: сообщений с корзинкой на экране может быть
++// много, а цветов и размеров — пара штук.
+ 
+ private let lunagramDeletedIconLock = NSLock()
+ private var lunagramDeletedIconCache: [String: UIImage] = [:]
+ 
+-func lunagramDeletedIcon(color: UIColor, baseFontSize: CGFloat) -> UIImage? {
++func lunagramDeletedIcon(baseFontSize: CGFloat) -> UIImage? {
++    let color = UIColor(rgb: LunagramSettings.deletedIconColor)
+     // Шрифт времени — 11/17 от основного; корзинка чуть мельче букв.
+     let pointSize = floor(baseFontSize * 10.0 / 17.0)
+     var red: CGFloat = 0.0
