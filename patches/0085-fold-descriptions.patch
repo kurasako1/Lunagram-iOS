@@ -1,0 +1,112 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 0e3e3109..df610b93 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -109,6 +109,7 @@ public final class LunagramSettings {
+         static let hiddenPeers = "lunagram.hide.peers"
+         static let hiddenFromEveryone = "lunagram.hide.everyone"
+         static let settingIcons = "lunagram.settingIcons.enabled"
++        static let showDescriptions = "lunagram.settings.showDescriptions"
+         static let settingIconsMap = "lunagram.settingIcons.map"
+         static let fakeGifts = "lunagram.gifts.fake"
+         static let ownProfileBackup = "lunagram.copy.backup"
+@@ -376,6 +377,17 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Показывать ли описания под строками в своих настройках. Сложены
++    /// сразу: с ними экран вытягивается в несколько ростов, а читают их
++    /// один раз. Включишь — вернутся все до единого.
++    public static var showDescriptions: Bool {
++        get { return defaults.bool(forKey: Key.showDescriptions) }
++        set {
++            defaults.set(newValue, forKey: Key.showDescriptions)
++            changed()
++        }
++    }
++
+     /// «Свои значки в настройках» — общий выключатель, как на ПК. Включён
+     /// сразу: пока своих картинок нет, строки выглядят как обычно, а
+     /// долгое нажатие по строке со значком открывает «Свой значок».
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index b9ba206e..4f378524 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -57,6 +57,7 @@ private enum LunagramToggle: Int32 {
+     case avatarSingleCorner
+     case composeAuto
+     case settingIcons
++    case showDescriptions
+ 
+     var value: Bool {
+         switch self {
+@@ -134,6 +135,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.composeAuto
+         case .settingIcons:
+             return LunagramSettings.settingIcons
++        case .showDescriptions:
++            return LunagramSettings.showDescriptions
+         }
+     }
+ 
+@@ -213,6 +216,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.composeAuto = value
+         case .settingIcons:
+             LunagramSettings.settingIcons = value
++        case .showDescriptions:
++            LunagramSettings.showDescriptions = value
+         }
+     }
+ 
+@@ -292,6 +297,8 @@ private enum LunagramToggle: Int32 {
+             return "Плёнка подстраивается сама"
+         case .settingIcons:
+             return "Свои значки в настройках"
++        case .showDescriptions:
++            return "Показывать описания"
+         }
+     }
+ 
+@@ -348,7 +355,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions:
+             return nil
+         }
+     }
+@@ -484,6 +491,8 @@ extension LunagramToggle {
+             return "wand.and.stars"
+         case .settingIcons:
+             return "swatchpalette,paintpalette"
++        case .showDescriptions:
++            return "text.alignleft"
+         }
+     }
+ }
+@@ -608,8 +617,13 @@ private struct LunagramRowsBuilder {
+         self.append(row)
+     }
+ 
++    /// Подпись под строкой. Сложены сразу — экран иначе вытягивается в
++    /// несколько ростов; разворачивает их «Показывать описания». Блок всё
++    /// равно закрываем: разбивка на карточки от этого не должна меняться.
+     mutating func info(_ text: String) {
+-        self.row(.info(text))
++        if LunagramSettings.showDescriptions {
++            self.row(.info(text))
++        }
+         self.closed = true
+     }
+ 
+@@ -2436,6 +2450,9 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     }
+     var rows = LunagramRowsBuilder()
+ 
++    // Описания под строками: сложены сразу, разворачиваются отсюда.
++    rows.row(.toggle(.showDescriptions, value(.showDescriptions), "Показывать описания", "text.alignleft"))
++
+     rows.header("Режим призрака")
+     rows.row(.ghost(ghostExpanded, lunagramGhostToggles.map { value($0) }))
+     rows.row(.read(expandedToggles.contains(LunagramToggle.markReadAfterSend.rawValue), lunagramMarkReadToggles.map { value($0) }))
