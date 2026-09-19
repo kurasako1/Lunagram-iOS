@@ -1,0 +1,205 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index df610b93..a3ff6065 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -377,6 +377,19 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Снять запрет копирования в закрытых каналах и группах. Сама
++    /// настройка лежит в LunagramRestrictionSettings: её читает сетевая
++    /// часть Telegram. Здесь только пересылка туда и рассылка о смене.
++    public static var openRestricted: Bool {
++        get {
++            return LunagramRestrictionSettings.openRestricted
++        }
++        set {
++            LunagramRestrictionSettings.openRestricted = newValue
++            changed()
++        }
++    }
++
+     /// Показывать ли описания под строками в своих настройках. Сложены
+     /// сразу: с ними экран вытягивается в несколько ростов, а читают их
+     /// один раз. Включишь — вернутся все до единого.
+diff --git a/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift b/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift
+new file mode 100644
+index 00000000..c5d99bd7
+--- /dev/null
++++ b/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift
+@@ -0,0 +1,24 @@
++import Foundation
++
++/// Запрет копирования в каналах и группах — снимать ли его у себя.
++///
++/// Живёт рядом с Ghost по той же причине: его читает сетевая часть Telegram
++/// — там, где она отвечает на вопрос «закрыт ли этот канал от копирования».
++public enum LunagramRestrictionSettings {
++    private static let defaults = UserDefaults.standard
++
++    private enum Key {
++        static let openRestricted = "lunagram.restriction.open"
++    }
++
++    /// Не считать канал закрытым от копирования. Тогда возвращаются
++    /// «Копировать», выделение текста и сохранение картинок и видео.
++    public static var openRestricted: Bool {
++        get {
++            return defaults.bool(forKey: Key.openRestricted)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.openRestricted)
++        }
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/Utils/MessageUtils.swift b/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
+index e80c750e..01206f7b 100644
+--- a/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
++++ b/submodules/TelegramCore/Sources/Utils/MessageUtils.swift
+@@ -1,6 +1,7 @@
+ import Foundation
+ import Postbox
+ import TelegramApi
++import LunagramGhost
+ 
+ public extension MessageFlags {
+     var isSending: Bool {
+@@ -391,6 +392,16 @@ public extension Message {
+     }
+     
+     func isCopyProtected() -> Bool {
++        // Lunagram: со снятым запретом сообщение для нас обычное.
++        if LunagramRestrictionSettings.openRestricted {
++            return false
++        }
++        return self.isTrulyCopyProtected()
++    }
++
++    /// Запрет как он есть, без нашей поблажки. Нужен там, где поблажка не
++    /// помогает: пересылку запрещает сам сервер, а не только кнопка.
++    func isTrulyCopyProtected() -> Bool {
+         if self.flags.contains(.CopyProtected) {
+             return true
+         } else if let group = self.peers[self.id.peerId] as? TelegramGroup, group.flags.contains(.copyProtectionEnabled) {
+diff --git a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+index 26cebdb4..10cc4a2b 100644
+--- a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
++++ b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import Postbox
++import LunagramGhost
+ 
+ public let anonymousSavedMessagesId: Int64 = 2666000
+ 
+@@ -252,6 +253,11 @@ public extension Peer {
+     }
+     
+     var isCopyProtectionEnabled: Bool {
++        // Lunagram: если запрет снят, канал для нас обычный — отсюда
++        // расходится всё остальное: «Копировать», выделение, сохранение.
++        if LunagramRestrictionSettings.openRestricted {
++            return false
++        }
+         switch self {
+         case let group as TelegramGroup:
+             return group.flags.contains(.copyProtectionEnabled)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 4f378524..c2ce6534 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -58,6 +58,7 @@ private enum LunagramToggle: Int32 {
+     case composeAuto
+     case settingIcons
+     case showDescriptions
++    case openRestricted
+ 
+     var value: Bool {
+         switch self {
+@@ -137,6 +138,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.settingIcons
+         case .showDescriptions:
+             return LunagramSettings.showDescriptions
++        case .openRestricted:
++            return LunagramSettings.openRestricted
+         }
+     }
+ 
+@@ -218,6 +221,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.settingIcons = value
+         case .showDescriptions:
+             LunagramSettings.showDescriptions = value
++        case .openRestricted:
++            LunagramSettings.openRestricted = value
+         }
+     }
+ 
+@@ -299,6 +304,8 @@ private enum LunagramToggle: Int32 {
+             return "Свои значки в настройках"
+         case .showDescriptions:
+             return "Показывать описания"
++        case .openRestricted:
++            return "Копирование из закрытых каналов"
+         }
+     }
+ 
+@@ -355,7 +362,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted:
+             return nil
+         }
+     }
+@@ -493,6 +500,8 @@ extension LunagramToggle {
+             return "swatchpalette,paintpalette"
+         case .showDescriptions:
+             return "text.alignleft"
++        case .openRestricted:
++            return "lock.open"
+         }
+     }
+ }
+@@ -2464,6 +2473,8 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Отправляет сообщения по умолчанию без звука.")
+     rows.row(.toggle(.suggestGhostForStories, value(.suggestGhostForStories), "Предлагать призрака для сторис", nil))
+     rows.info("Показывает предупреждение перед открытием сторис, предлагая включить режим призрака.")
++    rows.row(.toggle(.openRestricted, value(.openRestricted), "Копирование из закрытых каналов", "lock.open"))
++    rows.info("В каналах и группах, где копировать запрещено, вернутся «Копировать», выделение текста и сохранение картинок и видео в галерею.\n\nПересылка пока не возвращается: её не пускает сам сервер, а не кнопка. Чтобы переслать, сообщение надо собрать заново — картинку скачать и отправить как свою. Сделаю отдельно.")
+     rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", nil))
+     rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", nil))
+     rows.split()
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index d0a3bc22..f059a6bd 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -2768,7 +2768,9 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                             }
+                         }
+                         if !message.containsSecretMedia && !isAction && !isShareProtected {
+-                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() {
++                            // Lunagram: пересылку запрещает сам сервер, одной
++                            // кнопкой её не вернуть — проверяем запрет как есть.
++                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isTrulyCopyProtected() {
+                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                     optionsMap[id]!.insert(.forward)
+                                 }
+@@ -2784,7 +2786,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                         }
+                     } else if let group = peer as? TelegramGroup {
+                         if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia {
+-                            if !isAction && !message.isCopyProtected() && !isShareProtected {
++                            if !isAction && !message.isTrulyCopyProtected() && !isShareProtected {
+                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                     optionsMap[id]!.insert(.forward)
+                                 }
+@@ -2803,7 +2805,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                             optionsMap[id]!.insert(.report)
+                         }
+                     } else if let user = peer as? TelegramUser {
+-                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !isShareProtected {
++                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isTrulyCopyProtected() && !isShareProtected {
+                             if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                 optionsMap[id]!.insert(.forward)
+                             }
