@@ -1,0 +1,285 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index f42dfab5..ad1e722a 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -118,6 +118,8 @@ public final class LunagramSettings {
+         static let typingDuration = "lunagram.typing.duration"
+         static let typingDistance = "lunagram.typing.distance"
+         static let typingBlurRadius = "lunagram.typing.blurRadius"
++        static let typingThanos = "lunagram.typing.typingThanos"
++        static let typingCursor = "lunagram.typing.typingCursor"
+         static let chatStickers = "lunagram.chatStickers.enabled"
+         static let chatStickersDepth = "lunagram.chatStickers.depth"
+         static let glassSquare = "lunagram.glass.square"
+@@ -761,6 +763,18 @@ public final class LunagramSettings {
+         get { return flag(Key.typingBlur, default: true) }
+         set { setFlag(newValue, Key.typingBlur) }
+     }
++    /// Распад при удалении.
++    public static var typingThanos: Bool {
++        get { return flag(Key.typingThanos, default: false) }
++        set { setFlag(newValue, Key.typingThanos) }
++    }
++
++    /// След за курсором.
++    public static var typingCursor: Bool {
++        get { return flag(Key.typingCursor, default: false) }
++        set { setFlag(newValue, Key.typingCursor) }
++    }
++
+     /// Сколько длится полёт буквы, миллисекунды.
+     public static var typingDuration: Int {
+         get { return clamped(Key.typingDuration, 50, 1_000, 260) }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
+index 1b1b24a0..51ee810c 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
+@@ -1263,6 +1263,9 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+         
+         self.selectionChangedForEditedText = false
+         
++        // Lunagram: след за курсором.
++        self.lunagramTyping.selectionChanged(self)
++        
+         DispatchQueue.main.async { [weak self] in
+             guard let self else {
+                 return
+@@ -1277,6 +1280,12 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+     }
+     
+     @objc public func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
++        // Lunagram: распад буквы при удалении. Снимок делаем здесь, пока
++        // буква ещё на месте: после удаления рисовать было бы нечего.
++        if text.isEmpty {
++            self.lunagramTyping.willDelete(self, range: range)
++        }
++
+         guard let customDelegate = self.customDelegate else {
+             return true
+         }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
+index 3d911b05..62558272 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
+@@ -19,10 +19,17 @@ import Lunagram
+ // у него завёлся спрятанный кусок.
+ //
+ // Свои эмодзи не трогаем: их рисует не движок текста, а отдельные слои
+-// поверх, и спрятать их временной приметой нечем.
++// поверх, и спрятать их нечем.
++//
++// Тут же ещё два подарка того же плагина: распад буквы при удалении и след
++// за курсором. Распад — не настоящие частицы, а нарезка снимка буквы на
++// клетки, которые разлетаются и тают: выглядит так же, а стоит дёшево.
++// След — отдельная полоска, догоняющая курсор; сам курсор системный, его мы
++// не трогаем, поэтому выделение и ручки остаются как были.
+ 
+ final class LunagramTypingAnimation {
+     private var lastText: String = ""
++    private var lastCaret: CGRect?
+     private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+ 
+     func textChanged(_ textView: UITextView) {
+@@ -148,6 +155,122 @@ final class LunagramTypingAnimation {
+         })
+     }
+ 
++
++    // MARK: Распад при удалении
++
++    /// Снимок буквы, которую вот-вот сотрут. Берём до удаления: после него
++    /// рисовать уже нечего.
++    func willDelete(_ textView: UITextView, range: NSRange) {
++        guard LunagramSettings.typingThanos, range.length > 0, range.length <= 4 else {
++            return
++        }
++        guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
++              let end = textView.position(from: start, offset: range.length),
++              let textRange = textView.textRange(from: start, to: end) else {
++            return
++        }
++        var rect = textView.firstRect(for: textRange)
++        guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width > 0.5, rect.height > 0.5, rect.width < 240.0 else {
++            return
++        }
++        rect = rect.insetBy(dx: -1.0, dy: -1.0)
++        let image = UIGraphicsImageRenderer(bounds: rect).image { context in
++            context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
++            textView.layer.render(in: context.cgContext)
++        }
++        self.scatter(image, at: rect, in: textView)
++    }
++
++    /// Рассыпаем снимок на клетки и разгоняем их в стороны. Так выглядит
++    /// распад: настоящих частиц не нужно, хватает нарезки на квадратики.
++    private func scatter(_ image: UIImage, at rect: CGRect, in textView: UITextView) {
++        guard let cgImage = image.cgImage else {
++            return
++        }
++        let columns = 6
++        let rows = 8
++        let scale = image.scale
++        let tileWidth = CGFloat(cgImage.width) / CGFloat(columns)
++        let tileHeight = CGFloat(cgImage.height) / CGFloat(rows)
++        let pieceWidth = rect.width / CGFloat(columns)
++        let pieceHeight = rect.height / CGFloat(rows)
++        let duration = max(0.15, Double(LunagramSettings.typingDuration) / 1000.0 * 2.0)
++
++        for column in 0 ..< columns {
++            for row in 0 ..< rows {
++                let crop = CGRect(
++                    x: CGFloat(column) * tileWidth,
++                    y: CGFloat(row) * tileHeight,
++                    width: tileWidth,
++                    height: tileHeight
++                )
++                guard let piece = cgImage.cropping(to: crop) else {
++                    continue
++                }
++                let view = UIImageView(image: UIImage(cgImage: piece, scale: scale, orientation: .up))
++                view.frame = CGRect(
++                    x: rect.minX + CGFloat(column) * pieceWidth,
++                    y: rect.minY + CGFloat(row) * pieceHeight,
++                    width: pieceWidth,
++                    height: pieceHeight
++                )
++                view.isUserInteractionEnabled = false
++                textView.addSubview(view)
++
++                // Чем правее клетка, тем дальше её уносит: как будто сдувает.
++                let shift = CGFloat(column + 1) / CGFloat(columns)
++                let toX = CGFloat.random(in: 6.0 ... 26.0) * shift
++                let toY = CGFloat.random(in: -14.0 ... 6.0)
++                let delay = Double(column) / Double(columns) * duration * 0.4
++                UIView.animate(withDuration: duration, delay: delay, options: [.curveEaseOut], animations: {
++                    view.transform = CGAffineTransform(translationX: toX, y: toY).scaledBy(x: 0.3, y: 0.3)
++                    view.alpha = 0.0
++                }, completion: { _ in
++                    view.removeFromSuperview()
++                })
++            }
++        }
++    }
++
++    // MARK: Плавный курсор
++
++    /// След за курсором: при перескоке между местами тянется полоска,
++    /// которая догоняет и тает. Сам курсор системный — его мы не трогаем,
++    /// поэтому выделение и ручки остаются как были.
++    func selectionChanged(_ textView: UITextView) {
++        guard LunagramSettings.typingCursor, let selection = textView.selectedTextRange, selection.isEmpty else {
++            self.lastCaret = nil
++            return
++        }
++        let caret = textView.caretRect(for: selection.start)
++        guard caret.origin.x.isFinite, caret.origin.y.isFinite, caret.height > 0.5 else {
++            self.lastCaret = nil
++            return
++        }
++        defer { self.lastCaret = caret }
++        guard let previous = self.lastCaret, previous != caret else {
++            return
++        }
++        // Крошечные шажки не размазываем: при обычном наборе это мельтешило бы.
++        let distance = hypot(caret.midX - previous.midX, caret.midY - previous.midY)
++        guard distance > 2.0, distance < 400.0 else {
++            return
++        }
++
++        let trail = UIView(frame: previous)
++        trail.backgroundColor = textView.tintColor.withAlphaComponent(0.55)
++        trail.layer.cornerRadius = min(2.0, previous.width / 2.0)
++        trail.isUserInteractionEnabled = false
++        textView.addSubview(trail)
++
++        UIView.animate(withDuration: 0.16, delay: 0.0, options: [.curveEaseOut], animations: {
++            trail.frame = caret
++            trail.alpha = 0.0
++        }, completion: { _ in
++            trail.removeFromSuperview()
++        })
++    }
++
+     private static func blurred(_ image: UIImage, radius: CGFloat) -> UIImage? {
+         guard radius > 0.0, let cgImage = image.cgImage else {
+             return nil
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d1c0e923..22537007 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -79,6 +79,8 @@ private enum LunagramToggle: Int32 {
+     case typingScale
+     case typingRotate
+     case typingBlur
++    case typingThanos
++    case typingCursor
+ 
+     var value: Bool {
+         switch self {
+@@ -200,6 +202,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.typingRotate
+         case .typingBlur:
+             return LunagramSettings.typingBlur
++        case .typingThanos:
++            return LunagramSettings.typingThanos
++        case .typingCursor:
++            return LunagramSettings.typingCursor
+         }
+     }
+ 
+@@ -323,6 +329,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.typingRotate = value
+         case .typingBlur:
+             LunagramSettings.typingBlur = value
++        case .typingThanos:
++            LunagramSettings.typingThanos = value
++        case .typingCursor:
++            LunagramSettings.typingCursor = value
+         }
+     }
+ 
+@@ -446,6 +456,10 @@ private enum LunagramToggle: Int32 {
+             return "С поворотом"
+         case .typingBlur:
+             return "Из размытия"
++        case .typingThanos:
++            return "Распад при удалении"
++        case .typingCursor:
++            return "След за курсором"
+         }
+     }
+ 
+@@ -502,7 +516,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor:
+             return nil
+         }
+     }
+@@ -682,6 +696,10 @@ extension LunagramToggle {
+             return "rotate.right"
+         case .typingBlur:
+             return "drop"
++        case .typingThanos:
++            return "wind"
++        case .typingCursor:
++            return "cursorarrow.motionlines"
+         }
+     }
+ }
+@@ -2709,10 +2727,12 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.toggle(.typingScale, value(.typingScale), "Подрастают", "arrow.up.left.and.arrow.down.right"))
+     rows.row(.toggle(.typingRotate, value(.typingRotate), "С поворотом", "rotate.right"))
+     rows.row(.toggle(.typingBlur, value(.typingBlur), "Из размытия", "drop"))
++    rows.row(.toggle(.typingThanos, value(.typingThanos), "Распад при удалении", "wind"))
++    rows.row(.toggle(.typingCursor, value(.typingCursor), "След за курсором", "cursorarrow.motionlines"))
+     rows.row(.slider(97, "Сколько длится полёт", media.typingDuration, 50, 1000, 10))
+     rows.row(.slider(98, "Высота, откуда летит", media.typingDistance, 0, 60, 2))
+     rows.row(.slider(99, "Сила размытия", media.typingBlurRadius, 1, 20, 1))
+-    rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.")
++    rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+     rows.header("Кавайный стиль")
+     rows.row(.toggle(.yeStyle, value(.yeStyle), "Кавайный стиль", "heart.text.square"))
