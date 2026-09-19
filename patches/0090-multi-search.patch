@@ -1,0 +1,211 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index a1a00cdf..72b1c74a 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -720,6 +720,18 @@ public final class LunagramSettings {
+     }
+ 
+     /// Переводит текст исходящего сообщения в выбранный стиль.
++    /// Мультипоиск: считать ли «|» разделителем. Сама настройка лежит в
++    /// LunagramSearchSettings — её читает сетевая часть Telegram.
++    public static var multiSearch: Bool {
++        get {
++            return LunagramSearchSettings.multiSearch
++        }
++        set {
++            LunagramSearchSettings.multiSearch = newValue
++            changed()
++        }
++    }
++
+     // MARK: Кавайный стиль
+ 
+     /// Выключатели кавайного стиля. Значения по умолчанию — как у плагина,
+diff --git a/submodules/LunagramGhost/Sources/LunagramSearchSettings.swift b/submodules/LunagramGhost/Sources/LunagramSearchSettings.swift
+new file mode 100644
+index 00000000..dc022587
+--- /dev/null
++++ b/submodules/LunagramGhost/Sources/LunagramSearchSettings.swift
+@@ -0,0 +1,23 @@
++import Foundation
++
++/// Поиск сразу по нескольким словам.
++///
++/// Живёт рядом с Ghost по той же причине: его читает сетевая часть Telegram
++/// — в том самом месте, куда приходит любой поиск по сообщениям.
++public enum LunagramSearchSettings {
++    private static let defaults = UserDefaults.standard
++
++    private enum Key {
++        static let multiSearch = "lunagram.search.multi"
++    }
++
++    /// Считать ли «|» разделителем: «кот | пёс» ищет и то и другое.
++    public static var multiSearch: Bool {
++        get {
++            return defaults.bool(forKey: Key.multiSearch)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.multiSearch)
++        }
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Messages/LunagramMultiSearch.swift b/submodules/TelegramCore/Sources/TelegramEngine/Messages/LunagramMultiSearch.swift
+new file mode 100644
+index 00000000..68e101a0
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Messages/LunagramMultiSearch.swift
+@@ -0,0 +1,71 @@
++import Foundation
++import Postbox
++import SwiftSignalKit
++import LunagramGhost
++
++// Lunagram: поиск сразу по нескольким словам — из плагина Search+.
++//
++// Пишешь «кот | пёс» — и находится то, где есть кот, и то, где есть пёс.
++// Telegram так не умеет: его поиск принимает одно слово за раз. Поэтому
++// запрос разбирается на части, каждая ищется сама по себе, а найденное
++// складывается в один список — свежее сверху, повторы выброшены.
++//
++// Стоит это прямо в том месте, куда приходит любой поиск по сообщениям:
++// и в переписке, и в общем поиске, и в избранном. Без «|» в запросе всё
++// идёт как раньше, ни одна проверка не добавляется.
++//
++// Одно ограничение честное: «показать ещё» у такого поиска нет. Telegram
++// отдаёт метку продолжения на один запрос, а у нас их несколько, и общей
++// метки не существует. Поэтому каждое слово отдаёт свою первую сотню, и на
++// этом список закрывается.
++
++/// Части запроса, если это мультипоиск. Пусто — искать как обычно.
++func lunagramSearchParts(_ query: String) -> [String]? {
++    guard LunagramSearchSettings.multiSearch, query.contains("|") else {
++        return nil
++    }
++    let parts = query
++        .split(separator: "|")
++        .map { $0.trimmingCharacters(in: .whitespaces) }
++        .filter { !$0.isEmpty }
++    return parts.count > 1 ? parts : nil
++}
++
++/// Ищем каждое слово отдельно и складываем найденное в один список.
++func lunagramMultiSearch(
++    account: Account,
++    location: SearchMessagesLocation,
++    parts: [String],
++    centerId: MessageId?,
++    limit: Int32
++) -> Signal<(SearchMessagesResult, SearchMessagesState), NoError> {
++    let searches = parts.map { part in
++        return _internal_searchMessages(account: account, location: location, query: part, state: nil, centerId: centerId, limit: limit)
++    }
++    return combineLatest(searches)
++    |> map { results -> (SearchMessagesResult, SearchMessagesState) in
++        var messages: [Message] = []
++        var seen = Set<MessageId>()
++        var readStates: [PeerId: CombinedPeerReadState] = [:]
++        var threadInfo: [MessageId: MessageHistoryThreadData] = [:]
++        for (result, _) in results {
++            for message in result.messages where !seen.contains(message.id) {
++                seen.insert(message.id)
++                messages.append(message)
++            }
++            readStates.merge(result.readStates, uniquingKeysWith: { current, _ in current })
++            threadInfo.merge(result.threadInfo, uniquingKeysWith: { current, _ in current })
++        }
++        messages.sort(by: { $0.index > $1.index })
++        // Сколько нашли, столько и пишем: складывать чужие счётчики нельзя,
++        // одно и то же сообщение могло попасться по нескольким словам.
++        let merged = SearchMessagesResult(
++            messages: messages,
++            readStates: readStates,
++            threadInfo: threadInfo,
++            totalCount: Int32(messages.count),
++            completed: true
++        )
++        return (merged, results[0].1)
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Messages/TelegramEngineMessages.swift b/submodules/TelegramCore/Sources/TelegramEngine/Messages/TelegramEngineMessages.swift
+index 2ff38f33..f1426b88 100644
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Messages/TelegramEngineMessages.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Messages/TelegramEngineMessages.swift
+@@ -130,6 +130,11 @@ public extension TelegramEngine {
+         }
+ 
+         public func searchMessages(location: SearchMessagesLocation, query: String, state: SearchMessagesState?, centerId: MessageId? = nil, limit: Int32 = 100) -> Signal<(SearchMessagesResult, SearchMessagesState), NoError> {
++            // Lunagram: «кот | пёс» ищет и то и другое. Подробности — в
++            // LunagramMultiSearch. Без «|» всё идёт как раньше.
++            if let parts = lunagramSearchParts(query) {
++                return lunagramMultiSearch(account: self.account, location: location, parts: parts, centerId: centerId, limit: limit)
++            }
+             return _internal_searchMessages(account: self.account, location: location, query: query, state: state, centerId: centerId, limit: limit)
+         }
+         
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index b94c7c66..63cea1e9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -71,6 +71,7 @@ private enum LunagramToggle: Int32 {
+     case yePunct
+     case yeTilde
+     case yeKaomoji
++    case multiSearch
+ 
+     var value: Bool {
+         switch self {
+@@ -176,6 +177,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.yeTilde
+         case .yeKaomoji:
+             return LunagramSettings.yeKaomoji
++        case .multiSearch:
++            return LunagramSettings.multiSearch
+         }
+     }
+ 
+@@ -283,6 +286,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.yeTilde = value
+         case .yeKaomoji:
+             LunagramSettings.yeKaomoji = value
++        case .multiSearch:
++            LunagramSettings.multiSearch = value
+         }
+     }
+ 
+@@ -390,6 +395,8 @@ private enum LunagramToggle: Int32 {
+             return "Тильда в конце"
+         case .yeKaomoji:
+             return "Каомодзи в конце"
++        case .multiSearch:
++            return "Поиск сразу по нескольким словам"
+         }
+     }
+ 
+@@ -446,7 +453,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch:
+             return nil
+         }
+     }
+@@ -610,6 +617,8 @@ extension LunagramToggle {
+             return "tilde"
+         case .yeKaomoji:
+             return "face.smiling.inverse"
++        case .multiSearch:
++            return "line.3.horizontal.decrease.circle"
+         }
+     }
+ }
+@@ -2660,6 +2669,8 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.header("Сообщения")
+     rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
+     rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки просто нет — неверная хуже отсутствующей.")
++    rows.row(.toggle(.multiSearch, value(.multiSearch), "Поиск сразу по нескольким словам", "line.3.horizontal.decrease.circle"))
++    rows.info("Раздели слова чертой «|» — «кот | пёс», — и найдётся и то и другое. Работает везде, где есть поиск по сообщениям: в переписке, в общем поиске, в избранном.\n\nУ такого поиска нет «показать ещё»: Telegram отдаёт метку продолжения на один запрос, а их здесь несколько. Каждое слово отдаёт свою первую сотню.")
+     rows.row(.toggle(.searchFilterButton, value(.searchFilterButton), "Фильтр в поиске по переписке", "magnifyingglass"))
+     rows.info("Внизу поиска рядом с календарём появится кнопка: период, автор и тип сообщений. Отбор сбрасывается, когда закрываешь поиск.")
+ 
