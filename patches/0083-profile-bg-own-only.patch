@@ -1,0 +1,246 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 5f9825c3..1914cf0a 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -88,6 +88,7 @@ public final class LunagramSettings {
+         static let profileBackgroundOffsetX = "lunagram.profile.backgroundOffsetX"
+         static let profileBackgroundOffsetY = "lunagram.profile.backgroundOffsetY"
+         static let profileBackgroundZoom = "lunagram.profile.backgroundZoom"
++        static let profileBackgroundOwner = "lunagram.profile.backgroundOwner"
+         // Фон полоски с песней в своём профиле — как на ПК.
+         static let profileMusicBgFile = "lunagram.profile.musicBgFile"
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+@@ -844,11 +845,45 @@ public final class LunagramSettings {
+         return profileBackgroundURL != nil
+     }
+ 
++    /// Чей это фон: номер аккаунта, на котором картинку выбрали. Ноль — ещё
++    /// не записан. Оповещение не шлём: это пометка, а не настройка, и
++    /// перерисовывать из-за неё нечего.
++    public static var profileBackgroundOwner: Int64 {
++        get { return Int64(defaults.integer(forKey: Key.profileBackgroundOwner)) }
++        set {
++            if newValue == 0 {
++                defaults.removeObject(forKey: Key.profileBackgroundOwner)
++            } else {
++                defaults.set(Int(newValue), forKey: Key.profileBackgroundOwner)
++            }
++        }
++    }
++
++    /// Показывать ли свою картинку под профилем.
++    ///
++    /// Только в своём профиле и только на том аккаунте, где картинку выбрали:
++    /// чужая страница своим фото не подкрашивается, и на второй аккаунт оно
++    /// не переезжает. Хозяина записываем при первом показе — картинки,
++    /// выбранные раньше, его не помнят.
++    public static func showsProfileBackground(account: Int64, screen: Int64) -> Bool {
++        guard account != 0, account == screen, hasProfileBackground else {
++            return false
++        }
++        let owner = profileBackgroundOwner
++        if owner == 0 {
++            profileBackgroundOwner = account
++            return true
++        }
++        return owner == account
++    }
++
+     /// Забирает картинку фона себе.
+     public static func importProfileBackground(from source: URL) throws {
+         let folder = try lunagramFolder()
+         let name = "profilebg-\(UUID().uuidString).jpg"
+         try writeScaledImage(from: source, to: folder.appendingPathComponent(name))
++        // Новая картинка — хозяина запишем заново, при первом показе.
++        profileBackgroundOwner = 0
+         storeKeeping(name, forKey: Key.profileBackgroundFile)
+     }
+ 
+@@ -856,6 +891,7 @@ public final class LunagramSettings {
+     /// удаляют его долгим нажатием на плитку.
+     public static func clearProfileBackground() {
+         defaults.removeObject(forKey: Key.profileBackgroundFile)
++        profileBackgroundOwner = 0
+         changed()
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift
+index 273d253e..0481909f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift
+@@ -13,6 +13,8 @@ final class LunagramProfileBackgroundView: UIView {
+     private let dimView = UIView()
+     private var shownURL: URL?
+     private var settingsObserver: NSObjectProtocol?
++    private var accountId: Int64 = 0
++    private var screenId: Int64 = 0
+ 
+     init() {
+         super.init(frame: CGRect())
+@@ -47,6 +49,14 @@ final class LunagramProfileBackgroundView: UIView {
+         }
+     }
+ 
++    /// Чей это экран: свой профиль своего же аккаунта — или чужая страница.
++    /// Без этого картинка легла бы под любой профиль и под второй аккаунт.
++    func setOwner(account: Int64, screen: Int64) {
++        self.accountId = account
++        self.screenId = screen
++        self.reload()
++    }
++
+     override func layoutSubviews() {
+         super.layoutSubviews()
+         let bounds = self.bounds
+@@ -74,8 +84,7 @@ final class LunagramProfileBackgroundView: UIView {
+             self.shownURL = url
+             self.imageView.image = url.flatMap { UIImage(contentsOfFile: $0.path) }
+         }
+-        let hasBackground = url != nil
+-        self.isHidden = !hasBackground
++        self.isHidden = !LunagramSettings.showsProfileBackground(account: self.accountId, screen: self.screenId)
+         self.dimView.alpha = CGFloat(LunagramSettings.profileBackgroundDim) / 100.0
+         self.blurView.alpha = CGFloat(LunagramSettings.profileBackgroundBlur) / 100.0
+         self.layoutImage()
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoPaneContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoPaneContainerNode.swift
+index 8db9b265..dcfd92b7 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoPaneContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoPaneContainerNode.swift
+@@ -10,6 +10,7 @@ import ContextUI
+ import ChatControllerInteraction
+ import PeerInfoVisualMediaPaneNode
+ import PeerInfoPaneNode
++import Lunagram
+ import PeerInfoChatListPaneNode
+ import PeerInfoChatPaneNode
+ import TextFormat
+@@ -970,7 +971,14 @@ final class PeerInfoPaneContainerNode: ASDisplayNode, ASGestureRecognizerDelegat
+             }
+         }
+         
+-        self.backgroundColor = backgroundColor
++        // Lunagram: над своей картинкой вкладки — подарки, публикации, медиа —
++        // делаем полупрозрачными. Раньше картинка кончалась на первой же
++        // вкладке: подложка закрывала её наглухо.
++        if LunagramSettings.showsProfileBackground(account: self.context.account.peerId.toInt64(), screen: self.peerId.toInt64()) {
++            self.backgroundColor = backgroundColor.withAlphaComponent(0.72)
++        } else {
++            self.backgroundColor = backgroundColor
++        }
+ 
+         let isScrollingLockedAtTop = expansionFraction < 1.0 - CGFloat.ulpOfOne
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index b6e4f2a1..bca2382e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -9,6 +9,7 @@ import AccountContext
+ import TelegramPresentationData
+ import TelegramUIPreferences
+ import AvatarNode
++import Lunagram
+ import TelegramStringFormatting
+ import PhoneNumberFormat
+ import AppBundle
+@@ -229,6 +230,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+     let scrollNode: ASScrollNode
+     /// Lunagram: своя картинка под списком профиля.
+     let lunagramBackgroundView = LunagramProfileBackgroundView()
++
++    /// Lunagram: лежит ли под этим профилем своя картинка. От этого строки и
++    /// вкладки становятся полупрозрачными.
++    private var lunagramHasBackground: Bool {
++        return LunagramSettings.showsProfileBackground(account: self.context.account.peerId.toInt64(), screen: self.peerId.toInt64())
++    }
+     let edgeEffectView: EdgeEffectView
+     
+     let headerNode: PeerInfoHeaderNode
+@@ -1321,7 +1328,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+         self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
+         // Lunagram: своя картинка под списком профиля. Кладём под прокрутку и
+         // держим по размеру экрана — тогда она остаётся на виду, пока крутишь,
+-        // а не растягивается на всю длину очень длинного списка.
++        // а не растягивается на всю длину очень длинного списка. Показываем
++        // только в своём профиле и только на том аккаунте, где её выбрали.
++        self.lunagramBackgroundView.setOwner(account: self.context.account.peerId.toInt64(), screen: self.peerId.toInt64())
+         self.view.addSubview(self.lunagramBackgroundView)
+         self.addSubnode(self.scrollNode)
+         self.scrollNode.addSubnode(self.paneContainerNode)
+@@ -5523,7 +5532,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                         contentHeight -= 16.0
+                     }
+                 }
+-                let sectionHeight = sectionNode.update(context: self.context, width: sectionWidth, safeInsets: UIEdgeInsets(), hasCorners: !insets.left.isZero, presentationData: self.presentationData, items: sectionItems, transition: transition)
++                let sectionHeight = sectionNode.update(context: self.context, width: sectionWidth, safeInsets: UIEdgeInsets(), hasCorners: !insets.left.isZero, presentationData: self.presentationData, items: sectionItems, lunagramBackground: self.lunagramHasBackground, transition: transition)
+                 let sectionFrame = CGRect(origin: CGPoint(x: insets.left, y: contentHeight), size: CGSize(width: sectionWidth, height: sectionHeight))
+                 if additive {
+                     transition.updateFrameAdditive(node: sectionNode, frame: sectionFrame)
+@@ -5584,7 +5593,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                 }
+                 
+                 let sectionWidth = layout.size.width - insets.left - insets.right
+-                let sectionHeight = sectionNode.update(context: self.context, width: sectionWidth, safeInsets: UIEdgeInsets(), hasCorners: !insets.left.isZero, presentationData: self.presentationData, items: sectionItems, transition: transition)
++                let sectionHeight = sectionNode.update(context: self.context, width: sectionWidth, safeInsets: UIEdgeInsets(), hasCorners: !insets.left.isZero, presentationData: self.presentationData, items: sectionItems, lunagramBackground: self.lunagramHasBackground, transition: transition)
+                 let sectionFrame = CGRect(origin: CGPoint(x: insets.left, y: contentHeight), size: CGSize(width: sectionWidth, height: sectionHeight))
+                 
+                 if wasAdded {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenItemSectionContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenItemSectionContainerNode.swift
+index d6923379..09d00737 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenItemSectionContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenItemSectionContainerNode.swift
+@@ -12,6 +12,10 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
+     private let bottomSeparatorNode: ASDisplayNode
+     private let itemContainerNode: ASDisplayNode
+     
++    /// Lunagram: лежит ли под профилем своя картинка. Присылает экран: сам
++    /// блок строк не знает, чей профиль показывает.
++    private var lunagramBackground: Bool = false
++
+     private var currentItems: [PeerInfoScreenItem] = []
+     var itemNodes: [AnyHashable: PeerInfoScreenItemNode] = [:]
+     
+@@ -36,10 +40,12 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
+         self.addSubnode(self.bottomSeparatorNode)
+     }
+     
+-    func update(context: AccountContext, width: CGFloat, safeInsets: UIEdgeInsets, hasCorners: Bool, presentationData: PresentationData, items: [PeerInfoScreenItem], transition: ContainedViewLayoutTransition) -> CGFloat {
++    func update(context: AccountContext, width: CGFloat, safeInsets: UIEdgeInsets, hasCorners: Bool, presentationData: PresentationData, items: [PeerInfoScreenItem], lunagramBackground: Bool, transition: ContainedViewLayoutTransition) -> CGFloat {
+         // Lunagram: если под списком лежит своя картинка, подложку строк
+-        // делаем полупрозрачной — иначе фон был бы наглухо закрыт.
+-        if LunagramSettings.hasProfileBackground {
++        // делаем полупрозрачной — иначе фон был бы наглухо закрыт. У чужих
++        // профилей своей картинки нет, и трогать их подложку незачем.
++        self.lunagramBackground = lunagramBackground
++        if lunagramBackground {
+             self.backgroundNode.backgroundColor = presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.72)
+         } else {
+             self.backgroundNode.backgroundColor = presentationData.theme.list.itemBlocksBackgroundColor
+@@ -156,7 +162,7 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
+     /// картинке накладки прячем, а блок скругляем настоящей обрезкой. Заголовок
+     /// над блоком и подпись под ним обрезке не подлежат.
+     private func lunagramUpdateCorners(width: CGFloat, safeInsets: UIEdgeInsets, hasCorners: Bool, theme: PresentationTheme, cardTop: CGFloat, cardBottom: CGFloat, contentHeight: CGFloat) {
+-        let active = LunagramSettings.hasProfileBackground && hasCorners
++        let active = self.lunagramBackground && hasCorners
+         var overlays: [UIImage] = []
+         for glass in [true, false] {
+             for (top, bottom) in [(true, true), (true, false), (false, true)] {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+index 53bcac72..0a9dc17f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+@@ -1462,7 +1462,14 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+         self.currentParams = (size, topInset, sideInset, bottomInset, deviceMetrics, visibleHeight, isScrollingLockedAtTop, expandProgress, navigationHeight, presentationData)
+         self.presentationDataPromise.set(.single(presentationData))
+         
+-        self.backgroundNode.backgroundColor = presentationData.theme.list.blocksBackgroundColor
++        // Lunagram: над своей картинкой у вкладки подарков своей подложки нет
++        // — полупрозрачную кладёт общая вкладочная подложка, и вторая поверх
++        // неё сделала бы картинку мутной.
++        if LunagramSettings.showsProfileBackground(account: self.context.account.peerId.toInt64(), screen: self.peerId.toInt64()) {
++            self.backgroundNode.backgroundColor = .clear
++        } else {
++            self.backgroundNode.backgroundColor = presentationData.theme.list.blocksBackgroundColor
++        }
+         transition.updateFrame(node: self.backgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: topInset), size: CGSize(width: size.width, height: size.height - topInset)))
+         transition.updateFrame(node: self.scrollNode, frame: CGRect(origin: CGPoint(), size: size))
+         
