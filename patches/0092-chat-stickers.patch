@@ -1,0 +1,419 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index ac129e13..72813236 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -110,6 +110,8 @@ public final class LunagramSettings {
+         static let hiddenFromEveryone = "lunagram.hide.everyone"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+         static let showDescriptions = "lunagram.settings.showDescriptions"
++        static let chatStickers = "lunagram.chatStickers.enabled"
++        static let chatStickersDepth = "lunagram.chatStickers.depth"
+         static let glassSquare = "lunagram.glass.square"
+         static let glassCorner = "lunagram.glass.corner"
+         static let textTransform = "lunagram.transform.enabled"
+@@ -722,6 +724,20 @@ public final class LunagramSettings {
+     }
+ 
+     /// Переводит текст исходящего сообщения в выбранный стиль.
++    // MARK: Эмодзи и стикеры чата
++
++    /// Строка «Эмодзи и стикеры чата» в профиле собеседника.
++    public static var chatStickers: Bool {
++        get { return flag(Key.chatStickers, default: true) }
++        set { setFlag(newValue, Key.chatStickers) }
++    }
++
++    /// Сколько сохранённых сообщений просматривать, считая наборы.
++    public static var chatStickersDepth: Int {
++        get { return clamped(Key.chatStickersDepth, 500, 10_000, 2_000) }
++        set { setClamped(newValue, Key.chatStickersDepth, 500, 10_000) }
++    }
++
+     // MARK: Квадратнее стекло
+ 
+     /// «Квадратнее матовые панели» — резать ли скругление у стекла.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+index c9c8fbce..2c5580a6 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+@@ -102,6 +102,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/ShareWithPeersScreen",
+         "//submodules/StatisticsUI",
+         "//submodules/StickerPackPreviewUI",
++        "//submodules/ItemListStickerPackItem",
+         "//submodules/StickerResources",
+         "//submodules/TelegramUI/Components/StorageUsageScreen",
+         "//submodules/TelegramUI/Components/Stories/StoryContainerScreen",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift
+new file mode 100644
+index 00000000..38b6606e
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift
+@@ -0,0 +1,255 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import ItemListStickerPackItem
++import StickerPackPreviewUI
++import Lunagram
++
++// Lunagram: «Эмодзи и стикеры чата» — перенос задумки плагина
++// Chat Emoji & Stickers.
++//
++// Листаешь переписку, видишь незнакомый значок или стикер и не знаешь, где
++// его взять. Экран отвечает на этот вопрос: проходит по сохранённым
++// сообщениям переписки и собирает наборы, из которых там что-то
++// попадалось, — отдельно эмодзи, отдельно стикеры, и у каждого написано,
++// сколько раз встретился. Нажал — открылось окно набора с «Добавить».
++//
++// Смотрим только то, что уже лежит на телефоне: переписку, которую ты
++// листал. У сервера ничего не спрашиваем — ни одного лишнего запроса, и
++// Telegram не попросит подождать, как случалось у плагина.
++//
++// Чего здесь нет: копирования чужих наборов в свой через @stickers. Это
++// отдельная машина — разговор с ботом и перезаливка чужих картинок под
++// своим именем. Скажет хозяин — сделаю отдельно.
++
++private struct LunagramFoundPack {
++    var reference: StickerPackReference
++    var count: Int
++}
++
++private struct LunagramChatStickersData {
++    var emoji: [LunagramFoundPack] = []
++    var stickers: [LunagramFoundPack] = []
++    var scanned: Int = 0
++}
++
++private final class LunagramChatStickersArguments {
++    let context: AccountContext
++    let open: (StickerPackReference) -> Void
++
++    init(context: AccountContext, open: @escaping (StickerPackReference) -> Void) {
++        self.context = context
++        self.open = open
++    }
++}
++
++/// Проходим по сохранённым сообщениям и считаем, из каких наборов что было.
++private func lunagramScanChat(context: AccountContext, peerId: EnginePeer.Id, depth: Int) -> Signal<LunagramChatStickersData, NoError> {
++    return context.account.postbox.transaction { transaction -> LunagramChatStickersData in
++        var emojiCounts: [StickerPackReference: Int] = [:]
++        var stickerCounts: [StickerPackReference: Int] = [:]
++        var scanned = 0
++
++        transaction.withAllMessages(peerId: peerId, { message in
++            scanned += 1
++
++            for media in message.media {
++                if let file = media as? TelegramMediaFile {
++                    for attribute in file.attributes {
++                        if case let .Sticker(_, packReference, _) = attribute, let reference = packReference {
++                            stickerCounts[reference] = (stickerCounts[reference] ?? 0) + 1
++                        }
++                    }
++                }
++            }
++
++            // Свои эмодзи лежат отдельно от текста: в сообщении стоят отметки
++            // с их номерами, а сами картинки — в приложенных к сообщению.
++            for media in message.associatedMedia.values {
++                if let file = media as? TelegramMediaFile {
++                    for attribute in file.attributes {
++                        if case let .CustomEmoji(_, _, _, packReference) = attribute, let reference = packReference {
++                            emojiCounts[reference] = (emojiCounts[reference] ?? 0) + 1
++                        }
++                    }
++                }
++            }
++
++            return scanned < depth
++        })
++
++        var data = LunagramChatStickersData()
++        data.scanned = scanned
++        data.emoji = emojiCounts.map { LunagramFoundPack(reference: $0.key, count: $0.value) }.sorted(by: { $0.count > $1.count })
++        data.stickers = stickerCounts.map { LunagramFoundPack(reference: $0.key, count: $0.value) }.sorted(by: { $0.count > $1.count })
++        return data
++    }
++}
++
++private enum LunagramChatStickersEntry: ItemListNodeEntry {
++    case header(Int32, String)
++    case pack(Int32, StickerPackCollectionInfo.Accessor, StickerPackItem?, String)
++    case info(String)
++
++    var section: ItemListSectionId {
++        switch self {
++        case let .header(index, _):
++            return index < 1_000 ? 0 : 1
++        case let .pack(index, _, _, _):
++            return index < 1_000 ? 0 : 1
++        case .info:
++            return 2
++        }
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .header(index, _):
++            return index
++        case let .pack(index, _, _, _):
++            return index
++        case .info:
++            return 10_000
++        }
++    }
++
++    static func ==(lhs: LunagramChatStickersEntry, rhs: LunagramChatStickersEntry) -> Bool {
++        switch lhs {
++        case let .header(lhsIndex, lhsText):
++            if case let .header(rhsIndex, rhsText) = rhs, lhsIndex == rhsIndex, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .pack(lhsIndex, lhsInfo, _, lhsCount):
++            if case let .pack(rhsIndex, rhsInfo, _, rhsCount) = rhs, lhsIndex == rhsIndex, lhsInfo.id == rhsInfo.id, lhsCount == rhsCount {
++                return true
++            }
++            return false
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramChatStickersEntry, rhs: LunagramChatStickersEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramChatStickersArguments
++        switch self {
++        case let .header(_, text):
++            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++        case let .pack(_, info, topItem, count):
++            return ItemListStickerPackItem(
++                presentationData: presentationData,
++                context: arguments.context,
++                packInfo: info,
++                itemCount: count,
++                topItem: topItem,
++                unread: false,
++                control: .none,
++                editing: ItemListStickerPackItemEditing(editable: false, editing: false, revealed: false, reorderable: false, selectable: false),
++                enabled: true,
++                playAnimatedStickers: true,
++                sectionId: self.section,
++                action: {
++                    arguments.open(.id(id: info.id.id, accessHash: info.accessHash))
++                },
++                setPackIdWithRevealedOptions: { _, _ in
++                },
++                addPack: {
++                },
++                removePack: {
++                },
++                toggleSelected: {
++                }
++            )
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++func lunagramChatStickersController(context: AccountContext, peerId: EnginePeer.Id) -> ViewController {
++    let arguments = LunagramChatStickersArguments(context: context, open: { reference in
++        let navigationController = context.sharedContext.mainWindow?.viewController as? NavigationController
++        let controller = StickerPackScreen(context: context, mainStickerPack: reference, stickerPacks: [reference], parentNavigationController: navigationController)
++        navigationController?.pushViewController(controller)
++    })
++
++    let loaded: Signal<(LunagramChatStickersData, [StickerPackReference: LoadedStickerPack]), NoError> = lunagramScanChat(context: context, peerId: peerId, depth: LunagramSettings.chatStickersDepth)
++    |> mapToSignal { data -> Signal<(LunagramChatStickersData, [StickerPackReference: LoadedStickerPack]), NoError> in
++        let references = data.emoji.map { $0.reference } + data.stickers.map { $0.reference }
++        if references.isEmpty {
++            return .single((data, [:]))
++        }
++        let packs = references.map { reference -> Signal<(StickerPackReference, LoadedStickerPack), NoError> in
++            return context.engine.stickers.loadedStickerPack(reference: reference, forceActualized: false)
++            |> filter { pack in
++                if case .fetching = pack {
++                    return false
++                }
++                return true
++            }
++            |> take(1)
++            |> map { pack -> (StickerPackReference, LoadedStickerPack) in
++                return (reference, pack)
++            }
++        }
++        return combineLatest(packs)
++        |> map { results -> (LunagramChatStickersData, [StickerPackReference: LoadedStickerPack]) in
++            var map: [StickerPackReference: LoadedStickerPack] = [:]
++            for (reference, pack) in results {
++                map[reference] = pack
++            }
++            return (data, map)
++        }
++    }
++
++    let signal = combineLatest(context.sharedContext.presentationData, loaded)
++    |> deliverOnMainQueue
++    |> map { presentationData, value -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let (data, packs) = value
++        var entries: [LunagramChatStickersEntry] = []
++
++        func append(_ found: [LunagramFoundPack], base: Int32, title: String) {
++            var index = base
++            var added = false
++            for item in found {
++                guard let pack = packs[item.reference], case let .result(info, items, _) = pack else {
++                    continue
++                }
++                if !added {
++                    entries.append(.header(base - 1, title))
++                    added = true
++                }
++                entries.append(.pack(index, info, items.first, "встретилось \(item.count)"))
++                index += 1
++            }
++        }
++
++        append(data.emoji, base: 1, title: "НАБОРЫ ЭМОДЗИ")
++        append(data.stickers, base: 1_001, title: "НАБОРЫ СТИКЕРОВ")
++
++        if entries.isEmpty {
++            entries.append(.info("В сохранённых сообщениях этой переписки своих эмодзи и стикеров не нашлось. Пролистай её подальше и загляни снова: считаем только то, что уже лежит на телефоне."))
++        } else {
++            entries.append(.info("Просмотрено сообщений: \(data.scanned). Считаем только сохранённое на телефоне — у сервера ничего не спрашиваем.\n\nНажми на набор, чтобы открыть его и добавить себе."))
++        }
++
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Эмодзи и стикеры чата"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 3eae91a0..6a033548 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -73,6 +73,7 @@ private enum LunagramToggle: Int32 {
+     case yeKaomoji
+     case multiSearch
+     case glassSquare
++    case chatStickers
+ 
+     var value: Bool {
+         switch self {
+@@ -182,6 +183,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.multiSearch
+         case .glassSquare:
+             return LunagramSettings.glassSquare
++        case .chatStickers:
++            return LunagramSettings.chatStickers
+         }
+     }
+ 
+@@ -293,6 +296,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.multiSearch = value
+         case .glassSquare:
+             LunagramSettings.glassSquare = value
++        case .chatStickers:
++            LunagramSettings.chatStickers = value
+         }
+     }
+ 
+@@ -404,6 +409,8 @@ private enum LunagramToggle: Int32 {
+             return "Поиск сразу по нескольким словам"
+         case .glassSquare:
+             return "Квадратнее матовые панели"
++        case .chatStickers:
++            return "Эмодзи и стикеры чата"
+         }
+     }
+ 
+@@ -460,7 +467,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch, .glassSquare:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch, .glassSquare, .chatStickers:
+             return nil
+         }
+     }
+@@ -628,6 +635,8 @@ extension LunagramToggle {
+             return "line.3.horizontal.decrease.circle"
+         case .glassSquare:
+             return "square.on.square"
++        case .chatStickers:
++            return "face.smiling"
+         }
+     }
+ }
+@@ -1366,6 +1375,7 @@ private struct LunagramMediaState: Equatable {
+     var transformMode: Int = 0
+     var transformEmoji: Int = 6
+     var glassCorner: Int = 50
++    var chatStickersDepth: Int = 2_000
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1385,6 +1395,7 @@ private struct LunagramMediaState: Equatable {
+         state.transformMode = LunagramSettings.textTransformMode
+         state.transformEmoji = LunagramSettings.textTransformEmoji
+         state.glassCorner = LunagramSettings.glassCorner
++        state.chatStickersDepth = LunagramSettings.chatStickersDepth
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1985,6 +1996,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBackgroundDim = value
+         case 41:
+             LunagramSettings.profileBackgroundBlur = value
++        case 96:
++            LunagramSettings.chatStickersDepth = value
+         case 95:
+             LunagramSettings.glassCorner = value
+         case 50:
+@@ -2626,6 +2639,9 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.split()
+     rows.row(.toggle(.saveForBots, value(.saveForBots), "Сохранять в чатах с ботами", nil))
+ 
++    rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
++    rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
++    rows.info("В профиле собеседника или канала появится строка «Эмодзи и стикеры чата»: она соберёт наборы, из которых здесь что-то попадалось, и покажет, сколько раз. Нажал на набор — открылось его окно с «Добавить».\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем. Ползунок задаёт, сколько сообщений просматривать: больше — полнее, но дольше.")
+     rows.row(.toggle(.glassSquare, value(.glassSquare), "Квадратнее матовые панели", "square.on.square"))
+     rows.row(.slider(95, "Скругление панелей", media.glassCorner, 0, 100, 5))
+     rows.info("Матовые панели — полоса ввода, меню, всплывающие окошки — скругляются так, как решил Telegram. Ползунок оставляет от этого скругления свою долю: 100 % — как было, 0 % — прямые углы.\n\nОткликается на лету, но панель перерисовывается, когда её показывают заново.")
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index 57011257..840c6b22 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -963,6 +963,15 @@ func infoItems(
+         }
+     }
+     
++    // Lunagram: «Эмодзи и стикеры чата» — из каких наборов здесь что
++    // попадалось. В своём профиле ни к чему: свои наборы и так под рукой.
++    if LunagramSettings.chatStickers, let peerId = data.peer?.id, peerId != context.account.peerId {
++        items[.peerInfoTrailing]!.append(PeerInfoScreenDisclosureItem(id: 9100, label: .none, text: "Эмодзи и стикеры чата", icon: UIImage(bundleImageName: "Item List/Icons/Sticker"), action: {
++            let controller = lunagramChatStickersController(context: context, peerId: peerId)
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(controller)
++        }))
++    }
++
+     var result: [(AnyHashable, [PeerInfoScreenItem])] = []
+     for section in InfoSection.allCases {
+         if let sectionItems = items[section], !sectionItems.isEmpty {
