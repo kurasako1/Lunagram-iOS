@@ -1,0 +1,625 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1914cf0a..0e3e3109 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -334,10 +334,13 @@ public final class LunagramSettings {
+         }
+     }
+ 
+-    /// Кого я скрыл от себя: аватарка, описание, время в сети и номер для них
+-    /// закрыты по-настоящему, через настройки Telegram. Список держим у себя —
+-    /// по нему рисуется ползунок в профиле и по нему же возвращаем всё назад,
+-    /// когда снимаешь «скрыть от всех».
++    // MARK: Остатки снятого скрытия
++    //
++    // Скрытия («Скрыть меня от него» и «Скрыть меня от всех») больше нет, а
++    // записи о нём остались: по ним приложение при первом запуске возвращает
++    // приватность и стирает их. Ставить сюда что-то новое незачем.
++
++    /// Кого успели скрыть. Возврат вычёркивает их из списков «кому не видно».
+     public static var hiddenPeers: [Int64] {
+         get { return (defaults.array(forKey: Key.hiddenPeers) as? [Int64]) ?? [] }
+         set {
+@@ -350,8 +353,8 @@ public final class LunagramSettings {
+         }
+     }
+ 
+-    /// Прежние настройки приватности, пока прячемся от всех. Разбирает их
+-    /// тот, кто умеет читать приватность Telegram; здесь место хранения.
++    /// Прежние настройки приватности, записанные перед скрытием от всех.
++    /// Разбирает их тот, кто умеет читать приватность Telegram.
+     public static var privacyBackupData: Data? {
+         get { return defaults.data(forKey: Key.privacyBackup) }
+         set {
+@@ -364,23 +367,7 @@ public final class LunagramSettings {
+         }
+     }
+ 
+-    public static func isHiddenPeer(_ id: Int64) -> Bool {
+-        return hiddenPeers.contains(id)
+-    }
+-
+-    public static func setHiddenPeer(_ id: Int64, _ hidden: Bool) {
+-        var all = hiddenPeers
+-        if hidden {
+-            if !all.contains(id) {
+-                all.append(id)
+-            }
+-        } else {
+-            all.removeAll(where: { $0 == id })
+-        }
+-        hiddenPeers = all
+-    }
+-
+-    /// Скрыт ли я сейчас от всех разом.
++    /// Было ли включено скрытие от всех.
+     public static var hiddenFromEveryone: Bool {
+         get { return defaults.bool(forKey: Key.hiddenFromEveryone) }
+         set {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramHidePeer.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramHidePeer.swift
+deleted file mode 100644
+index efde94aa..00000000
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramHidePeer.swift
++++ /dev/null
+@@ -1,241 +0,0 @@
+-import Foundation
+-import SwiftSignalKit
+-import Postbox
+-import TelegramCore
+-import AccountContext
+-import Lunagram
+-
+-// Lunagram: «как будто заблокировал» — по-настоящему.
+-//
+-// Telegram умеет прятать аватарку, описание, время в сети и номер от
+-// выбранных людей — это его же настройки приватности, только обычно их
+-// правят руками на четырёх разных экранах. Здесь то же самое одним
+-// движением: ползунок в профиле человека.
+-//
+-// Переписываться при этом можно по-прежнему: приватность не блокировка,
+-// из списка чатов ты у него не исчезаешь и писать друг другу не мешает.
+-//
+-// Важная особенность самого Telegram: спрятал своё время в сети — перестал
+-// видеть чужое. Это его правило, обойти нельзя.
+-
+-/// Что именно прячем.
+-private let lunagramHideTypes: [UpdateSelectiveAccountPrivacySettingsType] = [.presence, .profilePhoto, .bio, .phoneNumber]
+-
+-private func lunagramCurrent(_ settings: AccountPrivacySettings, _ type: UpdateSelectiveAccountPrivacySettingsType) -> SelectivePrivacySettings? {
+-    switch type {
+-    case .presence:
+-        return settings.presence
+-    case .profilePhoto:
+-        return settings.profilePhoto
+-    case .bio:
+-        return settings.bio
+-    case .phoneNumber:
+-        return settings.phoneNumber
+-    default:
+-        return nil
+-    }
+-}
+-
+-/// Та же настройка, но с одним человеком в списке исключений.
+-private func lunagramWithPeer(_ settings: SelectivePrivacySettings, peer: SelectivePrivacyPeer, hidden: Bool) -> SelectivePrivacySettings {
+-    let peerId = peer.peer.id
+-    switch settings {
+-    case let .enableEveryone(disableFor):
+-        var disableFor = disableFor
+-        if hidden {
+-            disableFor[peerId] = peer
+-        } else {
+-            disableFor.removeValue(forKey: peerId)
+-        }
+-        return .enableEveryone(disableFor: disableFor)
+-    case let .enableContacts(enableFor, disableFor, enableForPremium, enableForBots):
+-        var enableFor = enableFor
+-        var disableFor = disableFor
+-        if hidden {
+-            enableFor.removeValue(forKey: peerId)
+-            disableFor[peerId] = peer
+-        } else {
+-            disableFor.removeValue(forKey: peerId)
+-        }
+-        return .enableContacts(enableFor: enableFor, disableFor: disableFor, enableForPremium: enableForPremium, enableForBots: enableForBots)
+-    case let .disableEveryone(enableFor, enableForCloseFriends, enableForPremium, enableForBots):
+-        // Здесь наоборот: видят только те, кто в списке. Прячем — вычёркиваем.
+-        var enableFor = enableFor
+-        if hidden {
+-            enableFor.removeValue(forKey: peerId)
+-        } else {
+-            enableFor[peerId] = peer
+-        }
+-        return .disableEveryone(enableFor: enableFor, enableForCloseFriends: enableForCloseFriends, enableForPremium: enableForPremium, enableForBots: enableForBots)
+-    }
+-}
+-
+-/// Прежняя настройка приватности — чтобы вернуть свою, а не «для всех».
+-///
+-/// Хранить умеем немного: кому видно (всем, контактам, никому), списки
+-/// исключений по номерам и телеграмовские галочки про премиум, ботов и
+-/// близких друзей. Этого хватает: больше в настройке ничего и нет.
+-private struct LunagramPrivacyBackup: Codable {
+-    var option: Int
+-    var enableFor: [Int64]
+-    var disableFor: [Int64]
+-    var enableForPremium: Bool
+-    var enableForBots: Bool
+-    var enableForCloseFriends: Bool
+-}
+-
+-private func lunagramBackupKey(_ type: UpdateSelectiveAccountPrivacySettingsType) -> String {
+-    switch type {
+-    case .presence:
+-        return "presence"
+-    case .profilePhoto:
+-        return "photo"
+-    case .bio:
+-        return "bio"
+-    case .phoneNumber:
+-        return "phone"
+-    default:
+-        return "other"
+-    }
+-}
+-
+-private func lunagramMakeBackup(_ settings: SelectivePrivacySettings) -> LunagramPrivacyBackup {
+-    switch settings {
+-    case let .enableEveryone(disableFor):
+-        return LunagramPrivacyBackup(option: 0, enableFor: [], disableFor: disableFor.keys.map { $0.toInt64() }, enableForPremium: false, enableForBots: false, enableForCloseFriends: false)
+-    case let .enableContacts(enableFor, disableFor, enableForPremium, enableForBots):
+-        return LunagramPrivacyBackup(option: 1, enableFor: enableFor.keys.map { $0.toInt64() }, disableFor: disableFor.keys.map { $0.toInt64() }, enableForPremium: enableForPremium, enableForBots: enableForBots, enableForCloseFriends: false)
+-    case let .disableEveryone(enableFor, enableForCloseFriends, enableForPremium, enableForBots):
+-        return LunagramPrivacyBackup(option: 2, enableFor: enableFor.keys.map { $0.toInt64() }, disableFor: [], enableForPremium: enableForPremium, enableForBots: enableForBots, enableForCloseFriends: enableForCloseFriends)
+-    }
+-}
+-
+-private func lunagramRestoreSettings(_ backup: LunagramPrivacyBackup, peers: [PeerId: SelectivePrivacyPeer], hiddenIds: [PeerId]) -> SelectivePrivacySettings {
+-    func map(_ ids: [Int64]) -> [PeerId: SelectivePrivacyPeer] {
+-        var result: [PeerId: SelectivePrivacyPeer] = [:]
+-        for id in ids {
+-            let peerId = PeerId(id)
+-            if let peer = peers[peerId] {
+-                result[peerId] = peer
+-            }
+-        }
+-        return result
+-    }
+-    switch backup.option {
+-    case 1:
+-        var disableFor = map(backup.disableFor)
+-        // Кого прятал поимённо — тех прячем и дальше.
+-        for peerId in hiddenIds {
+-            if let peer = peers[peerId] {
+-                disableFor[peerId] = peer
+-            }
+-        }
+-        var enableFor = map(backup.enableFor)
+-        for peerId in hiddenIds {
+-            enableFor.removeValue(forKey: peerId)
+-        }
+-        return .enableContacts(enableFor: enableFor, disableFor: disableFor, enableForPremium: backup.enableForPremium, enableForBots: backup.enableForBots)
+-    case 2:
+-        var enableFor = map(backup.enableFor)
+-        for peerId in hiddenIds {
+-            enableFor.removeValue(forKey: peerId)
+-        }
+-        return .disableEveryone(enableFor: enableFor, enableForCloseFriends: backup.enableForCloseFriends, enableForPremium: backup.enableForPremium, enableForBots: backup.enableForBots)
+-    default:
+-        var disableFor = map(backup.disableFor)
+-        for peerId in hiddenIds {
+-            if let peer = peers[peerId] {
+-                disableFor[peerId] = peer
+-            }
+-        }
+-        return .enableEveryone(disableFor: disableFor)
+-    }
+-}
+-
+-private func lunagramLoadPrivacyBackup() -> [String: LunagramPrivacyBackup]? {
+-    guard let data = LunagramSettings.privacyBackupData else {
+-        return nil
+-    }
+-    return try? JSONDecoder().decode([String: LunagramPrivacyBackup].self, from: data)
+-}
+-
+-private func lunagramSavePrivacyBackup(_ value: [String: LunagramPrivacyBackup]?) {
+-    if let value = value {
+-        LunagramSettings.privacyBackupData = try? JSONEncoder().encode(value)
+-    } else {
+-        LunagramSettings.privacyBackupData = nil
+-    }
+-}
+-
+-/// Скрыть себя от человека или вернуть всё как было.
+-func lunagramSetHidden(context: AccountContext, peer: EnginePeer, hidden: Bool) {
+-    LunagramSettings.setHiddenPeer(peer.id.toInt64(), hidden)
+-    let privacyPeer = SelectivePrivacyPeer(peer: peer, participantCount: nil)
+-    let _ = (context.engine.privacy.requestAccountPrivacySettings()
+-    |> take(1)
+-    |> deliverOnMainQueue).startStandalone(next: { settings in
+-        for type in lunagramHideTypes {
+-            guard let current = lunagramCurrent(settings, type) else {
+-                continue
+-            }
+-            let updated = lunagramWithPeer(current, peer: privacyPeer, hidden: hidden)
+-            if updated != current {
+-                let _ = context.engine.privacy.updateSelectiveAccountPrivacySettings(type: type, settings: updated).startStandalone()
+-            }
+-        }
+-    })
+-}
+-
+-/// Скрыться от всех разом или вернуться всем.
+-///
+-/// Возвращаясь, не забываем тех, кого прятал поимённо: их список у нас свой,
+-/// и они снова уходят в исключения.
+-func lunagramSetHiddenFromEveryone(context: AccountContext, hidden: Bool) {
+-    LunagramSettings.hiddenFromEveryone = hidden
+-    if hidden {
+-        // Прежние настройки приватности запоминаем: возвращать «для всех»
+-        // вслепую нельзя — у человека могло стоять «только контактам».
+-        let _ = (context.engine.privacy.requestAccountPrivacySettings()
+-        |> take(1)
+-        |> deliverOnMainQueue).startStandalone(next: { settings in
+-            if lunagramLoadPrivacyBackup() == nil {
+-                var backup: [String: LunagramPrivacyBackup] = [:]
+-                for type in lunagramHideTypes {
+-                    if let current = lunagramCurrent(settings, type) {
+-                        backup[lunagramBackupKey(type)] = lunagramMakeBackup(current)
+-                    }
+-                }
+-                lunagramSavePrivacyBackup(backup)
+-            }
+-            for type in lunagramHideTypes {
+-                let _ = context.engine.privacy.updateSelectiveAccountPrivacySettings(type: type, settings: .disableEveryone(enableFor: [:], enableForCloseFriends: false, enableForPremium: false, enableForBots: false)).startStandalone()
+-            }
+-        })
+-        return
+-    }
+-
+-    let hiddenIds = LunagramSettings.hiddenPeers.map { PeerId($0) }
+-    let backup = lunagramLoadPrivacyBackup()
+-    let peersSignal: Signal<[PeerId: EnginePeer?], NoError> = hiddenIds.isEmpty
+-        ? .single([:])
+-        : context.engine.data.get(EngineDataMap(hiddenIds.map { TelegramEngine.EngineData.Item.Peer.Peer(id: $0) }))
+-    let _ = (peersSignal
+-    |> deliverOnMainQueue).startStandalone(next: { loaded in
+-        var peers: [PeerId: SelectivePrivacyPeer] = [:]
+-        for (peerId, maybePeer) in loaded {
+-            if let peer = maybePeer {
+-                peers[peerId] = SelectivePrivacyPeer(peer: peer, participantCount: nil)
+-            }
+-        }
+-        for type in lunagramHideTypes {
+-            let settings: SelectivePrivacySettings
+-            if let saved = backup?[lunagramBackupKey(type)] {
+-                settings = lunagramRestoreSettings(saved, peers: peers, hiddenIds: hiddenIds)
+-            } else {
+-                settings = .enableEveryone(disableFor: peers)
+-            }
+-            let _ = context.engine.privacy.updateSelectiveAccountPrivacySettings(type: type, settings: settings).startStandalone()
+-        }
+-        lunagramSavePrivacyBackup(nil)
+-    })
+-}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 278fb198..b9ba206e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -57,7 +57,6 @@ private enum LunagramToggle: Int32 {
+     case avatarSingleCorner
+     case composeAuto
+     case settingIcons
+-    case hideFromEveryone
+ 
+     var value: Bool {
+         switch self {
+@@ -135,8 +134,6 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.composeAuto
+         case .settingIcons:
+             return LunagramSettings.settingIcons
+-        case .hideFromEveryone:
+-            return LunagramSettings.hiddenFromEveryone
+         }
+     }
+ 
+@@ -216,8 +213,6 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.composeAuto = value
+         case .settingIcons:
+             LunagramSettings.settingIcons = value
+-        case .hideFromEveryone:
+-            LunagramSettings.hiddenFromEveryone = value
+         }
+     }
+ 
+@@ -297,8 +292,6 @@ private enum LunagramToggle: Int32 {
+             return "Плёнка подстраивается сама"
+         case .settingIcons:
+             return "Свои значки в настройках"
+-        case .hideFromEveryone:
+-            return "Скрыть меня от всех"
+         }
+     }
+ 
+@@ -355,7 +348,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .hideFromEveryone:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons:
+             return nil
+         }
+     }
+@@ -491,8 +484,6 @@ extension LunagramToggle {
+             return "wand.and.stars"
+         case .settingIcons:
+             return "swatchpalette,paintpalette"
+-        case .hideFromEveryone:
+-            return "eye.slash"
+         }
+     }
+ }
+@@ -1646,10 +1637,6 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         toggle.set(value)
+         shared.values[toggle] = value
+         shared.valuesPromise.set(shared.values)
+-        if toggle == .hideFromEveryone {
+-            // Настройка сама по себе ничего не прячет — прячет Telegram.
+-            lunagramSetHiddenFromEveryone(context: context, hidden: value)
+-        }
+     }, pick: { section in
+         if section == .profileStatus {
+             shared.push?(lunagramStatusController(context: context))
+@@ -2499,10 +2486,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.toggle(.searchFilterButton, value(.searchFilterButton), "Фильтр в поиске по переписке", "magnifyingglass"))
+     rows.info("Внизу поиска рядом с календарём появится кнопка: период, автор и тип сообщений. Отбор сбрасывается, когда закрываешь поиск.")
+ 
+-    rows.header("Скрытность")
+-    rows.row(.toggle(.hideFromEveryone, value(.hideFromEveryone), "Скрыть меня от всех", "eye.slash"))
+-    rows.info("Аватарка, описание, время в сети и номер закрываются от всех разом — по-настоящему, настройками самого Telegram. Выключишь — всё вернётся, а те, кого ты скрыл поимённо в их профилях, останутся скрытыми.\n\nПереписке это не мешает: писать друг другу можно по-прежнему. Но пока твоё время в сети скрыто, ты не видишь и чужое — так устроен сам Telegram.")
+-
+     // Этого на экране ПК нет — айфонное. Внизу того же экрана, как решили.
+     rows.header("Только на айфоне")
+     let phoneOnly: [LunagramToggle] = [.roundFromVideo, .showPeerId, .replyToDeleted]
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index 53bda46f..57011257 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -87,8 +87,6 @@ func infoItems(
+         let ItemPersonalChannel = 2001
+         let ItemPhoneNumber = 3000
+         let ItemLunagramId = 3050
+-        let ItemLunagramHide = 3051
+-        let ItemLunagramHideInfo = 3052
+         let ItemLunagramCopy = 3053
+         let ItemLunagramCopyInfo = 3054
+         let ItemUsername = 3001
+@@ -193,18 +191,8 @@ func infoItems(
+                 interaction.requestLayout(animated)
+             }))
+         }
+-        // Lunagram: «как будто заблокировал» — по-настоящему, через саму
+-        // приватность Telegram. Себе, ботам и удалённым это ни к чему.
++        // Lunagram: себе, ботам и удалённым копия ни к чему.
+         if user.id != context.account.peerId, user.botInfo == nil, !user.isDeleted {
+-            let isHidden = LunagramSettings.isHiddenPeer(user.id.toInt64())
+-            items[.peerInfoTrailing]!.append(PeerInfoScreenSwitchItem(id: ItemLunagramHide, text: "Скрыть меня от него", value: isHidden, toggled: { value in
+-                lunagramSetHidden(context: context, peer: EnginePeer(user), hidden: value)
+-                interaction.requestLayout(true)
+-            }))
+-            items[.peerInfoTrailing]!.append(PeerInfoScreenCommentItem(id: ItemLunagramHideInfo, text: isHidden
+-                ? "Он не видит твою аватарку, описание, время в сети и номер. Переписке это не мешает: из его списка чатов ты не пропал. Своё время в сети скрыто — значит, и его время ты не видишь: так устроен сам Telegram."
+-                : "Закроет от него аватарку, описание, время в сети и номер — по-настоящему, через настройки Telegram. Писать друг другу можно по-прежнему."))
+-
+             // Стать копией этого человека: своё прежнее сохраняем и возвращаем
+             // по тому же ползунку.
+             let isCopy = lunagramCopiedPeerId() == user.id.toInt64()
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index 80e40783..e4a73347 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -1344,6 +1344,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             self.contextValue = context
+             if let context = context {
+                 setupLegacyComponents(context: context.context)
++                // Lunagram: прибираем за снятой функцией скрытия — возвращаем
++                // приватность тем, кого она успела спрятать.
++                lunagramCleanUpHiding(context: context.context)
+                 let isReady = context.isReady.get()
+                 contextReadyDisposable.set((isReady
+                 |> filter { $0 }
+diff --git a/submodules/TelegramUI/Sources/LunagramHideCleanup.swift b/submodules/TelegramUI/Sources/LunagramHideCleanup.swift
+new file mode 100644
+index 00000000..768ba705
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramHideCleanup.swift
+@@ -0,0 +1,188 @@
++import Foundation
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import AccountContext
++import Lunagram
++
++// Lunagram: уборка за снятой функцией скрытия.
++//
++// Раньше здесь было «Скрыть меня от него» и «Скрыть меня от всех»: они
++// закрывали аватарку, описание, время в сети и номер — по-настоящему,
++// настройками приватности самого Telegram. Функцию сняли, а настройки на
++// сервере так и остались бы: без кнопки их было бы уже не вернуть.
++//
++// Поэтому при первом запуске без неё возвращаем всё как было: у кого есть
++// запас прежних настроек — из запаса, а спрятанных поимённо просто
++// вычёркиваем из списков «кому не видно». Получилось — стираем свои записи,
++// не получилось (нет сети) — записи остаются, попробуем в следующий раз.
++
++private var lunagramHideCleanupStarted = false
++
++private let lunagramHideTypes: [UpdateSelectiveAccountPrivacySettingsType] = [.presence, .profilePhoto, .bio, .phoneNumber]
++
++/// Запас прежних настроек, каким его писала снятая функция.
++private struct LunagramPrivacyBackup: Codable {
++    var option: Int
++    var enableFor: [Int64]
++    var disableFor: [Int64]
++    var enableForPremium: Bool
++    var enableForBots: Bool
++    var enableForCloseFriends: Bool
++}
++
++private func lunagramBackupKey(_ type: UpdateSelectiveAccountPrivacySettingsType) -> String {
++    switch type {
++    case .presence:
++        return "presence"
++    case .profilePhoto:
++        return "photo"
++    case .bio:
++        return "bio"
++    case .phoneNumber:
++        return "phone"
++    default:
++        return "other"
++    }
++}
++
++private func lunagramCurrent(_ settings: AccountPrivacySettings, _ type: UpdateSelectiveAccountPrivacySettingsType) -> SelectivePrivacySettings? {
++    switch type {
++    case .presence:
++        return settings.presence
++    case .profilePhoto:
++        return settings.profilePhoto
++    case .bio:
++        return settings.bio
++    case .phoneNumber:
++        return settings.phoneNumber
++    default:
++        return nil
++    }
++}
++
++/// Настройка из запаса. Людей в списках узнаём по номерам — кого сервер не
++/// отдал, того в список не вносим: без самого человека Telegram его и не
++/// примет.
++private func lunagramRestored(_ backup: LunagramPrivacyBackup, peers: [PeerId: SelectivePrivacyPeer]) -> SelectivePrivacySettings {
++    func map(_ ids: [Int64]) -> [PeerId: SelectivePrivacyPeer] {
++        var result: [PeerId: SelectivePrivacyPeer] = [:]
++        for id in ids {
++            let peerId = PeerId(id)
++            if let peer = peers[peerId] {
++                result[peerId] = peer
++            }
++        }
++        return result
++    }
++    switch backup.option {
++    case 1:
++        return .enableContacts(enableFor: map(backup.enableFor), disableFor: map(backup.disableFor), enableForPremium: backup.enableForPremium, enableForBots: backup.enableForBots)
++    case 2:
++        return .disableEveryone(enableFor: map(backup.enableFor), enableForCloseFriends: backup.enableForCloseFriends, enableForPremium: backup.enableForPremium, enableForBots: backup.enableForBots)
++    default:
++        return .enableEveryone(disableFor: map(backup.disableFor))
++    }
++}
++
++/// Вычёркивает спрятанных из списка «кому не видно».
++private func lunagramWithoutHidden(_ settings: SelectivePrivacySettings, hidden: [PeerId]) -> SelectivePrivacySettings {
++    if hidden.isEmpty {
++        return settings
++    }
++    switch settings {
++    case let .enableEveryone(disableFor):
++        var disableFor = disableFor
++        for peerId in hidden {
++            disableFor.removeValue(forKey: peerId)
++        }
++        return .enableEveryone(disableFor: disableFor)
++    case let .enableContacts(enableFor, disableFor, enableForPremium, enableForBots):
++        var disableFor = disableFor
++        for peerId in hidden {
++            disableFor.removeValue(forKey: peerId)
++        }
++        return .enableContacts(enableFor: enableFor, disableFor: disableFor, enableForPremium: enableForPremium, enableForBots: enableForBots)
++    case .disableEveryone:
++        // «Никому»: там прятали не списком, а тем, что человека в список
++        // видящих не вносили. Сами вносить не станем — откроем лишнего.
++        return settings
++    }
++}
++
++private func lunagramForgetHiding() {
++    LunagramSettings.hiddenPeers = []
++    LunagramSettings.hiddenFromEveryone = false
++    LunagramSettings.privacyBackupData = nil
++}
++
++/// Вернуть приватность и забыть о скрытии. Зовётся один раз за запуск.
++func lunagramCleanUpHiding(context: AccountContext) {
++    if lunagramHideCleanupStarted {
++        return
++    }
++    let hiddenIds = LunagramSettings.hiddenPeers.map { PeerId($0) }
++    let backupData = LunagramSettings.privacyBackupData
++    if hiddenIds.isEmpty, backupData == nil, !LunagramSettings.hiddenFromEveryone {
++        return
++    }
++    lunagramHideCleanupStarted = true
++
++    let backup = backupData.flatMap { try? JSONDecoder().decode([String: LunagramPrivacyBackup].self, from: $0) }
++
++    // Людей, которые понадобятся в списках, спрашиваем у сервера разом.
++    var wantedIds = Set(hiddenIds)
++    if let backup {
++        for saved in backup.values {
++            for id in saved.enableFor {
++                wantedIds.insert(PeerId(id))
++            }
++            for id in saved.disableFor {
++                wantedIds.insert(PeerId(id))
++            }
++        }
++    }
++    let ids = Array(wantedIds)
++    let peersSignal: Signal<[PeerId: EnginePeer?], NoError> = ids.isEmpty
++        ? .single([:])
++        : context.engine.data.get(EngineDataMap(ids.map { TelegramEngine.EngineData.Item.Peer.Peer(id: $0) }))
++
++    let _ = (combineLatest(
++        peersSignal,
++        context.engine.privacy.requestAccountPrivacySettings() |> take(1)
++    )
++    |> deliverOnMainQueue).startStandalone(next: { loaded, settings in
++        var peers: [PeerId: SelectivePrivacyPeer] = [:]
++        for (peerId, maybePeer) in loaded {
++            if let peer = maybePeer {
++                peers[peerId] = SelectivePrivacyPeer(peer: peer, participantCount: nil)
++            }
++        }
++
++        var updates: [Signal<Void, NoError>] = []
++        for type in lunagramHideTypes {
++            let base: SelectivePrivacySettings
++            if let saved = backup?[lunagramBackupKey(type)] {
++                base = lunagramRestored(saved, peers: peers)
++            } else if let current = lunagramCurrent(settings, type) {
++                base = current
++            } else {
++                continue
++            }
++            let updated = lunagramWithoutHidden(base, hidden: hiddenIds)
++            if let current = lunagramCurrent(settings, type), updated == current {
++                continue
++            }
++            updates.append(context.engine.privacy.updateSelectiveAccountPrivacySettings(type: type, settings: updated))
++        }
++
++        if updates.isEmpty {
++            lunagramForgetHiding()
++            return
++        }
++        let _ = (combineLatest(updates)
++        |> deliverOnMainQueue).startStandalone(completed: {
++            lunagramForgetHiding()
++        })
++    })
++}
