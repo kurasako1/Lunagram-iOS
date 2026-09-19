@@ -61,7 +61,7 @@ index a3ff6065..194edc0a 100644
              return text
 diff --git a/submodules/Lunagram/Sources/LunagramTextTransform.swift b/submodules/Lunagram/Sources/LunagramTextTransform.swift
 new file mode 100644
-index 00000000..3555ffc8
+index 00000000..8b0d94c7
 --- /dev/null
 +++ b/submodules/Lunagram/Sources/LunagramTextTransform.swift
 @@ -0,0 +1,237 @@
@@ -112,9 +112,9 @@ index 00000000..3555ffc8
 +        case .binary:
 +            return LunagramTextTransform.toBinary(text)
 +        case .bubble:
-+            return LunagramTextTransform.mapped(text, LunagramTextTransform.bubble, reversed: false)
++            return LunagramTextTransform.mapped(text, LunagramTextTransform.bubbleTable, reversed: false)
 +        case .upsideDown:
-+            return LunagramTextTransform.mapped(text, LunagramTextTransform.flipped, reversed: true)
++            return LunagramTextTransform.mapped(text, LunagramTextTransform.flippedTable, reversed: true)
 +        case .wide:
 +            return LunagramTextTransform.toWide(text)
 +        }
@@ -140,7 +140,7 @@ index 00000000..3555ffc8
 +        for character in text {
 +            if character == " " {
 +                parts.append("/")
-+            } else if let code = morse[Character(character.uppercased())] {
++            } else if let code = morseTable[Character(character.uppercased())] {
 +                parts.append(code)
 +            } else {
 +                parts.append(String(character))
@@ -194,7 +194,7 @@ index 00000000..3555ffc8
 +
 +    // MARK: Таблички
 +
-+    private static let morse: [Character: String] = [
++    private static let morseTable: [Character: String] = [
 +        "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
 +        "G": "--.", "H": "....", "I": "..", "J": ".---", "K": "-.-", "L": ".-..",
 +        "M": "--", "N": "-.", "O": "---", "P": ".--.", "Q": "--.-", "R": ".-.",
@@ -214,7 +214,7 @@ index 00000000..3555ffc8
 +        "Э": "..-..", "Ю": "..--", "Я": ".-.-"
 +    ]
 +
-+    private static let bubble: [Character: String] = [
++    private static let bubbleTable: [Character: String] = [
 +        "a": "ⓐ", "b": "ⓑ", "c": "ⓒ", "d": "ⓓ", "e": "ⓔ", "f": "ⓕ", "g": "ⓖ",
 +        "h": "ⓗ", "i": "ⓘ", "j": "ⓙ", "k": "ⓚ", "l": "ⓛ", "m": "ⓜ", "n": "ⓝ",
 +        "o": "ⓞ", "p": "ⓟ", "q": "ⓠ", "r": "ⓡ", "s": "ⓢ", "t": "ⓣ", "u": "ⓤ",
@@ -227,7 +227,7 @@ index 00000000..3555ffc8
 +        "5": "⑤", "6": "⑥", "7": "⑦", "8": "⑧", "9": "⑨"
 +    ]
 +
-+    private static let flipped: [Character: String] = [
++    private static let flippedTable: [Character: String] = [
 +        "a": "ɐ", "b": "q", "c": "ɔ", "d": "p", "e": "ǝ", "f": "ɟ", "g": "ƃ",
 +        "h": "ɥ", "i": "ᴉ", "j": "ɾ", "k": "ʞ", "l": "l", "m": "ɯ", "n": "u",
 +        "o": "o", "p": "d", "q": "b", "r": "ɹ", "s": "s", "t": "ʇ", "u": "n",
