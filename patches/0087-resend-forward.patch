@@ -1,0 +1,265 @@
+diff --git a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+index 6cf628f0..cefd220f 100644
+--- a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
++++ b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+@@ -570,6 +570,17 @@ private func opportunisticallyTransformOutgoingMedia(network: Network, postbox:
+ }
+ 
+ public func enqueueMessages(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[MessageId?], NoError> {
++    // Lunagram: пересылку из закрытого канала сервер не пропустит, поэтому
++    // такое сообщение пересобирается в своё. Подробности — в
++    // LunagramResendForward. Когда пересобирать нечего, список приходит
++    // нетронутым, и всё идёт как раньше.
++    return lunagramResendRestricted(account: account, messages: messages)
++    |> mapToSignal { messages -> Signal<[MessageId?], NoError> in
++        return enqueueMessagesImpl(account: account, peerId: peerId, messages: messages)
++    }
++}
++
++private func enqueueMessagesImpl(account: Account, peerId: PeerId, messages: [EnqueueMessage]) -> Signal<[MessageId?], NoError> {
+     let signal: Signal<[(Bool, EnqueueMessage)], NoError>
+     if let transformOutgoingMessageMedia = account.transformOutgoingMessageMedia {
+         signal = opportunisticallyTransformOutgoingMedia(network: account.network, postbox: account.postbox, transformOutgoingMessageMedia: transformOutgoingMessageMedia, messages: messages, userInteractive: true)
+diff --git a/submodules/TelegramCore/Sources/PendingMessages/LunagramResendForward.swift b/submodules/TelegramCore/Sources/PendingMessages/LunagramResendForward.swift
+new file mode 100644
+index 00000000..06fa1604
+--- /dev/null
++++ b/submodules/TelegramCore/Sources/PendingMessages/LunagramResendForward.swift
+@@ -0,0 +1,174 @@
++import Foundation
++import Postbox
++import SwiftSignalKit
++import LunagramGhost
++
++// Lunagram: пересылка из закрытых каналов — пересъёмкой.
++//
++// Запрет в таком канале стоит в двух местах. Кнопки прячет сам клиент — их
++// возвращает настройка «Копирование из закрытых каналов». Но и сервер такое
++// сообщение пересылать не даёт: на просьбу переслать он отвечает отказом, и
++// настройка тут бессильна.
++//
++// Поэтому пересылаем иначе: берём сообщение, скачиваем вложение и
++// складываем из него своё — обычное, которое уходит как всё остальное. У
++// получателя оно будет без пометки «переслано»: сослаться на исходник
++// нельзя, для сервера его как будто нет.
++//
++// Так же делает AyuGram на ПК. Цена — время: большое видео сначала
++// скачивается, потом закачивается заново. Если за две минуты не скачалось,
++// уходит хотя бы текст.
++//
++// Живёт подмена перед самой отправкой — там, куда приходят все экраны разом:
++// и «Переслать» из переписки, и «Поделиться», и поиск, и профиль. Когда
++// пересобирать нечего, список проходит насквозь и ничего не меняется.
++
++/// Заменяет пересылки из закрытых каналов на свои сообщения.
++func lunagramResendRestricted(account: Account, messages: [EnqueueMessage]) -> Signal<[EnqueueMessage], NoError> {
++    guard LunagramRestrictionSettings.openRestricted else {
++        return .single(messages)
++    }
++
++    var sources: [MessageId] = []
++    for message in messages {
++        if case let .forward(source, _, _, _, _) = message {
++            sources.append(source)
++        }
++    }
++    if sources.isEmpty {
++        return .single(messages)
++    }
++
++    return account.postbox.transaction { transaction -> [Message] in
++        return sources.compactMap { id -> Message? in
++            guard let message = transaction.getMessage(id) else {
++                return nil
++            }
++            if message.flags.contains(.CopyProtected) {
++                return message
++            }
++            guard let peer = transaction.getPeer(id.peerId), peer.isTrulyCopyProtectionEnabled else {
++                return nil
++            }
++            return message
++        }
++    }
++    |> mapToSignal { protected -> Signal<[EnqueueMessage], NoError> in
++        if protected.isEmpty {
++            return .single(messages)
++        }
++        return combineLatest(protected.map { lunagramRebuilt(account: account, message: $0) })
++        |> map { rebuilt -> [EnqueueMessage] in
++            var replacements: [MessageId: EnqueueMessage] = [:]
++            for item in rebuilt {
++                if let item = item {
++                    replacements[item.0] = item.1
++                }
++            }
++            if replacements.isEmpty {
++                return messages
++            }
++            return messages.map { message -> EnqueueMessage in
++                guard case let .forward(source, threadId, _, _, correlationId) = message, let replacement = replacements[source] else {
++                    return message
++                }
++                // Ветку и номер для связи берём у пересылки, которую
++                // подменяем: по ним экран находит своё сообщение.
++                guard case let .message(text, attributes, inlineStickers, mediaReference, _, replyToMessageId, replyToStoryId, localGroupingKey, _, bubbleUp) = replacement else {
++                    return replacement
++                }
++                return .message(text: text, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUp)
++            }
++        }
++    }
++}
++
++/// Своё сообщение взамен чужого: текст как есть, вложение — скачанным файлом.
++private func lunagramRebuilt(account: Account, message: Message) -> Signal<(MessageId, EnqueueMessage)?, NoError> {
++    let text = message.text
++    var attributes: [MessageAttribute] = []
++    if let entities = message.textEntitiesAttribute {
++        attributes.append(TextEntitiesMessageAttribute(entities: entities.entities))
++    }
++
++    let plainText: (MessageId, EnqueueMessage)? = text.isEmpty
++        ? nil
++        : (message.id, .message(text: text, attributes: attributes, inlineStickers: [:], mediaReference: nil, threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
++
++    var image: TelegramMediaImage?
++    var file: TelegramMediaFile?
++    for media in message.media {
++        if let value = media as? TelegramMediaImage {
++            image = value
++        } else if let value = media as? TelegramMediaFile {
++            file = value
++        }
++    }
++
++    let reference: AnyMediaReference
++    let resource: MediaResource
++    let contentType: MediaResourceUserContentType
++    if let file = file {
++        reference = .message(message: MessageReference(message), media: file)
++        resource = file.resource
++        contentType = .file
++    } else if let image = image, let representation = largestImageRepresentation(image.representations) {
++        reference = .message(message: MessageReference(message), media: image)
++        resource = representation.resource
++        contentType = .image
++    } else {
++        return .single(plainText)
++    }
++
++    return lunagramFetched(account: account, userLocation: .peer(message.id.peerId), contentType: contentType, reference: reference, resource: resource)
++    |> map { data -> (MessageId, EnqueueMessage)? in
++        guard let data = data, !data.isEmpty else {
++            return plainText
++        }
++        let ownResource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
++        account.postbox.mediaBox.storeResourceData(ownResource.id, data: data, synchronous: true)
++
++        let media: Media
++        if let file = file {
++            media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: ownResource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: file.mimeType, size: Int64(data.count), attributes: lunagramOwnAttributes(file.attributes), alternativeRepresentations: [])
++        } else if let image = image, let representation = largestImageRepresentation(image.representations) {
++            media = TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: Int64.random(in: Int64.min ... Int64.max)), representations: [TelegramMediaImageRepresentation(dimensions: representation.dimensions, resource: ownResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false)], immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])
++        } else {
++            return plainText
++        }
++
++        return (message.id, .message(text: text, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
++    }
++}
++
++/// Скачать вложение и отдать его целиком. Нет сети — через две минуты пусто.
++private func lunagramFetched(account: Account, userLocation: MediaResourceUserLocation, contentType: MediaResourceUserContentType, reference: AnyMediaReference, resource: MediaResource) -> Signal<Data?, NoError> {
++    let ready: Signal<Data?, NoError> = Signal { subscriber in
++        let fetch = fetchedMediaResource(mediaBox: account.postbox.mediaBox, userLocation: userLocation, userContentType: contentType, reference: reference.resourceReference(resource)).startStrict()
++        let data = (account.postbox.mediaBox.resourceData(resource)
++        |> filter { $0.complete }
++        |> take(1)).startStrict(next: { value in
++            subscriber.putNext(try? Data(contentsOf: URL(fileURLWithPath: value.path), options: .mappedIfSafe))
++            subscriber.putCompletion()
++        })
++        return ActionDisposable {
++            fetch.dispose()
++            data.dispose()
++        }
++    }
++    return ready
++    |> timeout(120.0, queue: Queue.concurrentDefaultQueue(), alternate: .single(nil))
++}
++
++/// Приметы чужого набора убираем: стикер и эмодзи ссылаются на набор, а наш
++/// файл в нём не лежит — такую отправку сервер не примет.
++private func lunagramOwnAttributes(_ attributes: [TelegramMediaFileAttribute]) -> [TelegramMediaFileAttribute] {
++    return attributes.filter { attribute in
++        switch attribute {
++        case .Sticker, .CustomEmoji, .HasLinkedStickers:
++            return false
++        default:
++            return true
++        }
++    }
++}
+diff --git a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+index 10cc4a2b..3e287a10 100644
+--- a/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
++++ b/submodules/TelegramCore/Sources/Utils/PeerUtils.swift
+@@ -258,6 +258,12 @@ public extension Peer {
+         if LunagramRestrictionSettings.openRestricted {
+             return false
+         }
++        return self.isTrulyCopyProtectionEnabled
++    }
++
++    /// Запрет как он есть, без нашей поблажки. Нужен пересылке: её не пускает
++    /// сам сервер, и, чтобы пересобрать сообщение, надо знать правду.
++    var isTrulyCopyProtectionEnabled: Bool {
+         switch self {
+         case let group as TelegramGroup:
+             return group.flags.contains(.copyProtectionEnabled)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index c2ce6534..5547743e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -2474,7 +2474,7 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.toggle(.suggestGhostForStories, value(.suggestGhostForStories), "Предлагать призрака для сторис", nil))
+     rows.info("Показывает предупреждение перед открытием сторис, предлагая включить режим призрака.")
+     rows.row(.toggle(.openRestricted, value(.openRestricted), "Копирование из закрытых каналов", "lock.open"))
+-    rows.info("В каналах и группах, где копировать запрещено, вернутся «Копировать», выделение текста и сохранение картинок и видео в галерею.\n\nПересылка пока не возвращается: её не пускает сам сервер, а не кнопка. Чтобы переслать, сообщение надо собрать заново — картинку скачать и отправить как свою. Сделаю отдельно.")
++    rows.info("В каналах и группах, где копировать запрещено, вернутся «Копировать», выделение текста, сохранение картинок и видео в галерею и «Переслать».\n\nПересылка идёт в обход: сервер такие сообщения пересылать не даёт, поэтому вложение скачивается и отправляется заново, как своё. Поэтому у получателя не будет пометки «переслано», а большое видео уходит не сразу.")
+     rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", nil))
+     rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", nil))
+     rows.split()
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index f059a6bd..d0a3bc22 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -2768,9 +2768,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                             }
+                         }
+                         if !message.containsSecretMedia && !isAction && !isShareProtected {
+-                            // Lunagram: пересылку запрещает сам сервер, одной
+-                            // кнопкой её не вернуть — проверяем запрет как есть.
+-                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isTrulyCopyProtected() {
++                            if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.isCopyProtected() {
+                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                     optionsMap[id]!.insert(.forward)
+                                 }
+@@ -2786,7 +2784,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                         }
+                     } else if let group = peer as? TelegramGroup {
+                         if message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia {
+-                            if !isAction && !message.isTrulyCopyProtected() && !isShareProtected {
++                            if !isAction && !message.isCopyProtected() && !isShareProtected {
+                                 if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                     optionsMap[id]!.insert(.forward)
+                                 }
+@@ -2805,7 +2803,7 @@ func chatAvailableMessageActionsImpl(engine: TelegramEngine, accountPeerId: Engi
+                             optionsMap[id]!.insert(.report)
+                         }
+                     } else if let user = peer as? TelegramUser {
+-                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isTrulyCopyProtected() && !isShareProtected {
++                        if !isScheduled && message.id.peerId.namespace != Namespaces.Peer.SecretChat && !message.containsSecretMedia && !isAction && !message.id.peerId.isReplies && !message.isCopyProtected() && !isShareProtected {
+                             if !(message.flags.isSending || message.flags.contains(.Failed)) {
+                                 optionsMap[id]!.insert(.forward)
+                             }
