@@ -1,0 +1,183 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 72b1c74a..ac129e13 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -110,6 +110,8 @@ public final class LunagramSettings {
+         static let hiddenFromEveryone = "lunagram.hide.everyone"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+         static let showDescriptions = "lunagram.settings.showDescriptions"
++        static let glassSquare = "lunagram.glass.square"
++        static let glassCorner = "lunagram.glass.corner"
+         static let textTransform = "lunagram.transform.enabled"
+         static let textTransformMode = "lunagram.transform.mode"
+         static let textTransformEmoji = "lunagram.transform.emoji"
+@@ -720,6 +722,32 @@ public final class LunagramSettings {
+     }
+ 
+     /// Переводит текст исходящего сообщения в выбранный стиль.
++    // MARK: Квадратнее стекло
++
++    /// «Квадратнее матовые панели» — резать ли скругление у стекла.
++    public static var glassSquare: Bool {
++        get { return defaults.bool(forKey: Key.glassSquare) }
++        set {
++            defaults.set(newValue, forKey: Key.glassSquare)
++            changed()
++        }
++    }
++
++    /// Какую долю телеграмовского скругления оставлять, 0…100 %.
++    public static var glassCorner: Int {
++        get { return clamped(Key.glassCorner, 0, 100, 50) }
++        set { setClamped(newValue, Key.glassCorner, 0, 100) }
++    }
++
++    /// Множитель для скругления стекла. Выключено — единица, и ни одна
++    /// панель не меняется.
++    public static var glassCornerFactor: CGFloat {
++        guard glassSquare else {
++            return 1.0
++        }
++        return CGFloat(glassCorner) / 100.0
++    }
++
+     /// Мультипоиск: считать ли «|» разделителем. Сама настройка лежит в
+     /// LunagramSearchSettings — её читает сетевая часть Telegram.
+     public static var multiSearch: Bool {
+diff --git a/submodules/TelegramUI/Components/GlassBackgroundComponent/BUILD b/submodules/TelegramUI/Components/GlassBackgroundComponent/BUILD
+index 03e0c56d..b0416695 100644
+--- a/submodules/TelegramUI/Components/GlassBackgroundComponent/BUILD
++++ b/submodules/TelegramUI/Components/GlassBackgroundComponent/BUILD
+@@ -16,6 +16,7 @@ swift_library(
+         "//submodules/UIKitRuntimeUtils",
+         "//submodules/AppBundle",
+         "//submodules/TelegramUI/Components/MeshTransform",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+index 39fa7c4f..13941db7 100644
+--- a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
++++ b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+@@ -6,6 +6,7 @@ import ComponentDisplayAdapters
+ import UIKitRuntimeUtils
+ import CoreImage
+ import AppBundle
++import Lunagram
+ 
+ private final class ContentContainer: UIView {
+     private let maskContentView: UIView
+@@ -595,12 +596,17 @@ public class GlassBackgroundView: UIView {
+     }
+     
+     public func update(size: CGSize, cornerRadius: CGFloat, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
+-        let shape: Shape = .roundedRect(cornerRadius: cornerRadius)
++        // Lunagram: «Квадратнее матовые панели» — скругление у стекла режется
++        // до выбранной доли. Выключено — множитель единица, и всё как было.
++        let shape: Shape = .roundedRect(cornerRadius: cornerRadius * LunagramSettings.glassCornerFactor)
+         self.update(size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible, transition: transition)
+     }
+ 
+     public func update(size: CGSize, cornerRadii: CornerRadii, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
+-        let shape: Shape = .customRoundedRect(cornerRadii: cornerRadii)
++        // То же самое для панелей, у которых углы скруглены по-разному.
++        let factor = LunagramSettings.glassCornerFactor
++        let radii = factor == 1.0 ? cornerRadii : CornerRadii(topLeft: cornerRadii.topLeft * factor, topRight: cornerRadii.topRight * factor, bottomLeft: cornerRadii.bottomLeft * factor, bottomRight: cornerRadii.bottomRight * factor)
++        let shape: Shape = .customRoundedRect(cornerRadii: radii)
+         self.update(size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible, transition: transition)
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 63cea1e9..3eae91a0 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -72,6 +72,7 @@ private enum LunagramToggle: Int32 {
+     case yeTilde
+     case yeKaomoji
+     case multiSearch
++    case glassSquare
+ 
+     var value: Bool {
+         switch self {
+@@ -179,6 +180,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.yeKaomoji
+         case .multiSearch:
+             return LunagramSettings.multiSearch
++        case .glassSquare:
++            return LunagramSettings.glassSquare
+         }
+     }
+ 
+@@ -288,6 +291,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.yeKaomoji = value
+         case .multiSearch:
+             LunagramSettings.multiSearch = value
++        case .glassSquare:
++            LunagramSettings.glassSquare = value
+         }
+     }
+ 
+@@ -397,6 +402,8 @@ private enum LunagramToggle: Int32 {
+             return "Каомодзи в конце"
+         case .multiSearch:
+             return "Поиск сразу по нескольким словам"
++        case .glassSquare:
++            return "Квадратнее матовые панели"
+         }
+     }
+ 
+@@ -453,7 +460,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform, .yeStyle, .yeExtreme, .yeWords, .yeNyacator, .yeReplaceRL, .yeSuffix, .yeLowercase, .yeUpper, .yePunct, .yeTilde, .yeKaomoji, .multiSearch, .glassSquare:
+             return nil
+         }
+     }
+@@ -619,6 +626,8 @@ extension LunagramToggle {
+             return "face.smiling.inverse"
+         case .multiSearch:
+             return "line.3.horizontal.decrease.circle"
++        case .glassSquare:
++            return "square.on.square"
+         }
+     }
+ }
+@@ -1356,6 +1365,7 @@ private struct LunagramMediaState: Equatable {
+     var composeDensity: Int = 75
+     var transformMode: Int = 0
+     var transformEmoji: Int = 6
++    var glassCorner: Int = 50
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1374,6 +1384,7 @@ private struct LunagramMediaState: Equatable {
+         state.composeDensity = LunagramSettings.composeDensity
+         state.transformMode = LunagramSettings.textTransformMode
+         state.transformEmoji = LunagramSettings.textTransformEmoji
++        state.glassCorner = LunagramSettings.glassCorner
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1974,6 +1985,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBackgroundDim = value
+         case 41:
+             LunagramSettings.profileBackgroundBlur = value
++        case 95:
++            LunagramSettings.glassCorner = value
+         case 50:
+             LunagramSettings.sendWithoutSound = value
+         default:
+@@ -2613,6 +2626,10 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.split()
+     rows.row(.toggle(.saveForBots, value(.saveForBots), "Сохранять в чатах с ботами", nil))
+ 
++    rows.row(.toggle(.glassSquare, value(.glassSquare), "Квадратнее матовые панели", "square.on.square"))
++    rows.row(.slider(95, "Скругление панелей", media.glassCorner, 0, 100, 5))
++    rows.info("Матовые панели — полоса ввода, меню, всплывающие окошки — скругляются так, как решил Telegram. Ползунок оставляет от этого скругления свою долю: 100 % — как было, 0 % — прямые углы.\n\nОткликается на лету, но панель перерисовывается, когда её показывают заново.")
++
+     rows.header("Кавайный стиль")
+     rows.row(.toggle(.yeStyle, value(.yeStyle), "Кавайный стиль", "heart.text.square"))
+     rows.row(.toggle(.yeExtreme, value(.yeExtreme), "Экстремальный режим", "flame"))
