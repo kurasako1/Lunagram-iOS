@@ -85,10 +85,51 @@ index 37d5552e..26a7e21f 100644
          "//submodules/InvisibleInkDustNode",
          "//submodules/TelegramUI/Components/EmojiTextAttachmentView",
 diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
-index c8abd5cd..8f6330dd 100644
+index c8abd5cd..1b1b24a0 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
 +++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
-@@ -1056,6 +1056,9 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+@@ -372,7 +372,15 @@ private final class ChatInputTextContainer: NSTextContainer {
+     }
+ }
+ 
+-private final class ChatInputLegacyLayoutManager: NSLayoutManager {
++final class ChatInputLegacyLayoutManager: NSLayoutManager {
++    /// Lunagram: пока набранная буква летит на своё место, настоящую не
++    /// рисуем — иначе их было бы две. Прячем именно в отрисовке: текста это
++    /// не касается, и отправка с разметкой ничего не замечают.
++    ///
++    /// На маке для такого есть «временные приметы» у самого движка, на
++    /// айфоне их нет — это стоило сборки №101. Поэтому прячем сами.
++    var lunagramHiddenRange: NSRange?
++
+     override init() {
+         super.init()
+     }
+@@ -398,7 +406,22 @@ private final class ChatInputLegacyLayoutManager: NSLayoutManager {
+             super.drawGlyphs(forGlyphRange: NSRange(location: i, length: 1), at: location)
+         }
+         context.setAlpha(1.0)*/
+-        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
++        guard let hidden = self.lunagramHiddenRange else {
++            super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
++            return
++        }
++        // Рисуем всё, кроме спрятанного куска: до него и после него.
++        let hiddenGlyphs = self.glyphRange(forCharacterRange: hidden, actualCharacterRange: nil)
++        let start = glyphsToShow.location
++        let end = start + glyphsToShow.length
++        let beforeEnd = min(hiddenGlyphs.location, end)
++        if beforeEnd > start {
++            super.drawGlyphs(forGlyphRange: NSRange(location: start, length: beforeEnd - start), at: origin)
++        }
++        let afterStart = max(start, hiddenGlyphs.location + hiddenGlyphs.length)
++        if end > afterStart {
++            super.drawGlyphs(forGlyphRange: NSRange(location: afterStart, length: end - afterStart), at: origin)
++        }
+     }
+ }
+ 
+@@ -1056,6 +1079,9 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
      public var onUpdateLayout: (() -> Void)?
          
      private let displayInternal: ChatInputTextInternal
@@ -98,7 +139,7 @@ index c8abd5cd..8f6330dd 100644
      private let measureInternal: ChatInputTextInternal
      
      private var validLayoutSize: CGSize?
-@@ -1219,6 +1222,9 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+@@ -1219,6 +1245,9 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
  
      @objc public func textViewDidChange(_ textView: UITextView) {
          self.selectionChangedForEditedText = true
@@ -110,10 +151,10 @@ index c8abd5cd..8f6330dd 100644
          
 diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
 new file mode 100644
-index 00000000..1098ab8a
+index 00000000..3d911b05
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,169 @@
 +import Foundation
 +import UIKit
 +import CoreImage
@@ -126,14 +167,13 @@ index 00000000..1098ab8a
 +// размытия, чуть увеличенной и повёрнутой. Пока она летит, настоящая буква
 +// невидима — иначе их было бы две.
 +//
-+// Прячем её не в тексте, а в отрисовке: у NSLayoutManager есть «временные
-+// приметы», которые видит только он и которые к самому тексту отношения не
-+// имеют. Поэтому отправка, свои эмодзи, спойлеры и цитаты ничего не
-+// замечают, а в набранном сообщении ничего лишнего не появляется.
++// Прячем её не в тексте, а в отрисовке: движок текста просто не рисует
++// спрятанный кусок. Самого текста это не касается — отправка, разметка,
++// свои эмодзи, спойлеры и цитаты ничего не замечают.
 +//
-+// Поле ввода Telegram и так рисуется этим движком — переводить его никуда
-+// не пришлось. Я сперва думал, что придётся, и предупредил хозяина; залез
-+// внутрь — оказалось, тревога ложная.
++// На маке для такого есть готовые «временные приметы», на айфоне их нет:
++// это стоило сборки №101. Поэтому прятать умеет сам движок поля ввода —
++// у него завёлся спрятанный кусок.
 +//
 +// Свои эмодзи не трогаем: их рисует не движок текста, а отдельные слои
 +// поверх, и спрятать их временной приметой нечем.
@@ -196,13 +236,16 @@ index 00000000..1098ab8a
 +        }
 +        rect = rect.insetBy(dx: -2.0, dy: -2.0)
 +
-+        let layoutManager = textView.layoutManager
++        guard let layoutManager = textView.layoutManager as? ChatInputLegacyLayoutManager else {
++            return
++        }
 +        let image = UIGraphicsImageRenderer(bounds: rect).image { context in
 +            context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
 +            textView.layer.render(in: context.cgContext)
 +        }
 +
-+        layoutManager.setTemporaryAttributes([.foregroundColor: UIColor.clear], forCharacterRange: range)
++        layoutManager.lunagramHiddenRange = range
++        layoutManager.invalidateDisplay(forCharacterRange: range)
 +
 +        let sharp = UIImageView(image: image)
 +        sharp.frame = rect
@@ -249,14 +292,15 @@ index 00000000..1098ab8a
 +            for view in views {
 +                view.removeFromSuperview()
 +            }
-+            // Снимаем прятки со всего текста разом: пока летела буква, его
-+            // могли и поправить, и тогда прежний кусок указывал бы мимо.
++            // Снимаем прятки. Кусок мог уже уехать — пока буква летела,
++            // текст успели поправить, — поэтому обновляем весь текст.
++            layoutManager.lunagramHiddenRange = nil
 +            guard let textView = textView else {
 +                return
 +            }
 +            let length = textView.textStorage.length
 +            if length > 0 {
-+                textView.layoutManager.setTemporaryAttributes([:], forCharacterRange: NSRange(location: 0, length: length))
++                layoutManager.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: length))
 +            }
 +        })
 +    }
