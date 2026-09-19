@@ -1,0 +1,283 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+index 2c5580a6..3068dae2 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+@@ -123,6 +123,7 @@ swift_library(
+         "//submodules/TooltipUI",
+         "//submodules/TranslateUI",
+         "//submodules/UndoUI",
++        "//submodules/TelegramUI/Components/Stickers/StickerPackEditTitleController",
+         "//submodules/MediaPlayer:UniversalMediaPlayer",
+         "//submodules/WebUI",
+         "//submodules/TelegramUI/Components/MultiScaleTextNode",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift
+index 38b6606e..77f21e8f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatStickers.swift
+@@ -10,6 +10,8 @@ import PresentationDataUtils
+ import AccountContext
+ import ItemListStickerPackItem
+ import StickerPackPreviewUI
++import UndoUI
++import StickerPackEditTitleController
+ import Lunagram
+ 
+ // Lunagram: «Эмодзи и стикеры чата» — перенос задумки плагина
+@@ -25,9 +27,14 @@ import Lunagram
+ // листал. У сервера ничего не спрашиваем — ни одного лишнего запроса, и
+ // Telegram не попросит подождать, как случалось у плагина.
+ //
+-// Чего здесь нет: копирования чужих наборов в свой через @stickers. Это
+-// отдельная машина — разговор с ботом и перезаливка чужих картинок под
+-// своим именем. Скажет хозяин — сделаю отдельно.
++// Найденный набор можно забрать себе целиком: нажал — «Скопировать себе»,
++// и появляется твой собственный набор с теми же картинками.
++//
++// Я думал, для этого нужен разговор с ботом @stickers и перезаливка чужих
++// картинок. Оказалось, ничего подобного: Telegram давно умеет создавать
++// наборы прямо из приложения, а картинки, которые уже лежат на сервере,
++// переливать не надо — они переносятся ссылкой. Копия делается одним
++// запросом и ничего не весит.
+ 
+ private struct LunagramFoundPack {
+     var reference: StickerPackReference
+@@ -43,11 +50,100 @@ private struct LunagramChatStickersData {
+ private final class LunagramChatStickersArguments {
+     let context: AccountContext
+     let open: (StickerPackReference) -> Void
++    var copy: (StickerPackReference) -> Void
++
++    /// Что в каком наборе лежит — нужно, чтобы забрать его себе. Список
++    /// обновляется каждый раз, когда экран пересобирается.
++    var packs: [StickerPackReference: LoadedStickerPack] = [:]
+ 
+-    init(context: AccountContext, open: @escaping (StickerPackReference) -> Void) {
++    init(
++        context: AccountContext,
++        open: @escaping (StickerPackReference) -> Void,
++        copy: @escaping (StickerPackReference) -> Void
++    ) {
+         self.context = context
+         self.open = open
++        self.copy = copy
++    }
++}
++
++/// Забираем набор себе: делаем свой такой же. Картинки не перезаливаются —
++/// те, что уже на сервере, переносятся ссылкой.
++private func lunagramCopyPack(
++    context: AccountContext,
++    info: StickerPackCollectionInfo.Accessor,
++    items: [StickerPackItem],
++    title: String
++) {
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let controller = { () -> ViewController? in
++        return (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? ViewController
++    }
++    guard !items.isEmpty else {
++        controller()?.present(textAlertController(context: context, title: nil, text: "В этом наборе нечего копировать.", actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
++        return
++    }
++
++    var stickers: [ImportSticker] = []
++    var isVideo = false
++    var isAnimated = false
++    for item in items {
++        let file = item.file._parse()
++        var emoji = ""
++        var dimensions = PixelDimensions(width: 512, height: 512)
++        var duration: Double?
++        for attribute in file.attributes {
++            switch attribute {
++            case let .Sticker(displayText, _, _):
++                emoji = displayText
++            case let .CustomEmoji(_, _, alt, _):
++                emoji = alt
++            case let .ImageSize(size):
++                dimensions = size
++            case let .Video(videoDuration, size, _, _, _, _):
++                duration = videoDuration
++                dimensions = size
++            default:
++                break
++            }
++        }
++        if file.mimeType == "video/webm" {
++            isVideo = true
++        } else if file.mimeType == "application/x-tgsticker" {
++            isAnimated = true
++        }
++        stickers.append(ImportSticker(
++            resource: FileMediaReference.standalone(media: file).resourceReference(file.resource),
++            thumbnailResource: nil,
++            emojis: [emoji.isEmpty ? "⭐️" : emoji],
++            dimensions: dimensions,
++            duration: duration,
++            mimeType: file.mimeType,
++            keywords: ""
++        ))
++    }
++
++    let content: CreateStickerSetType.ContentType = isVideo ? .video : (isAnimated ? .animation : .image)
++    let type: CreateStickerSetType = info.flags.contains(.isEmoji)
++        ? .emoji(content: content, textColored: false)
++        : .stickers(content: content)
++
++    // Короткое имя придумываем сами: человеку его всё равно не набирать, а
++    // занятое сервер не примет — тогда скажем об этом словами.
++    let letters = "abcdefghijklmnopqrstuvwxyz"
++    var shortName = "lunagram"
++    for _ in 0 ..< 8 {
++        shortName.append(letters.randomElement() ?? "a")
+     }
++
++    let _ = (context.engine.stickers.createStickerSet(title: title, shortName: shortName, stickers: stickers, thumbnail: nil, type: type, software: nil)
++    |> deliverOnMainQueue).startStandalone(next: { status in
++        if case .complete = status {
++            controller()?.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Набор «\(title)» теперь твой.", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .window(.root))
++        }
++    }, error: { _ in
++        controller()?.present(textAlertController(context: context, title: nil, text: "Не вышло сделать свой набор. Бывает, что Telegram не отдаёт чужие картинки для копирования.", actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
++    })
+ }
+ 
+ /// Проходим по сохранённым сообщениям и считаем, из каких наборов что было.
+@@ -95,14 +191,14 @@ private func lunagramScanChat(context: AccountContext, peerId: EnginePeer.Id, de
+ 
+ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+     case header(Int32, String)
+-    case pack(Int32, StickerPackCollectionInfo.Accessor, StickerPackItem?, String)
++    case pack(Int32, StickerPackReference, StickerPackCollectionInfo.Accessor, StickerPackItem?, String)
+     case info(String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+         case let .header(index, _):
+             return index < 1_000 ? 0 : 1
+-        case let .pack(index, _, _, _):
++        case let .pack(index, _, _, _, _):
+             return index < 1_000 ? 0 : 1
+         case .info:
+             return 2
+@@ -113,7 +209,7 @@ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+         switch self {
+         case let .header(index, _):
+             return index
+-        case let .pack(index, _, _, _):
++        case let .pack(index, _, _, _, _):
+             return index
+         case .info:
+             return 10_000
+@@ -127,8 +223,8 @@ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+                 return true
+             }
+             return false
+-        case let .pack(lhsIndex, lhsInfo, _, lhsCount):
+-            if case let .pack(rhsIndex, rhsInfo, _, rhsCount) = rhs, lhsIndex == rhsIndex, lhsInfo.id == rhsInfo.id, lhsCount == rhsCount {
++        case let .pack(lhsIndex, _, lhsInfo, _, lhsCount):
++            if case let .pack(rhsIndex, _, rhsInfo, _, rhsCount) = rhs, lhsIndex == rhsIndex, lhsInfo.id == rhsInfo.id, lhsCount == rhsCount {
+                 return true
+             }
+             return false
+@@ -149,7 +245,7 @@ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+         switch self {
+         case let .header(_, text):
+             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+-        case let .pack(_, info, topItem, count):
++        case let .pack(_, reference, info, topItem, count):
+             return ItemListStickerPackItem(
+                 presentationData: presentationData,
+                 context: arguments.context,
+@@ -163,7 +259,7 @@ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+                 playAnimatedStickers: true,
+                 sectionId: self.section,
+                 action: {
+-                    arguments.open(.id(id: info.id.id, accessHash: info.accessHash))
++                    arguments.copy(reference)
+                 },
+                 setPackIdWithRevealedOptions: { _, _ in
+                 },
+@@ -181,11 +277,54 @@ private enum LunagramChatStickersEntry: ItemListNodeEntry {
+ }
+ 
+ func lunagramChatStickersController(context: AccountContext, peerId: EnginePeer.Id) -> ViewController {
+-    let arguments = LunagramChatStickersArguments(context: context, open: { reference in
++    let openPack: (StickerPackReference) -> Void = { reference in
+         let navigationController = context.sharedContext.mainWindow?.viewController as? NavigationController
+         let controller = StickerPackScreen(context: context, mainStickerPack: reference, stickerPacks: [reference], parentNavigationController: navigationController)
+         navigationController?.pushViewController(controller)
+-    })
++    }
++    let arguments = LunagramChatStickersArguments(context: context, open: openPack, copy: { _ in })
++    // Нажатие по набору спрашивает, что с ним делать: открыть — или забрать
++    // себе. Открыть стоит первым: чаще всего нужно именно это.
++    let chooseAction: (StickerPackReference) -> Void = { [weak arguments] reference in
++        guard let arguments = arguments else {
++            return
++        }
++        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        let topController = { () -> ViewController? in
++            return (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? ViewController
++        }
++        guard let pack = arguments.packs[reference], case let .result(info, items, _) = pack else {
++            openPack(reference)
++            return
++        }
++        let sheet = ActionSheetController(presentationData: presentationData)
++        sheet.setItemGroups([
++            ActionSheetItemGroup(items: [
++                ActionSheetButtonItem(title: "Открыть набор", action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                    openPack(reference)
++                }),
++                ActionSheetButtonItem(title: "Скопировать себе", action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                    let title = info.title
++                    let alert = stickerPackEditTitleController(context: context, title: "Свой набор", text: "Как назвать твою копию набора «\(title)»?", placeholder: "Название", actionTitle: "Скопировать", value: title, maxLength: 64, apply: { value in
++                        guard let value = value, !value.isEmpty else {
++                            return
++                        }
++                        lunagramCopyPack(context: context, info: info, items: items, title: value)
++                    }, cancel: {})
++                    topController()?.present(alert, in: .window(.root))
++                })
++            ]),
++            ActionSheetItemGroup(items: [
++                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                })
++            ])
++        ])
++        topController()?.present(sheet, in: .window(.root))
++    }
++    arguments.copy = chooseAction
+ 
+     let loaded: Signal<(LunagramChatStickersData, [StickerPackReference: LoadedStickerPack]), NoError> = lunagramScanChat(context: context, peerId: peerId, depth: LunagramSettings.chatStickersDepth)
+     |> mapToSignal { data -> Signal<(LunagramChatStickersData, [StickerPackReference: LoadedStickerPack]), NoError> in
+@@ -220,6 +359,7 @@ func lunagramChatStickersController(context: AccountContext, peerId: EnginePeer.
+     |> deliverOnMainQueue
+     |> map { presentationData, value -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         let (data, packs) = value
++        arguments.packs = packs
+         var entries: [LunagramChatStickersEntry] = []
+ 
+         func append(_ found: [LunagramFoundPack], base: Int32, title: String) {
+@@ -233,7 +373,7 @@ func lunagramChatStickersController(context: AccountContext, peerId: EnginePeer.
+                     entries.append(.header(base - 1, title))
+                     added = true
+                 }
+-                entries.append(.pack(index, info, items.first, "встретилось \(item.count)"))
++                entries.append(.pack(index, item.reference, info, items.first, "встретилось \(item.count)"))
+                 index += 1
+             }
+         }
+@@ -244,7 +384,7 @@ func lunagramChatStickersController(context: AccountContext, peerId: EnginePeer.
+         if entries.isEmpty {
+             entries.append(.info("В сохранённых сообщениях этой переписки своих эмодзи и стикеров не нашлось. Пролистай её подальше и загляни снова: считаем только то, что уже лежит на телефоне."))
+         } else {
+-            entries.append(.info("Просмотрено сообщений: \(data.scanned). Считаем только сохранённое на телефоне — у сервера ничего не спрашиваем.\n\nНажми на набор, чтобы открыть его и добавить себе."))
++            entries.append(.info("Просмотрено сообщений: \(data.scanned). Считаем только сохранённое на телефоне — у сервера ничего не спрашиваем.\n\nНажми на набор: его можно открыть и добавить себе целиком или сделать свою копию с тем же содержимым."))
+         }
+ 
+         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Эмодзи и стикеры чата"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
