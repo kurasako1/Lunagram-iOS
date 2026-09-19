@@ -1,0 +1,454 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index a3ff6065..194edc0a 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -110,6 +110,9 @@ public final class LunagramSettings {
+         static let hiddenFromEveryone = "lunagram.hide.everyone"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+         static let showDescriptions = "lunagram.settings.showDescriptions"
++        static let textTransform = "lunagram.transform.enabled"
++        static let textTransformMode = "lunagram.transform.mode"
++        static let textTransformEmoji = "lunagram.transform.emoji"
+         static let settingIconsMap = "lunagram.settingIcons.map"
+         static let fakeGifts = "lunagram.gifts.fake"
+         static let ownProfileBackup = "lunagram.copy.backup"
+@@ -706,6 +709,46 @@ public final class LunagramSettings {
+     }
+ 
+     /// Переводит текст исходящего сообщения в выбранный стиль.
++    // MARK: Превращение текста
++
++    /// Команда, с которой начинается сообщение для превращения.
++    public static let transformCommand = ".rp "
++
++    /// «Превращение текста» — слушать ли команду .rp в начале сообщения.
++    public static var textTransform: Bool {
++        get { return defaults.bool(forKey: Key.textTransform) }
++        set {
++            defaults.set(newValue, forKey: Key.textTransform)
++            changed()
++        }
++    }
++
++    /// Во что превращать.
++    public static var textTransformMode: Int {
++        get { return clamped(Key.textTransformMode, 0, LunagramTextTransform.allCases.count - 1, 0) }
++        set { setClamped(newValue, Key.textTransformMode, 0, LunagramTextTransform.allCases.count - 1) }
++    }
++
++    /// Какими эмодзи заменять буквы, если выбраны эмодзи.
++    public static var textTransformEmoji: Int {
++        get { return clamped(Key.textTransformEmoji, 0, LunagramEmojiFlavor.allCases.count - 1, 6) }
++        set { setClamped(newValue, Key.textTransformEmoji, 0, LunagramEmojiFlavor.allCases.count - 1) }
++    }
++
++    /// Превращённое сообщение — или пусто, если превращать нечего.
++    public static func transformedForSending(_ text: String) -> String? {
++        guard textTransform, text.hasPrefix(transformCommand) else {
++            return nil
++        }
++        let body = String(text.dropFirst(transformCommand.count))
++        guard !body.isEmpty else {
++            return nil
++        }
++        let mode = LunagramTextTransform(rawValue: textTransformMode) ?? .emoji
++        let flavor = LunagramEmojiFlavor(rawValue: textTransformEmoji) ?? .mixed
++        return mode.apply(to: body, flavor: flavor)
++    }
++
+     public static func styledForSending(_ text: String) -> String {
+         guard let style = LunagramSendFont(rawValue: sendFontStyle), style != .disabled else {
+             return text
+diff --git a/submodules/Lunagram/Sources/LunagramTextTransform.swift b/submodules/Lunagram/Sources/LunagramTextTransform.swift
+new file mode 100644
+index 00000000..3555ffc8
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramTextTransform.swift
+@@ -0,0 +1,237 @@
++import Foundation
++
++/// «Превращение текста» — перенос плагина Text Transformer.
++///
++/// Пишешь в сообщении `.rp привет` — и вместо слова уходит то, что выбрано:
++/// азбука Морзе, двоичный код, пузырьковые буквы, перевёрнутый текст,
++/// широкие буквы или эмодзи. Сама команда съедается, получатель видит
++/// только превращённое.
++///
++/// Всё делается подменой знаков Юникода, поэтому написанное так видно в
++/// любом клиенте. Обратная сторона та же, что и у «Шрифта отправки»: такой
++/// текст не находится поиском Telegram.
++public enum LunagramTextTransform: Int, CaseIterable {
++    case emoji
++    case morse
++    case binary
++    case bubble
++    case upsideDown
++    case wide
++
++    /// Название вместе с примером — видно, как уйдёт сообщение.
++    public var title: String {
++        switch self {
++        case .emoji:
++            return "Эмодзи — 🔥✨🎉"
++        case .morse:
++            return "Азбука Морзе — ... --- ..."
++        case .binary:
++            return "Двоичный код — 01000001"
++        case .bubble:
++            return "Пузырьки — Ⓑⓤⓑⓑⓛⓔ, только латиница"
++        case .upsideDown:
++            return "Вверх ногами — ǝɔuǝʇuǝs"
++        case .wide:
++            return "Широкие буквы — Ｗｉｄｅ, только латиница"
++        }
++    }
++
++    public func apply(to text: String, flavor: LunagramEmojiFlavor) -> String {
++        switch self {
++        case .emoji:
++            return LunagramTextTransform.toEmoji(text, flavor: flavor)
++        case .morse:
++            return LunagramTextTransform.toMorse(text)
++        case .binary:
++            return LunagramTextTransform.toBinary(text)
++        case .bubble:
++            return LunagramTextTransform.mapped(text, LunagramTextTransform.bubble, reversed: false)
++        case .upsideDown:
++            return LunagramTextTransform.mapped(text, LunagramTextTransform.flipped, reversed: true)
++        case .wide:
++            return LunagramTextTransform.toWide(text)
++        }
++    }
++
++    // MARK: Превращения
++
++    private static func toEmoji(_ text: String, flavor: LunagramEmojiFlavor) -> String {
++        let list = flavor.emoji
++        var result = ""
++        for character in text {
++            if character.isWhitespace {
++                result.append(character)
++            } else {
++                result += list.randomElement() ?? "🙂"
++            }
++        }
++        return result
++    }
++
++    private static func toMorse(_ text: String) -> String {
++        var parts: [String] = []
++        for character in text {
++            if character == " " {
++                parts.append("/")
++            } else if let code = morse[Character(character.uppercased())] {
++                parts.append(code)
++            } else {
++                parts.append(String(character))
++            }
++        }
++        return parts.joined(separator: " ")
++    }
++
++    private static func toBinary(_ text: String) -> String {
++        var parts: [String] = []
++        for scalar in text.unicodeScalars {
++            var bits = String(scalar.value, radix: 2)
++            while bits.count < 8 {
++                bits = "0" + bits
++            }
++            parts.append(bits)
++        }
++        return parts.joined(separator: " ")
++    }
++
++    /// Широкие буквы: у знаков ASCII есть двойники во всю ширину клетки,
++    /// ровно на 0xFEE0 дальше. Пробел свой, тоже широкий.
++    private static func toWide(_ text: String) -> String {
++        var result = ""
++        for scalar in text.unicodeScalars {
++            if scalar.value >= 33, scalar.value <= 126, let wide = Unicode.Scalar(scalar.value + 0xFEE0) {
++                result.unicodeScalars.append(wide)
++            } else if scalar == " " {
++                result += "\u{3000}"
++            } else {
++                result.unicodeScalars.append(scalar)
++            }
++        }
++        return result
++    }
++
++    /// Подмена по табличке. Перевёрнутый текст ещё и читается задом наперёд —
++    /// иначе строка не встанет с ног на голову целиком.
++    private static func mapped(_ text: String, _ table: [Character: String], reversed: Bool) -> String {
++        var result = ""
++        for character in text {
++            let piece = table[character] ?? String(character)
++            if reversed {
++                result = piece + result
++            } else {
++                result += piece
++            }
++        }
++        return result
++    }
++
++    // MARK: Таблички
++
++    private static let morse: [Character: String] = [
++        "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
++        "G": "--.", "H": "....", "I": "..", "J": ".---", "K": "-.-", "L": ".-..",
++        "M": "--", "N": "-.", "O": "---", "P": ".--.", "Q": "--.-", "R": ".-.",
++        "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
++        "Y": "-.--", "Z": "--..",
++        "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-",
++        "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----.",
++        ".": ".-.-.-", ",": "--..--", "?": "..--..", "'": ".----.", "!": "-.-.--",
++        "/": "-..-.", "(": "-.--.", ")": "-.--.-", "&": ".-...", ":": "---...",
++        ";": "-.-.-.", "=": "-...-", "+": ".-.-.", "-": "-....-", "_": "..--.-",
++        "\"": ".-..-.", "$": "...-..-", "@": ".--.-.",
++        "А": ".-", "Б": "-...", "В": ".--", "Г": "--.", "Д": "-..", "Е": ".", "Ё": ".",
++        "Ж": "...-", "З": "--..", "И": "..", "Й": ".---", "К": "-.-", "Л": ".-..",
++        "М": "--", "Н": "-.", "О": "---", "П": ".--.", "Р": ".-.", "С": "...",
++        "Т": "-", "У": "..-", "Ф": "..-.", "Х": "....", "Ц": "-.-.", "Ч": "---.",
++        "Ш": "----", "Щ": "--.-", "Ъ": ".--.-.", "Ы": "-.--", "Ь": "-..-",
++        "Э": "..-..", "Ю": "..--", "Я": ".-.-"
++    ]
++
++    private static let bubble: [Character: String] = [
++        "a": "ⓐ", "b": "ⓑ", "c": "ⓒ", "d": "ⓓ", "e": "ⓔ", "f": "ⓕ", "g": "ⓖ",
++        "h": "ⓗ", "i": "ⓘ", "j": "ⓙ", "k": "ⓚ", "l": "ⓛ", "m": "ⓜ", "n": "ⓝ",
++        "o": "ⓞ", "p": "ⓟ", "q": "ⓠ", "r": "ⓡ", "s": "ⓢ", "t": "ⓣ", "u": "ⓤ",
++        "v": "ⓥ", "w": "ⓦ", "x": "ⓧ", "y": "ⓨ", "z": "ⓩ",
++        "A": "Ⓐ", "B": "Ⓑ", "C": "Ⓒ", "D": "Ⓓ", "E": "Ⓔ", "F": "Ⓕ", "G": "Ⓖ",
++        "H": "Ⓗ", "I": "Ⓘ", "J": "Ⓙ", "K": "Ⓚ", "L": "Ⓛ", "M": "Ⓜ", "N": "Ⓝ",
++        "O": "Ⓞ", "P": "Ⓟ", "Q": "Ⓠ", "R": "Ⓡ", "S": "Ⓢ", "T": "Ⓣ", "U": "Ⓤ",
++        "V": "Ⓥ", "W": "Ⓦ", "X": "Ⓧ", "Y": "Ⓨ", "Z": "Ⓩ",
++        "0": "⓪", "1": "①", "2": "②", "3": "③", "4": "④",
++        "5": "⑤", "6": "⑥", "7": "⑦", "8": "⑧", "9": "⑨"
++    ]
++
++    private static let flipped: [Character: String] = [
++        "a": "ɐ", "b": "q", "c": "ɔ", "d": "p", "e": "ǝ", "f": "ɟ", "g": "ƃ",
++        "h": "ɥ", "i": "ᴉ", "j": "ɾ", "k": "ʞ", "l": "l", "m": "ɯ", "n": "u",
++        "o": "o", "p": "d", "q": "b", "r": "ɹ", "s": "s", "t": "ʇ", "u": "n",
++        "v": "ʌ", "w": "ʍ", "x": "x", "y": "ʎ", "z": "z",
++        "A": "∀", "B": "B", "C": "Ɔ", "D": "D", "E": "Ǝ", "F": "Ⅎ", "G": "פ",
++        "H": "H", "I": "I", "J": "ſ", "K": "K", "L": "˥", "M": "W", "N": "N",
++        "O": "O", "P": "Ԁ", "Q": "Q", "R": "R", "S": "S", "T": "┴", "U": "∩",
++        "V": "Λ", "W": "M", "X": "X", "Y": "⅄", "Z": "Z",
++        "0": "0", "1": "Ɩ", "2": "ᄅ", "3": "Ɛ", "4": "ㄣ",
++        "5": "ϛ", "6": "9", "7": "ㄥ", "8": "8", "9": "6",
++        ".": "˙", ",": "'", "?": "¿", "!": "¡", "'": ",",
++        "\"": ",,", "(": ")", ")": "(", "[": "]", "]": "[",
++        "{": "}", "}": "{", "<": ">", ">": "<", "&": "⅋",
++        "А": "∀", "Б": "Ԑ", "В": "ꓭ", "Г": "⅁", "Д": "ᗡ", "Е": "Ǝ", "Ё": "Ǝ",
++        "Ж": "Ӝ", "З": "Ɛ", "И": "И", "Й": "И", "К": "ʞ", "Л": "˥", "М": "W",
++        "Н": "H", "О": "O", "П": "П", "Р": "ꓤ", "С": "Ɔ", "Т": "┴", "У": "ʎ",
++        "Ф": "Ф", "Х": "X", "Ц": "Ц", "Ч": "Ч", "Ш": "Ш", "Щ": "Щ", "Ъ": "Ъ",
++        "Ы": "Ы", "Ь": "Ь", "Э": "Э", "Ю": "Ю", "Я": "ʁ",
++        "а": "ɐ", "б": "ƍ", "в": "ʚ", "г": "ɹ", "д": "ɓ", "е": "ǝ", "ё": "ǝ",
++        "ж": "ж", "з": "ε", "и": "и", "й": "и", "к": "ʞ", "л": "ʃ", "м": "w",
++        "н": "н", "о": "o", "п": "u", "р": "d", "с": "ɔ", "т": "ʇ", "у": "ʎ",
++        "ф": "ф", "х": "х", "ц": "ц", "ч": "ч", "ш": "ш", "щ": "щ", "ъ": "ъ",
++        "ы": "ы", "ь": "ь", "э": "э", "ю": "ю", "я": "ʁ"
++    ]
++}
++
++/// Какими эмодзи заменять буквы, когда выбрано превращение в эмодзи.
++public enum LunagramEmojiFlavor: Int, CaseIterable {
++    case happy
++    case sad
++    case love
++    case animals
++    case food
++    case activities
++    case mixed
++
++    public var title: String {
++        switch self {
++        case .happy:
++            return "Весёлые — 😀😁😂"
++        case .sad:
++            return "Грустные — 😢😭😞"
++        case .love:
++            return "Про любовь — ❤️💕💞"
++        case .animals:
++            return "Звери — 🐶🐱🦊"
++        case .food:
++            return "Еда — 🍎🍕🍔"
++        case .activities:
++            return "Спорт и игры — ⚽🏀🎮"
++        case .mixed:
++            return "Вперемешку — 💯🔥✨"
++        }
++    }
++
++    var emoji: [String] {
++        switch self {
++        case .happy:
++            return ["😀", "😁", "😂", "🤣", "😃", "😄", "😅", "😆", "😉", "😊", "😋", "😎"]
++        case .sad:
++            return ["☹️", "😣", "😖", "😫", "😩", "😢", "😭", "😤", "😠", "😡", "🤬", "😞"]
++        case .love:
++            return ["❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "❣️", "💕", "💞", "💓", "💗"]
++        case .animals:
++            return ["🐶", "🐱", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵"]
++        case .food:
++            return ["🍎", "🍕", "🍔", "🍟", "🌮", "🍗", "🍖", "🍙", "🍣", "🍩", "🍪", "🍫"]
++        case .activities:
++            return ["⚽", "🏀", "🏈", "⚾", "🎾", "🏐", "🏉", "🎱", "🏓", "🏸", "🥊", "🎮"]
++        case .mixed:
++            return ["💯", "🔥", "✨", "🎉", "🎊", "🎁", "👍", "👌", "👏", "🙏", "🤝", "🌈"]
++        }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 5547743e..4b5da3ea 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -59,6 +59,7 @@ private enum LunagramToggle: Int32 {
+     case settingIcons
+     case showDescriptions
+     case openRestricted
++    case textTransform
+ 
+     var value: Bool {
+         switch self {
+@@ -140,6 +141,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showDescriptions
+         case .openRestricted:
+             return LunagramSettings.openRestricted
++        case .textTransform:
++            return LunagramSettings.textTransform
+         }
+     }
+ 
+@@ -223,6 +226,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showDescriptions = value
+         case .openRestricted:
+             LunagramSettings.openRestricted = value
++        case .textTransform:
++            LunagramSettings.textTransform = value
+         }
+     }
+ 
+@@ -306,6 +311,8 @@ private enum LunagramToggle: Int32 {
+             return "Показывать описания"
+         case .openRestricted:
+             return "Копирование из закрытых каналов"
++        case .textTransform:
++            return "Превращение текста"
+         }
+     }
+ 
+@@ -362,7 +369,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .showDescriptions, .openRestricted, .textTransform:
+             return nil
+         }
+     }
+@@ -502,6 +509,8 @@ extension LunagramToggle {
+             return "text.alignleft"
+         case .openRestricted:
+             return "lock.open"
++        case .textTransform:
++            return "wand.and.rays"
+         }
+     }
+ }
+@@ -1237,6 +1246,8 @@ private struct LunagramMediaState: Equatable {
+     var wordingPack: Int = 0
+     var deletedIconColor: UInt32 = 0xFF3B30
+     var composeDensity: Int = 75
++    var transformMode: Int = 0
++    var transformEmoji: Int = 6
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1253,6 +1264,8 @@ private struct LunagramMediaState: Equatable {
+         state.wordingPack = LunagramWording.pack
+         state.deletedIconColor = LunagramSettings.deletedIconColor
+         state.composeDensity = LunagramSettings.composeDensity
++        state.transformMode = LunagramSettings.textTransformMode
++        state.transformEmoji = LunagramSettings.textTransformEmoji
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1942,6 +1955,16 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramSettings.sendFontStyle = index
+                 refreshMedia()
+             }))
++        case .transformMode:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Во что превращать", options: LunagramTextTransform.allCases.map { $0.title }, selected: LunagramSettings.textTransformMode, info: "Буквы заменяются знаками Юникода, поэтому написанное так видно в любом клиенте. Поиском Telegram такой текст не находится — как и «Шрифт отправки».", select: { index in
++                LunagramSettings.textTransformMode = index
++                refreshMedia()
++            }))
++        case .transformEmoji:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Какими эмодзи", options: LunagramEmojiFlavor.allCases.map { $0.title }, selected: LunagramSettings.textTransformEmoji, info: "Каждая буква заменяется случайным эмодзи из выбранного набора. Пробелы остаются пробелами, иначе слова слиплись бы.", select: { index in
++                LunagramSettings.textTransformEmoji = index
++                refreshMedia()
++            }))
+         case .deviceMask:
+             shared.push?(lunagramChoiceScreen(context: context, title: "Маскировка устройства", options: LunagramSettings.deviceMaskPresets.map { $0.title }, selected: LunagramSettings.deviceMaskIndex, info: "Как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. У масок Android и Mac подменяется и версия системы: по ней сервер выбирает значок. Начнёт действовать после перезапуска Lunagram.", select: { index in
+                 LunagramSettings.setDeviceMask(index)
+@@ -2157,6 +2180,8 @@ private func lunagramPushSteps(shared: LunagramSharedState, context: AccountCont
+ private enum LunagramChoice: Int32 {
+     case sendWithoutSound = 1
+     case sendFont = 2
++    case transformMode = 11
++    case transformEmoji = 12
+     case deviceMask = 3
+     case listTextMode = 5
+     case particlesKind = 6
+@@ -2502,6 +2527,17 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     let fonts = LunagramSendFont.allCases
+     let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
+     rows.row(.value(LunagramChoice.sendFont.rawValue, "Шрифт отправки", font.title, "textformat"))
++    rows.split()
++    rows.row(.toggle(.textTransform, value(.textTransform), "Превращение текста", "wand.and.rays"))
++    let transforms = LunagramTextTransform.allCases
++    let transform = transforms[max(0, min(transforms.count - 1, media.transformMode))]
++    rows.row(.value(LunagramChoice.transformMode.rawValue, "Во что превращать", transform.title, "arrow.triangle.2.circlepath"))
++    if transform == .emoji {
++        let flavors = LunagramEmojiFlavor.allCases
++        let flavor = flavors[max(0, min(flavors.count - 1, media.transformEmoji))]
++        rows.row(.value(LunagramChoice.transformEmoji.rawValue, "Какими эмодзи", flavor.title, "face.smiling"))
++    }
++    rows.info("Начни сообщение с «.rp » — и вместо написанного уйдёт превращённое. Сама команда съедается: получатель видит только итог.\n\nНапример, «.rp привет» азбукой Морзе уйдёт как «.--. .-. .. .-- . -».")
+     rows.info("Буквы заменяются похожими символами Юникода, поэтому стиль видят все — в любом клиенте. Такой текст не находится поиском Telegram.")
+     let masks = LunagramSettings.deviceMaskPresets
+     let mask = masks[max(0, min(masks.count - 1, media.deviceMask))]
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index b1ffd762..be697734 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8927,6 +8927,17 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+         return messages.map { message in
+             var message = message
+ 
++            // Lunagram: «Превращение текста» — сообщение, начатое с .rp,
++            // уходит азбукой Морзе, двоичным кодом, эмодзи или чем выбрано.
++            // Сама команда съедается. Разметку у такого текста отбрасываем:
++            // после превращения она всё равно указывала бы не на те буквы.
++            var lunagramTransformed = false
++            if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, let converted = LunagramSettings.transformedForSending(text) {
++                let plainAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
++                message = .message(text: converted, attributes: plainAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
++                lunagramTransformed = true
++            }
++
+             // Lunagram: «Шрифт отправки» — буквы подменяются похожими знаками
+             // Юникода, поэтому стиль виден в любом клиенте. Трогаем только
+             // обычный текст; пересылки и вложения без подписи не меняем.
+@@ -8934,7 +8945,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             // Текст с отметками (жирное, ссылки, свои эмодзи) не трогаем:
+             // стилизованная буква бывает длиннее обычной, и отметки уехали бы
+             // на чужие буквы. Нашлось при работе над ответом на удалённое.
+-            if LunagramSettings.sendFontStyle != 0, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty, !attributes.contains(where: { ($0 as? TextEntitiesMessageAttribute)?.entities.isEmpty == false }) {
++            if !lunagramTransformed, LunagramSettings.sendFontStyle != 0, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty, !attributes.contains(where: { ($0 as? TextEntitiesMessageAttribute)?.entities.isEmpty == false }) {
+                 let styled = LunagramSettings.styledForSending(text)
+                 if styled != text {
+                     message = .message(text: styled, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
