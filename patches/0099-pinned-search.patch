@@ -1,0 +1,132 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 3ef85b46..4914e28b 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -121,6 +121,7 @@ public final class LunagramSettings {
+         static let typingBlurRadius = "lunagram.typing.blurRadius"
+         static let typingThanos = "lunagram.typing.typingThanos"
+         static let typingCursor = "lunagram.typing.typingCursor"
++        static let pinnedSearchBar = "lunagram.search.pinnedBar"
+         static let rippleEnabled = "lunagram.ripple.enabled"
+         static let rippleSize = "lunagram.ripple.size"
+         static let rippleStrength = "lunagram.ripple.strength"
+@@ -855,6 +856,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Не прятать строку поиска при прокрутке списка переписок.
++    public static var pinnedSearchBar: Bool {
++        get { return flag(Key.pinnedSearchBar, default: false) }
++        set { setFlag(newValue, Key.pinnedSearchBar) }
++    }
++
+     // MARK: - Круг при нажатии
+ 
+     /// Показывать расходящийся круг под пальцем.
+diff --git a/submodules/TelegramUI/Components/ChatListHeaderComponent/BUILD b/submodules/TelegramUI/Components/ChatListHeaderComponent/BUILD
+index 5355cc42..2b783be1 100644
+--- a/submodules/TelegramUI/Components/ChatListHeaderComponent/BUILD
++++ b/submodules/TelegramUI/Components/ChatListHeaderComponent/BUILD
+@@ -26,6 +26,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/MoreHeaderButton",
+         "//submodules/TelegramUI/Components/EdgeEffect",
+         "//submodules/TelegramUI/Components/GlassBackgroundComponent",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/ChatListHeaderComponent/Sources/ChatListNavigationBar.swift b/submodules/TelegramUI/Components/ChatListHeaderComponent/Sources/ChatListNavigationBar.swift
+index 23ea726e..374f7934 100644
+--- a/submodules/TelegramUI/Components/ChatListHeaderComponent/Sources/ChatListNavigationBar.swift
++++ b/submodules/TelegramUI/Components/ChatListHeaderComponent/Sources/ChatListNavigationBar.swift
+@@ -11,6 +11,7 @@ import TelegramCore
+ import StoryPeerListComponent
+ import EdgeEffect
+ import GlassBackgroundComponent
++import Lunagram
+ 
+ private func searchScrollHeightValue() -> CGFloat {
+     return 54.0
+@@ -298,8 +299,14 @@ public final class ChatListNavigationBar: Component {
+             
+             let searchOffsetDistance: CGFloat = ChatListNavigationBar.searchScrollHeight
+             
++            // Шапка ужимается ровно на столько, сколько тут написано, и
++            // строка поиска уезжает вверх вместе с этим. Ноль — значит
++            // ужиматься не на что, и строка остаётся на месте.
++            //
++            // Lunagram: лента историй сворачивается сама, это родное
++            // поведение Telegram, — тут речь только про строку поиска.
+             let minContentOffset: CGFloat
+-            if component.search != nil {
++            if component.search != nil && !LunagramSettings.pinnedSearchBar {
+                 minContentOffset = ChatListNavigationBar.searchScrollHeight
+             } else {
+                 minContentOffset = 0.0
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 34593efe..9a8ee467 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -67,6 +67,7 @@ private enum LunagramToggle: Int32 {
+     case typingThanos
+     case typingCursor
+     case ripple
++    case pinnedSearchBar
+ 
+     var value: Bool {
+         switch self {
+@@ -164,6 +165,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.typingCursor
+         case .ripple:
+             return LunagramSettings.rippleEnabled
++        case .pinnedSearchBar:
++            return LunagramSettings.pinnedSearchBar
+         }
+     }
+ 
+@@ -263,6 +266,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.typingCursor = value
+         case .ripple:
+             LunagramSettings.rippleEnabled = value
++        case .pinnedSearchBar:
++            LunagramSettings.pinnedSearchBar = value
+         }
+     }
+ 
+@@ -362,6 +367,8 @@ private enum LunagramToggle: Int32 {
+             return "След за курсором"
+         case .ripple:
+             return "Круг при нажатии"
++        case .pinnedSearchBar:
++            return "Строка поиска всегда вверху"
+         }
+     }
+ 
+@@ -417,7 +424,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar:
+             return nil
+         }
+     }
+@@ -576,6 +583,8 @@ extension LunagramToggle {
+             return "cursorarrow.motionlines"
+         case .ripple:
+             return "circle.circle"
++        case .pinnedSearchBar:
++            return "magnifyingglass"
+         }
+     }
+ }
+@@ -2659,6 +2668,9 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.pinnedSearchBar, value(.pinnedSearchBar), "Строка поиска всегда вверху", "magnifyingglass"))
++    rows.info("Обычно при прокрутке списка строка поиска уезжает вверх и остаётся только значок. С этой галочкой она никуда не девается.\n\nЛенту историй это не трогает — она сворачивается сама, так Telegram устроен изначально.")
++
+     rows.row(.toggle(.ripple, value(.ripple), "Круг при нажатии", "circle.circle"))
+     rows.row(.slider(93, "Размер круга", media.rippleSize, 0, 100, 5))
+     rows.row(.slider(94, "Насколько заметен", media.rippleStrength, 0, 100, 5))
