@@ -17,18 +17,21 @@ index 9edc0a69..e5b2b716 100644
      }
  }
 diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
-index ad1e722a..2e4af8d3 100644
+index ad1e722a..5384cf97 100644
 --- a/submodules/Lunagram/Sources/LunagramSettings.swift
 +++ b/submodules/Lunagram/Sources/LunagramSettings.swift
-@@ -109,7 +109,6 @@ public final class LunagramSettings {
+@@ -108,8 +108,9 @@ public final class LunagramSettings {
+         static let privacyBackup = "lunagram.hide.privacyBackup"
          static let hiddenPeers = "lunagram.hide.peers"
          static let hiddenFromEveryone = "lunagram.hide.everyone"
++        static let ghostLocks = "lunagram.ghost.locks"
++        static let markReadAfterAction = "lunagram.ghost.markReadAfterAction"
          static let settingIcons = "lunagram.settingIcons.enabled"
 -        static let showDescriptions = "lunagram.settings.showDescriptions"
          static let typingLetters = "lunagram.typing.typingLetters"
          static let typingSlide = "lunagram.typing.typingSlide"
          static let typingScale = "lunagram.typing.typingScale"
-@@ -124,20 +123,6 @@ public final class LunagramSettings {
+@@ -124,20 +125,6 @@ public final class LunagramSettings {
          static let chatStickersDepth = "lunagram.chatStickers.depth"
          static let glassSquare = "lunagram.glass.square"
          static let glassCorner = "lunagram.glass.corner"
@@ -49,7 +52,7 @@ index ad1e722a..2e4af8d3 100644
          static let settingIconsMap = "lunagram.settingIcons.map"
          static let fakeGifts = "lunagram.gifts.fake"
          static let ownProfileBackup = "lunagram.copy.backup"
-@@ -418,25 +403,11 @@ public final class LunagramSettings {
+@@ -418,25 +405,57 @@ public final class LunagramSettings {
          }
      }
  
@@ -58,12 +61,53 @@ index ad1e722a..2e4af8d3 100644
 -    /// один раз. Включишь — вернутся все до единого.
 -    public static var showDescriptions: Bool {
 -        get { return defaults.bool(forKey: Key.showDescriptions) }
--        set {
++    // MARK: Замки призрака
++    //
++    // На ПК у каждой галочки призрака есть замок: запертую общий
++    // выключатель не трогает. Держим список запертых у себя — сетевой части
++    // он не нужен, она смотрит только на сами галочки.
++
++    /// Заперта ли эта галочка призрака.
++    public static func isGhostLocked(_ toggle: Int32) -> Bool {
++        return ghostLocks().contains(toggle)
++    }
++
++    /// Запереть галочку или отпереть.
++    public static func setGhostLocked(_ toggle: Int32, _ locked: Bool) {
++        var all = ghostLocks()
++        if locked {
++            all.insert(toggle)
++        } else {
++            all.remove(toggle)
++        }
++        defaults.set(all.map { Int($0) }, forKey: Key.ghostLocks)
++        changed()
++    }
++
++    private static func ghostLocks() -> Set<Int32> {
++        let raw = (defaults.array(forKey: Key.ghostLocks) as? [Int]) ?? []
++        return Set(raw.map { Int32($0) })
++    }
++
++    /// «Читать при действиях» — один выключатель, как на ПК. Раньше их было
++    /// три: при отправке, при реакции, при голосовании. Прежний выбор
++    /// переносим: был включён хоть один — значит, включено.
++    public static var markReadAfterAction: Bool {
++        get {
++            if defaults.object(forKey: Key.markReadAfterAction) == nil {
++                return LunagramGhostSettings.markReadAfterSend
++                    || LunagramGhostSettings.markReadAfterReaction
++                    || LunagramGhostSettings.markReadAfterPoll
++            }
++            return defaults.bool(forKey: Key.markReadAfterAction)
++        }
+         set {
 -            defaults.set(newValue, forKey: Key.showDescriptions)
--            changed()
--        }
--    }
--
++            defaults.set(newValue, forKey: Key.markReadAfterAction)
+             changed()
+         }
+     }
+ 
 -    /// «Свои значки в настройках» — общий выключатель, как на ПК. Включён
 -    /// сразу: пока своих картинок нет, строки выглядят как обычно, а
 -    /// долгое нажатие по строке со значком открывает «Свой значок».
@@ -78,7 +122,7 @@ index ad1e722a..2e4af8d3 100644
              return defaults.bool(forKey: Key.settingIcons)
          }
          set {
-@@ -797,7 +768,7 @@ public final class LunagramSettings {
+@@ -797,7 +816,7 @@ public final class LunagramSettings {
  
      /// Строка «Эмодзи и стикеры чата» в профиле собеседника.
      public static var chatStickers: Bool {
@@ -87,7 +131,7 @@ index ad1e722a..2e4af8d3 100644
          set { setFlag(newValue, Key.chatStickers) }
      }
  
-@@ -845,86 +816,6 @@ public final class LunagramSettings {
+@@ -845,86 +864,6 @@ public final class LunagramSettings {
          }
      }
  
@@ -174,7 +218,7 @@ index ad1e722a..2e4af8d3 100644
      /// Выключатель, которого человек ещё не касался, отдаёт своё значение, а
      /// не «выключено»: UserDefaults о незаданном ключе говорит «нет».
      private static func flag(_ key: String, default defaultValue: Bool) -> Bool {
-@@ -939,46 +830,6 @@ public final class LunagramSettings {
+@@ -939,46 +878,6 @@ public final class LunagramSettings {
          changed()
      }
  
@@ -2353,10 +2397,21 @@ index 8bb621a5..00000000
 -    ]
 -}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index 22537007..d0dcdea5 100644
+index 22537007..5af860f8 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-@@ -57,20 +57,7 @@ private enum LunagramToggle: Int32 {
+@@ -42,9 +42,7 @@ private enum LunagramToggle: Int32 {
+     case showMessageSeconds
+     case suggestGhostForStories
+     case streamerMode
+-    case markReadAfterSend
+-    case markReadAfterReaction
+-    case markReadAfterPoll
++    case markReadAfterAction
+     case useScheduledSend
+     case showMessageShot
+     case replyToDeleted
+@@ -57,20 +55,7 @@ private enum LunagramToggle: Int32 {
      case avatarSingleCorner
      case composeAuto
      case settingIcons
@@ -2377,7 +2432,22 @@ index 22537007..d0dcdea5 100644
      case multiSearch
      case glassSquare
      case chatStickers
-@@ -158,34 +145,8 @@ private enum LunagramToggle: Int32 {
+@@ -128,12 +113,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.suggestGhostForStories
+         case .streamerMode:
+             return LunagramSettings.streamerMode
+-        case .markReadAfterSend:
+-            return LunagramSettings.markReadAfterSend
+-        case .markReadAfterReaction:
+-            return LunagramSettings.markReadAfterReaction
+-        case .markReadAfterPoll:
+-            return LunagramSettings.markReadAfterPoll
++        case .markReadAfterAction:
++            return LunagramSettings.markReadAfterAction
+         case .useScheduledSend:
+             return LunagramSettings.useScheduledSend
+         case .showMessageShot:
+@@ -158,34 +139,8 @@ private enum LunagramToggle: Int32 {
              return LunagramSettings.composeAuto
          case .settingIcons:
              return LunagramSettings.settingIcons
@@ -2412,7 +2482,22 @@ index 22537007..d0dcdea5 100644
          case .multiSearch:
              return LunagramSettings.multiSearch
          case .glassSquare:
-@@ -285,34 +246,8 @@ private enum LunagramToggle: Int32 {
+@@ -255,12 +210,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.suggestGhostForStories = value
+         case .streamerMode:
+             LunagramSettings.streamerMode = value
+-        case .markReadAfterSend:
+-            LunagramSettings.markReadAfterSend = value
+-        case .markReadAfterReaction:
+-            LunagramSettings.markReadAfterReaction = value
+-        case .markReadAfterPoll:
+-            LunagramSettings.markReadAfterPoll = value
++        case .markReadAfterAction:
++            LunagramSettings.markReadAfterAction = value
+         case .useScheduledSend:
+             LunagramSettings.useScheduledSend = value
+         case .showMessageShot:
+@@ -285,34 +236,8 @@ private enum LunagramToggle: Int32 {
              LunagramSettings.composeAuto = value
          case .settingIcons:
              LunagramSettings.settingIcons = value
@@ -2447,7 +2532,22 @@ index 22537007..d0dcdea5 100644
          case .multiSearch:
              LunagramSettings.multiSearch = value
          case .glassSquare:
-@@ -412,34 +347,8 @@ private enum LunagramToggle: Int32 {
+@@ -382,12 +307,8 @@ private enum LunagramToggle: Int32 {
+             return "Предлагать призрака для сторис"
+         case .streamerMode:
+             return "Режим стримера"
+-        case .markReadAfterSend:
+-            return "При отправке"
+-        case .markReadAfterReaction:
+-            return "При реакции"
+-        case .markReadAfterPoll:
+-            return "При голосе"
++        case .markReadAfterAction:
++            return "Читать при действиях"
+         case .useScheduledSend:
+             return "Использовать отложку"
+         case .showMessageShot:
+@@ -412,34 +333,8 @@ private enum LunagramToggle: Int32 {
              return "Плёнка подстраивается сама"
          case .settingIcons:
              return "Свои значки в настройках"
@@ -2482,7 +2582,17 @@ index 22537007..d0dcdea5 100644
          case .multiSearch:
              return "Поиск сразу по нескольким словам"
          case .glassSquare:
-@@ -516,7 +425,7 @@ private enum LunagramToggle: Int32 {
+@@ -503,8 +398,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.stories
+         case .streamerMode:
+             return PresentationResourcesSettings.security
+-        case .markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll:
+-            // Показываются под стрелкой, своего значка у них нет.
++        case .markReadAfterAction:
+             return nil
+         case .useScheduledSend:
+             return PresentationResourcesSettings.notifications
+@@ -516,7 +410,7 @@ private enum LunagramToggle: Int32 {
              return PresentationResourcesSettings.security
          case .showMutedDeleted:
              return PresentationResourcesSettings.notifications
@@ -2491,7 +2601,17 @@ index 22537007..d0dcdea5 100644
              return nil
          }
      }
-@@ -652,34 +561,8 @@ extension LunagramToggle {
+@@ -627,8 +521,7 @@ extension LunagramToggle {
+             return "questionmark.circle"
+         case .streamerMode:
+             return "dot.radiowaves.left.and.right"
+-        case .markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll:
+-            // Показываются под стрелкой, своего значка у них нет.
++        case .markReadAfterAction:
+             return nil
+         case .useScheduledSend:
+             return "clock"
+@@ -652,34 +545,8 @@ extension LunagramToggle {
              return "wand.and.stars"
          case .settingIcons:
              return "swatchpalette,paintpalette"
@@ -2526,7 +2646,7 @@ index 22537007..d0dcdea5 100644
          case .multiSearch:
              return "line.3.horizontal.decrease.circle"
          case .glassSquare:
-@@ -751,6 +634,8 @@ private enum LunagramRow: Equatable {
+@@ -751,6 +618,8 @@ private enum LunagramRow: Equatable {
      case header(String)
      // Переключатель: какой, включён ли, название, значок.
      case toggle(LunagramToggle, Bool, String, String?)
@@ -2535,7 +2655,7 @@ index 22537007..d0dcdea5 100644
      // «Режим призрака N/5»: раскрыт ли и пять переключателей под стрелкой.
      case ghost(Bool, [Bool])
      // «Читать при действиях»: раскрыт ли и три переключателя под стрелкой.
-@@ -807,6 +692,9 @@ private struct LunagramRowsBuilder {
+@@ -807,6 +676,9 @@ private struct LunagramRowsBuilder {
      private var block: Int32 = 0
      private var order: Int32 = 0
      private var closed = false
@@ -2545,7 +2665,7 @@ index 22537007..d0dcdea5 100644
  
      mutating func header(_ text: String) {
          if !self.entries.isEmpty {
-@@ -824,13 +712,25 @@ private struct LunagramRowsBuilder {
+@@ -824,13 +696,25 @@ private struct LunagramRowsBuilder {
          self.append(row)
      }
  
@@ -2576,7 +2696,50 @@ index 22537007..d0dcdea5 100644
          self.closed = true
      }
  
-@@ -1435,8 +1335,6 @@ private struct LunagramMediaState: Equatable {
+@@ -851,7 +735,6 @@ private let lunagramGhostToggles: [LunagramToggle] = [.ghostDontRead, .ghostDont
+ 
+ /// «Читать при действиях» — тот же приём: мастер сверху, три под стрелкой.
+ /// Раскрытие этой строки храним под номером первого из них.
+-private let lunagramMarkReadToggles: [LunagramToggle] = [.markReadAfterSend, .markReadAfterReaction, .markReadAfterPoll]
+ 
+ /// Варианты затемнения — по номеру, как их хранят настройки.
+ private let lunagramWallpaperDimTitles = ["Без затемнения", "Слегка затемнить", "Сильно затемнить"]
+@@ -1323,8 +1206,12 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+             }, subAction: { _ in
+             })
+         case let .ghostRow(expanded, master, subs):
++            // Запертую галочку помечаем замком прямо в названии: готовый
++            // виджет вложенных галочек своего значка не умеет, а поведение
++            // от этого не меняется — общий выключатель её не трогает.
+             let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
+-                return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++                let locked = LunagramSettings.isGhostLocked(toggle.rawValue)
++                return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: locked ? "🔒 " + toggle.title : toggle.title, isSelected: isOn, isEnabled: true)
+             }
+             return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Ghost", value: master, isExpanded: expanded, subItems: subItems, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.ghostMaster(value)
+@@ -1335,18 +1222,9 @@ private enum LunagramSettingsEntry: ItemListNodeEntry {
+                     arguments.toggle(toggle, !toggle.value)
+                 }
+             })
+-        case let .readRow(expanded, master, subs):
+-            let subItems = zip(lunagramMarkReadToggles, subs).map { toggle, isOn in
+-                return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
+-            }
+-            return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Читать при действиях", value: master, isExpanded: expanded, subItems: subItems, sectionId: self.section, style: .blocks, updated: { value in
++        case let .readRow(_, master, _):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Читать при действиях", value: master, sectionId: self.section, style: .blocks, updated: { value in
+                 arguments.readMaster(value)
+-            }, selectAction: {
+-                arguments.toggleExpand(.markReadAfterSend)
+-            }, subAction: { sub in
+-                if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
+-                    arguments.toggle(toggle, !toggle.value)
+-                }
+             })
+         case let .action(section, _, text):
+             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: text, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+@@ -1435,8 +1313,6 @@ private struct LunagramMediaState: Equatable {
      var wordingPack: Int = 0
      var deletedIconColor: UInt32 = 0xFF3B30
      var composeDensity: Int = 75
@@ -2585,7 +2748,7 @@ index 22537007..d0dcdea5 100644
      var glassCorner: Int = 50
      var chatStickersDepth: Int = 2_000
      var typingDuration: Int = 260
-@@ -1458,8 +1356,6 @@ private struct LunagramMediaState: Equatable {
+@@ -1458,8 +1334,6 @@ private struct LunagramMediaState: Equatable {
          state.wordingPack = LunagramWording.pack
          state.deletedIconColor = LunagramSettings.deletedIconColor
          state.composeDensity = LunagramSettings.composeDensity
@@ -2594,7 +2757,49 @@ index 22537007..d0dcdea5 100644
          state.glassCorner = LunagramSettings.glassCorner
          state.chatStickersDepth = LunagramSettings.chatStickersDepth
          state.typingDuration = LunagramSettings.typingDuration
-@@ -2164,16 +2060,6 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+@@ -1495,12 +1369,15 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+         return []
+     case .ghost:
+         let subs = lunagramGhostToggles.map { value($0) }
+-        let master = subs.contains(true)
+-        let readSubs = lunagramMarkReadToggles.map { value($0) }
++        // Как на ПК: призрак считается включённым, когда все незапертые
++        // галочки стоят в призрачном положении. Запертые не в счёт.
++        let master = zip(lunagramGhostToggles, subs).allSatisfy { toggle, isOn in
++            return LunagramSettings.isGhostLocked(toggle.rawValue) || isOn
++        }
+         return [
+             .header(.ghost, 0, "GHOST"),
+             .ghostRow(ghostExpanded, master, subs),
+-            .readRow(expandedToggles.contains(LunagramToggle.markReadAfterSend.rawValue), readSubs.contains(true), readSubs),
++            .readRow(false, value(.markReadAfterAction), []),
+             tgl(.ghost, .suggestGhostForStories),
+             tgl(.ghost, .useScheduledSend),
+             .slider(.ghost, 50, "Отправлять без звука", media.sendWithoutSound, 0, LunagramSettings.sendWithoutSoundTitles.count - 1, 1, LunagramSettings.sendWithoutSoundTitles[max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))]),
+@@ -2107,7 +1984,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, openGroup: { group in
+         shared.push?(lunagramGroupController(context: context, group: group, shared: shared))
+     }, ghostMaster: { value in
+-        for toggle in lunagramGhostToggles {
++        // Запертые не трогаем — в этом весь смысл замка.
++        for toggle in lunagramGhostToggles where !LunagramSettings.isGhostLocked(toggle.rawValue) {
+             toggle.set(value)
+             shared.values[toggle] = value
+         }
+@@ -2116,10 +1994,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         shared.ghostExpanded.toggle()
+         shared.ghostExpandedPromise.set(shared.ghostExpanded)
+     }, readMaster: { value in
+-        for toggle in lunagramMarkReadToggles {
+-            toggle.set(value)
+-            shared.values[toggle] = value
+-        }
++        LunagramToggle.markReadAfterAction.set(value)
++        shared.values[.markReadAfterAction] = value
+         shared.valuesPromise.set(shared.values)
+     }, toggleExpand: { toggle in
+         if shared.expandedToggles.contains(toggle.rawValue) {
+@@ -2164,16 +2040,11 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
                  LunagramSettings.sendFontStyle = index
                  refreshMedia()
              }))
@@ -2608,19 +2813,60 @@ index 22537007..d0dcdea5 100644
 -                LunagramSettings.textTransformEmoji = index
 -                refreshMedia()
 -            }))
++        case .ghostLocks:
++            // Отдельный экран с галочками: отмеченные общий выключатель
++            // не трогает. На ПК это замочек у каждой строки, у нас виджет
++            // вложенных галочек такого не умеет.
++            shared.push?(lunagramLocksScreen(context: context, refresh: refreshMedia))
          case .deviceMask:
              shared.push?(lunagramChoiceScreen(context: context, title: "Маскировка устройства", options: LunagramSettings.deviceMaskPresets.map { $0.title }, selected: LunagramSettings.deviceMaskIndex, info: "Как тебя увидят в списке активных сеансов, в том числе на других твоих устройствах. У масок Android и Mac подменяется и версия системы: по ней сервер выбирает значок. Начнёт действовать после перезапуска Lunagram.", select: { index in
                  LunagramSettings.setDeviceMask(index)
-@@ -2389,8 +2275,6 @@ private func lunagramPushSteps(shared: LunagramSharedState, context: AccountCont
+@@ -2389,8 +2260,7 @@ private func lunagramPushSteps(shared: LunagramSharedState, context: AccountCont
  private enum LunagramChoice: Int32 {
      case sendWithoutSound = 1
      case sendFont = 2
 -    case transformMode = 11
 -    case transformEmoji = 12
++    case ghostLocks = 13
      case deviceMask = 3
      case listTextMode = 5
      case particlesKind = 6
-@@ -2495,6 +2379,13 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+@@ -2466,6 +2336,34 @@ private enum LunagramChoiceEntry: ItemListNodeEntry {
+ }
+ 
+ /// Экран выбора одного значения из списка — как окошко выбора на ПК.
++/// Экран «Что не трогать общим выключателем»: галочки-замки призрака.
++private func lunagramLocksScreen(context: AccountContext, refresh: @escaping () -> Void) -> ViewController {
++    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
++    var counter = 0
++    let arguments: (Int) -> Void = { index in
++        guard index >= 0, index < lunagramGhostToggles.count else {
++            return
++        }
++        let toggle = lunagramGhostToggles[index]
++        LunagramSettings.setGhostLocked(toggle.rawValue, !LunagramSettings.isGhostLocked(toggle.rawValue))
++        counter += 1
++        changed.set(counter)
++        refresh()
++    }
++    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries = lunagramGhostToggles.enumerated().map { item in
++            return LunagramChoiceEntry.option(Int32(item.offset), item.element.title, LunagramSettings.isGhostLocked(item.element.rawValue))
++        }
++        entries.append(.info("Отмеченные галочки общий выключатель призрака не трогает: включаешь и выключаешь их только сам.\n\nПризрак при этом считается включённым, когда все неотмеченные стоят в призрачном положении, — как на ПК."))
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Что не трогать"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++    return ItemListController(context: context, state: signal)
++}
++
+ private func lunagramChoiceScreen(context: AccountContext, title: String, options: [String], selected: Int, info: String?, select: @escaping (Int) -> Void) -> ViewController {
+     let selectedPromise = ValuePromise<Int>(selected, ignoreRepeated: true)
+     let arguments: (Int) -> Void = { index in
+@@ -2495,12 +2393,29 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
          return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, value: value, sectionId: sectionId, style: .blocks, updated: { value in
              arguments.toggle(toggle, value)
          })
@@ -2630,11 +2876,51 @@ index 22537007..d0dcdea5 100644
 +            arguments.toggle(toggle, value)
 +        }, selectAction: {
 +            arguments.toggleExpand(toggle)
++        }, subAction: { _ in
 +        })
      case let .ghost(expanded, subs):
-         let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
-             return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
-@@ -2692,9 +2583,8 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+-        let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn in
+-            return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
++        // Запертую галочку помечаем замком прямо в названии: готовый виджет
++        // вложенных галочек своего значка не умеет, а поведение от этого не
++        // меняется — общий выключатель её всё равно не трогает.
++        let subItems = zip(lunagramGhostToggles, subs).map { toggle, isOn -> ItemListExpandableSwitchItem.SubItem in
++            let locked = LunagramSettings.isGhostLocked(toggle.rawValue)
++            return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: locked ? "🔒 " + toggle.title : toggle.title, isSelected: isOn, isEnabled: true)
++        }
++        // Призрак включён, когда все незапертые стоят в призрачном
++        // положении, — так же считает и ПК.
++        let ghostOn = zip(lunagramGhostToggles, subs).allSatisfy { toggle, isOn in
++            return LunagramSettings.isGhostLocked(toggle.rawValue) || isOn
+         }
+         // «Режим призрака 0/5» со стрелкой — счётчик рисует сама строка.
+-        return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Режим призрака", value: subs.contains(true), isExpanded: expanded, subItems: subItems, sectionId: sectionId, style: .blocks, updated: { value in
++        return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Режим призрака", value: ghostOn, isExpanded: expanded, subItems: subItems, sectionId: sectionId, style: .blocks, updated: { value in
+             arguments.ghostMaster(value)
+         }, selectAction: {
+             arguments.ghostExpand()
+@@ -2509,18 +2424,9 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+                 arguments.toggle(toggle, !toggle.value)
+             }
+         })
+-    case let .read(expanded, subs):
+-        let subItems = zip(lunagramMarkReadToggles, subs).map { toggle, isOn in
+-            return ItemListExpandableSwitchItem.SubItem(id: AnyHashable(toggle.rawValue), title: toggle.title, isSelected: isOn, isEnabled: true)
+-        }
+-        return ItemListExpandableSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Читать при действиях", value: subs.contains(true), isExpanded: expanded, subItems: subItems, sectionId: sectionId, style: .blocks, updated: { value in
++    case let .read(_, subs):
++        return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon("envelope.open", presentationData), title: "Читать при действиях", value: subs.first ?? false, sectionId: sectionId, style: .blocks, updated: { value in
+             arguments.readMaster(value)
+-        }, selectAction: {
+-            arguments.toggleExpand(.markReadAfterSend)
+-        }, subAction: { sub in
+-            if let rawValue = sub.id.base as? Int32, let toggle = LunagramToggle(rawValue: rawValue) {
+-                arguments.toggle(toggle, !toggle.value)
+-            }
+         })
+     case let .value(id, title, value, iconName):
+         return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: lunagramLineIcon(iconName, presentationData), title: title, label: value, sectionId: sectionId, style: .blocks, action: {
+@@ -2692,14 +2598,15 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
          return values[toggle] ?? toggle.value
      }
      var rows = LunagramRowsBuilder()
@@ -2645,7 +2931,15 @@ index 22537007..d0dcdea5 100644
  
      rows.header("Режим призрака")
      rows.row(.ghost(ghostExpanded, lunagramGhostToggles.map { value($0) }))
-@@ -2734,19 +2624,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+-    rows.row(.read(expandedToggles.contains(LunagramToggle.markReadAfterSend.rawValue), lunagramMarkReadToggles.map { value($0) }))
++    rows.row(.read(false, [value(.markReadAfterAction)]))
+     rows.info("Автоматически читает сообщение при отправке нового, при реакции на сообщение или голосе в опросе. Призрак при этом остаётся включённым.")
++    rows.row(.action(LunagramChoice.ghostLocks.rawValue, "Что не трогать общим выключателем", "lock"))
++    rows.info("Отмеченные там галочки общий выключатель призрака не трогает — это те самые замочки, что стоят у каждой галочки в AyuGram на ПК.")
+     rows.row(.toggle(.useScheduledSend, value(.useScheduledSend), "Использовать отложку", nil))
+     rows.info("Автоматически ставит задержку в ~12 секунд (дольше для сообщений с вложениями) при отправке сообщений. При использовании этой функции ты не будешь появляться в сети.\nНе рекомендуется использовать на слабом интернете.")
+     let sound = max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))
+@@ -2734,19 +2641,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
      rows.row(.slider(99, "Сила размытия", media.typingBlurRadius, 1, 20, 1))
      rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
  
@@ -2665,7 +2959,7 @@ index 22537007..d0dcdea5 100644
  
      rows.header("Другое")
      rows.row(.toggle(.disableAds, value(.disableAds), "Отключить рекламу", "nosign"))
-@@ -2770,17 +2647,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+@@ -2770,17 +2664,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
      let fonts = LunagramSendFont.allCases
      let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
      rows.row(.value(LunagramChoice.sendFont.rawValue, "Шрифт отправки", font.title, "textformat"))
@@ -2684,9 +2978,27 @@ index 22537007..d0dcdea5 100644
      let masks = LunagramSettings.deviceMaskPresets
      let mask = masks[max(0, min(masks.count - 1, media.deviceMask))]
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
-index ef254856..62052e48 100644
+index ef254856..a54f294b 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -1715,7 +1715,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 return
+             }
+             // Lunagram: «Читать при действиях» — поставил реакцию, значит видел.
+-            if LunagramSettings.markReadAfterReaction {
++            if LunagramSettings.markReadAfterAction {
+                 strongSelf.lunagramMarkReadAfterAction()
+             }
+             if case .default = reaction, strongSelf.chatLocation.peerId == strongSelf.context.account.peerId {
+@@ -3976,7 +3976,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             }
+             
+             // Lunagram: «Читать при действиях» — проголосовал, значит видел.
+-            if LunagramSettings.markReadAfterPoll {
++            if LunagramSettings.markReadAfterAction {
+                 strongSelf.lunagramMarkReadAfterAction()
+             }
+ 
 @@ -8862,7 +8862,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      /// этой переписке, не трогая сам переключатель призрака. Если призрак не
      /// глушит чтение, делать нечего — отметка и так ушла.
@@ -2708,6 +3020,15 @@ index ef254856..62052e48 100644
              return
          }
          let _ = lunagramMarkPeerReadAfterAction(account: self.context.account, peerId: peerId).startStandalone()
+@@ -8886,7 +8898,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+ 
+         // Lunagram: «Читать при действиях» — написал в переписку, значит
+         // прочитал. Призрака не выключаем, просто выпускаем одну отметку.
+-        if LunagramSettings.markReadAfterSend {
++        if LunagramSettings.markReadAfterAction {
+             self.lunagramMarkReadAfterAction()
+         }
+ 
 @@ -8927,26 +8939,6 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
          return messages.map { message in
              var message = message
