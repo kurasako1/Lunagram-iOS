@@ -1,0 +1,74 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 5384cf97..ccdae90a 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -269,9 +269,6 @@ public final class LunagramSettings {
+     /// ПК. По умолчанию включено: хозяин сам попросил.
+     public static var voiceLengthInList: Bool {
+         get {
+-            guard defaults.object(forKey: Key.voiceLengthInList) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.voiceLengthInList)
+         }
+         set {
+@@ -284,9 +281,6 @@ public final class LunagramSettings {
+     /// «только щелчком» на ПК. Касание свёрнутых кружков открывает истории.
+     public static var storiesClickOnly: Bool {
+         get {
+-            guard defaults.object(forKey: Key.storiesClickOnly) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.storiesClickOnly)
+         }
+         set {
+@@ -594,9 +588,6 @@ public final class LunagramSettings {
+     /// Кнопка «Фильтр» в поиске по переписке: период, автор, тип — как на ПК.
+     public static var searchFilterButton: Bool {
+         get {
+-            guard defaults.object(forKey: Key.searchFilterButton) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.searchFilterButton)
+         }
+         set {
+@@ -724,9 +715,6 @@ public final class LunagramSettings {
+     /// Предупреждать перед открытием историй, предлагая включить призрака.
+     public static var suggestGhostForStories: Bool {
+         get {
+-            guard defaults.object(forKey: Key.suggestGhostForStories) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.suggestGhostForStories)
+         }
+         set {
+@@ -1616,9 +1604,6 @@ public final class LunagramSettings {
+     /// как на ПК.
+     public static var showRoundSource: Bool {
+         get {
+-            guard defaults.object(forKey: Key.showRoundSource) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.showRoundSource)
+         }
+         set {
+@@ -1631,9 +1616,6 @@ public final class LunagramSettings {
+     /// это лишь пункт в меню видео, мешать ему нечем.
+     public static var roundFromVideo: Bool {
+         get {
+-            guard defaults.object(forKey: Key.roundFromVideo) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.roundFromVideo)
+         }
+         set {
+@@ -1657,9 +1639,6 @@ public final class LunagramSettings {
+     /// AyuGram. Включено сразу — так договорились с хозяином.
+     public static var replyToDeleted: Bool {
+         get {
+-            guard defaults.object(forKey: Key.replyToDeleted) != nil else {
+-                return true
+-            }
+             return defaults.bool(forKey: Key.replyToDeleted)
+         }
+         set {
