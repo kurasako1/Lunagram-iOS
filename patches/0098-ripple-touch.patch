@@ -1,0 +1,338 @@
+diff --git a/submodules/Lunagram/Sources/LunagramRipple.swift b/submodules/Lunagram/Sources/LunagramRipple.swift
+new file mode 100644
+index 00000000..a3c53258
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramRipple.swift
+@@ -0,0 +1,163 @@
++import Foundation
++import UIKit
++// Без него `state` у распознавателя только читается, а нам его менять.
++import UIKit.UIGestureRecognizerSubclass
++
++/// Круг, расходящийся из-под пальца при нажатии.
++///
++/// Задумка из Ripple Touch (@mihailkotovski) — взята только она сама.
++///
++/// Главное условие: нажатия должны работать ровно так же, как работали. В
++/// iOS отслеживание касаний обычно отнимает их у того, кто под пальцем, —
++/// кнопка перестаёт нажиматься или срабатывает с задержкой. Поэтому здесь
++/// не обычный распознаватель жеста, а свой, который сразу объявляет себя
++/// несостоявшимся: он видит касание и тут же уходит с дороги. Вдобавок ему
++/// запрещено и отменять касания, и задерживать их.
++///
++/// Сам круг живёт в отдельном слое поверх всего окна, и этот слой не ловит
++/// нажатия вовсе. Так что худшее, что может случиться при поломке, —
++/// пропавший или кривой кружок, но не сломанный Telegram.
++public final class LunagramRipple {
++    public static let shared = LunagramRipple()
++
++    private weak var window: UIWindow?
++    private var overlay: UIView?
++    private var watcher: LunagramTouchWatcher?
++
++    private init() {
++    }
++
++    /// Поставить наблюдение на окно приложения. Зовут один раз при запуске.
++    public static func install(in window: UIWindow) {
++        shared.attach(to: window)
++    }
++
++    private func attach(to window: UIWindow) {
++        guard self.window !== window else {
++            return
++        }
++        self.window = window
++
++        let overlay = UIView(frame: window.bounds)
++        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++        overlay.isUserInteractionEnabled = false
++        // Поверх всего, что кладёт Telegram: иначе круг покажется под
++        // экраном переписки и его никто не увидит.
++        overlay.layer.zPosition = 10000.0
++        window.addSubview(overlay)
++        self.overlay = overlay
++
++        let watcher = LunagramTouchWatcher()
++        watcher.onTouch = { [weak self] point in
++            self?.spark(at: point)
++        }
++        window.addGestureRecognizer(watcher)
++        self.watcher = watcher
++    }
++
++    private func spark(at point: CGPoint) {
++        guard LunagramSettings.rippleEnabled else {
++            return
++        }
++        guard let window = self.window, let overlay = self.overlay else {
++            return
++        }
++        // Telegram мог положить свои виды поверх нашего — вернём наш наверх.
++        if overlay.superview !== window {
++            window.addSubview(overlay)
++        } else if window.subviews.last !== overlay {
++            window.bringSubviewToFront(overlay)
++        }
++
++        let radius = LunagramRipple.radius()
++        let circle = CAShapeLayer()
++        circle.path = UIBezierPath(ovalIn: CGRect(x: -radius, y: -radius, width: radius * 2.0, height: radius * 2.0)).cgPath
++        circle.fillColor = LunagramRipple.color(for: window).cgColor
++        circle.position = point
++        circle.opacity = 0.0
++        overlay.layer.addSublayer(circle)
++
++        let strength = Float(LunagramSettings.rippleStrength) / 100.0
++        let duration = 0.45
++
++        let scale = CABasicAnimation(keyPath: "transform.scale")
++        scale.fromValue = 0.05
++        scale.toValue = 1.0
++        scale.duration = duration
++        scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
++
++        let fade = CAKeyframeAnimation(keyPath: "opacity")
++        fade.values = [0.0, strength, 0.0]
++        fade.keyTimes = [0.0, 0.25, 1.0]
++        fade.duration = duration
++
++        let group = CAAnimationGroup()
++        group.animations = [scale, fade]
++        group.duration = duration
++        group.isRemovedOnCompletion = true
++
++        CATransaction.begin()
++        CATransaction.setCompletionBlock { [weak circle] in
++            circle?.removeFromSuperlayer()
++        }
++        circle.add(group, forKey: "lunagramRipple")
++        CATransaction.commit()
++    }
++
++    /// Насколько большой круг. Крутилка идёт процентами, а людям понятнее
++    /// «маленький — большой», поэтому переводим в точки экрана сами.
++    private static func radius() -> CGFloat {
++        let percent = CGFloat(max(0, min(100, LunagramSettings.rippleSize)))
++        return 30.0 + percent * 1.1
++    }
++
++    /// Цвет круга подбираем сами: на тёмном экране белый, на светлом чёрный.
++    /// Один цвет на оба случая был бы не виден на одном из них.
++    private static func color(for window: UIWindow) -> UIColor {
++        let isDark: Bool
++        if #available(iOS 13.0, *) {
++            isDark = window.traitCollection.userInterfaceStyle == .dark
++        } else {
++            isDark = false
++        }
++        return isDark ? UIColor.white : UIColor.black
++    }
++}
++
++/// Распознаватель, который ничего не распознаёт.
++///
++/// Нужен только ради одного: узнать, где палец коснулся экрана. Сразу
++/// объявляет себя несостоявшимся, чтобы не мешать настоящим нажатиям.
++public final class LunagramTouchWatcher: UIGestureRecognizer {
++    public var onTouch: ((CGPoint) -> Void)?
++
++    public override init(target: Any?, action: Selector?) {
++        super.init(target: target, action: action)
++        self.cancelsTouchesInView = false
++        self.delaysTouchesBegan = false
++        self.delaysTouchesEnded = false
++    }
++
++    convenience init() {
++        self.init(target: nil, action: nil)
++    }
++
++    public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
++        if let touch = touches.first, let view = self.view {
++            self.onTouch?(touch.location(in: view))
++        }
++        self.state = .failed
++    }
++
++    public override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
++        self.state = .failed
++    }
++
++    public override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
++        self.state = .failed
++    }
++
++    public override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
++        self.state = .failed
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index ccdae90a..3ef85b46 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -121,6 +121,9 @@ public final class LunagramSettings {
+         static let typingBlurRadius = "lunagram.typing.blurRadius"
+         static let typingThanos = "lunagram.typing.typingThanos"
+         static let typingCursor = "lunagram.typing.typingCursor"
++        static let rippleEnabled = "lunagram.ripple.enabled"
++        static let rippleSize = "lunagram.ripple.size"
++        static let rippleStrength = "lunagram.ripple.strength"
+         static let chatStickers = "lunagram.chatStickers.enabled"
+         static let chatStickersDepth = "lunagram.chatStickers.depth"
+         static let glassSquare = "lunagram.glass.square"
+@@ -852,6 +855,41 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    // MARK: - Круг при нажатии
++
++    /// Показывать расходящийся круг под пальцем.
++    public static var rippleEnabled: Bool {
++        get { return flag(Key.rippleEnabled, default: false) }
++        set { setFlag(newValue, Key.rippleEnabled) }
++    }
++
++    /// Размер круга, проценты. В точки экрана переводит сам рисовальщик:
++    /// человеку понятнее «маленький — большой», чем число точек.
++    public static var rippleSize: Int {
++        get { return percent(Key.rippleSize, default: 45) }
++        set { setPercent(newValue, Key.rippleSize) }
++    }
++
++    /// Насколько круг заметен, проценты.
++    public static var rippleStrength: Int {
++        get { return percent(Key.rippleStrength, default: 30) }
++        set { setPercent(newValue, Key.rippleStrength) }
++    }
++
++    /// Проценты со своим значением у нетронутой настройки: UserDefaults о
++    /// незаданном ключе говорит «ноль», а ноль здесь — осмысленная величина.
++    private static func percent(_ key: String, default defaultValue: Int) -> Int {
++        guard defaults.object(forKey: key) != nil else {
++            return defaultValue
++        }
++        return max(0, min(100, defaults.integer(forKey: key)))
++    }
++
++    private static func setPercent(_ value: Int, _ key: String) {
++        defaults.set(max(0, min(100, value)), forKey: key)
++        changed()
++    }
++
+     /// Выключатель, которого человек ещё не касался, отдаёт своё значение, а
+     /// не «выключено»: UserDefaults о незаданном ключе говорит «нет».
+     private static func flag(_ key: String, default defaultValue: Bool) -> Bool {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 5af860f8..34593efe 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -66,6 +66,7 @@ private enum LunagramToggle: Int32 {
+     case typingBlur
+     case typingThanos
+     case typingCursor
++    case ripple
+ 
+     var value: Bool {
+         switch self {
+@@ -161,6 +162,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.typingThanos
+         case .typingCursor:
+             return LunagramSettings.typingCursor
++        case .ripple:
++            return LunagramSettings.rippleEnabled
+         }
+     }
+ 
+@@ -258,6 +261,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.typingThanos = value
+         case .typingCursor:
+             LunagramSettings.typingCursor = value
++        case .ripple:
++            LunagramSettings.rippleEnabled = value
+         }
+     }
+ 
+@@ -355,6 +360,8 @@ private enum LunagramToggle: Int32 {
+             return "Распад при удалении"
+         case .typingCursor:
+             return "След за курсором"
++        case .ripple:
++            return "Круг при нажатии"
+         }
+     }
+ 
+@@ -410,7 +417,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple:
+             return nil
+         }
+     }
+@@ -567,6 +574,8 @@ extension LunagramToggle {
+             return "wind"
+         case .typingCursor:
+             return "cursorarrow.motionlines"
++        case .ripple:
++            return "circle.circle"
+         }
+     }
+ }
+@@ -1318,6 +1327,8 @@ private struct LunagramMediaState: Equatable {
+     var typingDuration: Int = 260
+     var typingDistance: Int = 14
+     var typingBlurRadius: Int = 6
++    var rippleSize: Int = 45
++    var rippleStrength: Int = 30
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1339,6 +1350,8 @@ private struct LunagramMediaState: Equatable {
+         state.typingDuration = LunagramSettings.typingDuration
+         state.typingDistance = LunagramSettings.typingDistance
+         state.typingBlurRadius = LunagramSettings.typingBlurRadius
++        state.rippleSize = LunagramSettings.rippleSize
++        state.rippleStrength = LunagramSettings.rippleStrength
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1952,6 +1965,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.chatStickersDepth = value
+         case 95:
+             LunagramSettings.glassCorner = value
++        case 93:
++            LunagramSettings.rippleSize = value
++        case 94:
++            LunagramSettings.rippleStrength = value
+         case 50:
+             LunagramSettings.sendWithoutSound = value
+         default:
+@@ -2642,6 +2659,11 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.ripple, value(.ripple), "Круг при нажатии", "circle.circle"))
++    rows.row(.slider(93, "Размер круга", media.rippleSize, 0, 100, 5))
++    rows.row(.slider(94, "Насколько заметен", media.rippleStrength, 0, 100, 5))
++    rows.info("При нажатии по экрану из-под пальца расходится круг и тает — как в Android.\n\nНажатия он себе не забирает: смотрит, где коснулись, и тут же уходит с дороги. Кнопки, прокрутка и долгие нажатия работают как работали. Рисуется поверх всего отдельным слоем, цвет подбирается сам — белый на тёмной теме, чёрный на светлой.")
++
+     rows.header("Другое")
+     rows.row(.toggle(.disableAds, value(.disableAds), "Отключить рекламу", "nosign"))
+     rows.info("Скрывает спонсорские сообщения в каналах.")
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index e4a73347..ccb3b210 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -420,6 +420,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }
+         self.window = window
+         self.nativeWindow = window
++
++        // Lunagram: круг при нажатии. Ставим наблюдение один раз на окно —
++        // рисует оно поверх всего и нажатия себе не забирает.
++        LunagramRipple.install(in: window)
+         
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
+         
