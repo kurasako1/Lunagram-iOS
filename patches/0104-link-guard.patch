@@ -1,0 +1,339 @@
+diff --git a/submodules/Lunagram/Sources/LunagramLinkGuard.swift b/submodules/Lunagram/Sources/LunagramLinkGuard.swift
+new file mode 100644
+index 00000000..86ccebca
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramLinkGuard.swift
+@@ -0,0 +1,174 @@
++import Foundation
++
++/// Разбор ссылки перед переходом.
++///
++/// Задумка из Link Guard (@Robobloxi). Взята **без сетевой части**: сам
++/// плагин качает списки мошеннических адресов с чужого хранилища и
++/// спрашивает у стороннего сервиса, кому принадлежит домен. Туда уходил
++/// бы адрес, по которому человек только собирается перейти, — ровно то,
++/// за что хозяин отменил LyricsPlus. Здесь всё считается на телефоне и
++/// наружу не уходит ни одного запроса.
++///
++/// Что остаётся без сети и при этом ловит почти все подделки:
++///
++/// 1. **Настоящий домен.** В ссылке он может прятаться за чем угодно —
++///    за длинным путём, за «@» перед именем, за поддоменами вида
++///    `sberbank.ru.xyz.com`. Показываем тот, куда браузер пойдёт на
++///    самом деле.
++/// 2. **Подмена букв.** Кириллическая «о» неотличима от латинской, и на
++///    этом держится половина поддельных адресов. Смотрим, не намешаны ли
++///    в одном слове буквы из разных азбук.
++/// 3. **Чистка меток.** Из ссылки вырезаются хвосты, по которым тебя
++///    узнают на том конце.
++public enum LunagramLinkGuard {
++    private static let enabledKey = "lunagram.linkGuard.enabled"
++    private static let cleanKey = "lunagram.linkGuard.clean"
++
++    private static var defaults: UserDefaults {
++        return UserDefaults.standard
++    }
++
++    /// Спрашивать перед переходом.
++    public static var enabled: Bool {
++        get {
++            guard defaults.object(forKey: enabledKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: enabledKey)
++        }
++        set {
++            defaults.set(newValue, forKey: enabledKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Вырезать метки слежения.
++    public static var cleanTrackers: Bool {
++        get {
++            guard defaults.object(forKey: cleanKey) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: cleanKey)
++        }
++        set {
++            defaults.set(newValue, forKey: cleanKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Хвосты, по которым узнают, откуда ты пришёл. Список неполный по
++    /// природе своей — новые придумывают быстрее, чем их вносят, — но
++    /// закрывает то, что попадается каждый день.
++    private static let trackerNames: Set<String> = [
++        "fbclid", "gclid", "dclid", "gbraid", "wbraid", "yclid", "ysclid",
++        "msclkid", "twclid", "igshid", "mc_eid", "mc_cid", "vero_id",
++        "_openstat", "spm", "scm", "ref_src", "ref_url", "si",
++    ]
++
++    private static let trackerPrefixes = ["utm_", "pk_", "mtm_", "matomo_", "hsa_", "_hs"]
++
++    /// Что нашлось в ссылке.
++    public struct Report {
++        /// Куда браузер пойдёт на самом деле.
++        public var host: String
++        /// Ссылка, из которой вырезаны метки.
++        public var cleaned: String
++        /// Какие метки вырезаны.
++        public var removed: [String]
++        /// Чем ссылка подозрительна. Пусто — ничем.
++        public var warnings: [String]
++
++        public var isSuspicious: Bool {
++            return !self.warnings.isEmpty
++        }
++    }
++
++    /// Разобрать ссылку. Ничего не открывает и никуда не ходит.
++    public static func inspect(_ url: String) -> Report? {
++        guard var components = URLComponents(string: url), let host = components.host, !host.isEmpty else {
++            return nil
++        }
++
++        var warnings: [String] = []
++
++        // Имя пользователя перед адресом: «https://sberbank.ru@зло.рф»
++        // выглядит как банк, а ведёт на «зло.рф».
++        if let user = components.user, !user.isEmpty {
++            warnings.append("Перед адресом стоит «\(user)@» — браузер на это не смотрит и пойдёт на \(host).")
++        }
++
++        if host.lowercased().contains("xn--") {
++            warnings.append("Адрес записан особым образом (xn--): за этим прячут буквы, похожие на латинские.")
++        }
++
++        for label in host.split(separator: ".") {
++            if self.hasMixedScripts(String(label)) {
++                warnings.append("В части адреса «\(label)» намешаны буквы из разных азбук — обычный признак подделки.")
++                break
++            }
++        }
++
++        if components.scheme?.lowercased() == "http" {
++            warnings.append("Ссылка без защиты (http): то, что отправишь на этой странице, увидят по дороге.")
++        }
++
++        var removed: [String] = []
++        if self.cleanTrackers, let items = components.queryItems, !items.isEmpty {
++            var kept: [URLQueryItem] = []
++            for item in items {
++                if self.isTracker(item.name) {
++                    removed.append(item.name)
++                } else {
++                    kept.append(item)
++                }
++            }
++            if !removed.isEmpty {
++                components.queryItems = kept.isEmpty ? nil : kept
++            }
++        }
++
++        return Report(
++            host: host,
++            cleaned: components.url?.absoluteString ?? url,
++            removed: removed,
++            warnings: warnings
++        )
++    }
++
++    private static func isTracker(_ name: String) -> Bool {
++        let lower = name.lowercased()
++        if self.trackerNames.contains(lower) {
++            return true
++        }
++        for prefix in self.trackerPrefixes where lower.hasPrefix(prefix) {
++            return true
++        }
++        return false
++    }
++
++    /// Намешаны ли в одном слове буквы из разных азбук.
++    ///
++    /// Целиком русский адрес — дело обычное и ничем не подозрителен.
++    /// Подозрительно именно смешение: «gооgle» с двумя русскими «о»
++    /// от настоящего на вид не отличить.
++    private static func hasMixedScripts(_ text: String) -> Bool {
++        var hasLatin = false
++        var hasOther = false
++        for scalar in text.unicodeScalars {
++            switch scalar.value {
++            case 0x41 ... 0x5A, 0x61 ... 0x7A:
++                hasLatin = true
++            case 0x0400 ... 0x04FF, 0x0500 ... 0x052F: // кириллица
++                hasOther = true
++            case 0x0370 ... 0x03FF: // греческий
++                hasOther = true
++            default:
++                break
++            }
++            if hasLatin && hasOther {
++                return true
++            }
++        }
++        return false
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d9d07a71..86b12878 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -72,6 +72,8 @@ private enum LunagramToggle: Int32 {
+     case mentionAvatars
+     case mentionAvatarsAfter
+     case composeHidden
++    case linkGuard
++    case linkGuardClean
+ 
+     var value: Bool {
+         switch self {
+@@ -179,6 +181,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramMentionAvatars.after
+         case .composeHidden:
+             return LunagramComposeButton.hidden
++        case .linkGuard:
++            return LunagramLinkGuard.enabled
++        case .linkGuardClean:
++            return LunagramLinkGuard.cleanTrackers
+         }
+     }
+ 
+@@ -288,6 +294,10 @@ private enum LunagramToggle: Int32 {
+             LunagramMentionAvatars.after = value
+         case .composeHidden:
+             LunagramComposeButton.hidden = value
++        case .linkGuard:
++            LunagramLinkGuard.enabled = value
++        case .linkGuardClean:
++            LunagramLinkGuard.cleanTrackers = value
+         }
+     }
+ 
+@@ -397,6 +407,10 @@ private enum LunagramToggle: Int32 {
+             return "Аватарка после ника"
+         case .composeHidden:
+             return "Убрать карандаш"
++        case .linkGuard:
++            return "Спрашивать перед ссылкой"
++        case .linkGuardClean:
++            return "Вырезать метки слежения"
+         }
+     }
+ 
+@@ -452,7 +466,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean:
+             return nil
+         }
+     }
+@@ -621,6 +635,10 @@ extension LunagramToggle {
+             return "arrow.right.to.line"
+         case .composeHidden:
+             return "square.and.pencil"
++        case .linkGuard:
++            return "link.badge.plus"
++        case .linkGuardClean:
++            return "scissors"
+         }
+     }
+ }
+@@ -2739,6 +2757,10 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.linkGuard, value(.linkGuard), "Спрашивать перед ссылкой", "link.badge.plus"))
++    rows.row(.toggle(.linkGuardClean, value(.linkGuardClean), "Вырезать метки слежения", "scissors"))
++    rows.info("Перед выходом на чужой сайт покажем окошко: куда ссылка ведёт на самом деле, чем она подозрительна и какие метки из неё вырезаны. Кнопки — «Перейти», «Скопировать», «Отмена».\n\nЛовим три вещи: настоящий домен (в ссылке его прячут за длинным путём, за «@» перед именем и за поддоменами вроде sberbank.ru.xyz.com), подмену букв (кириллическая «о» от латинской не отличается) и хвосты, по которым тебя узнают на том конце.\n\nВсё считается на телефоне. Ни один запрос наружу не уходит — иначе адрес, по которому ты только собрался перейти, уже улетел бы на сторону.")
++
+     rows.row(.toggle(.composeHidden, value(.composeHidden), "Убрать карандаш", "square.and.pencil"))
+     rows.row(.value(LunagramChoice.composeAction.rawValue, "Что делает карандаш", LunagramComposeButton.Action(rawValue: media.composeAction)?.title ?? "Как обычно", "arrow.turn.down.right"))
+     if media.composeAction == LunagramComposeButton.Action.peer.rawValue {
+diff --git a/submodules/TelegramUI/Sources/OpenUrl.swift b/submodules/TelegramUI/Sources/OpenUrl.swift
+index 6c964bad..3c4621c2 100644
+--- a/submodules/TelegramUI/Sources/OpenUrl.swift
++++ b/submodules/TelegramUI/Sources/OpenUrl.swift
+@@ -13,6 +13,8 @@ import OpenInExternalAppUI
+ import BrowserUI
+ import OverlayStatusController
+ import PresentationDataUtils
++import UIKit
++import Lunagram // Lunagram: разбор ссылки перед переходом.
+ 
+ public struct ParsedSecureIdUrl {
+     public let peerId: EnginePeer.Id
+@@ -361,7 +363,68 @@ private func makeTelegramUrl(_ path: String, queryItems: [URLQueryItem] = []) ->
+     return appendQueryItems(to: "https://t.me\(path)", items: queryItems)
+ }
+ 
++// Lunagram: разбор ссылки перед переходом.
++//
++// Все внешние ссылки проходят через `openExternalUrlImpl` — и те, что
++// нажали в сообщении, и те, что из описания канала, и из кнопок ботов.
++// Поэтому спрашиваем здесь: одно место вместо десятка.
++//
++// Пропуск нужен, чтобы не спросить дважды. Нажал «Перейти» — ставим
++// пропуск и зовём ту же самую работу заново, уже без разбора.
++private var lunagramLinkGuardBypass = false
++
++private func lunagramAskBeforeOpening(context: AccountContext, url: String, presentationData: PresentationData, proceed: @escaping (String) -> Void) -> Bool {
++    if lunagramLinkGuardBypass {
++        lunagramLinkGuardBypass = false
++        return false
++    }
++    guard LunagramLinkGuard.enabled else {
++        return false
++    }
++    guard let report = LunagramLinkGuard.inspect(url) else {
++        return false
++    }
++
++    var lines: [String] = ["Перейти на \(report.host)?"]
++    if !report.warnings.isEmpty {
++        lines.append("")
++        for warning in report.warnings {
++            lines.append("⚠️ " + warning)
++        }
++    }
++    if !report.removed.isEmpty {
++        lines.append("")
++        lines.append("Вырезано меток слежения: " + report.removed.joined(separator: ", "))
++    }
++
++    let target = report.cleaned
++    let controller = textAlertController(
++        context: context,
++        title: report.isSuspicious ? "Ссылка выглядит подозрительно" : "Переход по ссылке",
++        text: lines.joined(separator: "\n"),
++        actions: [
++            TextAlertAction(type: .genericAction, title: "Скопировать", action: {
++                UIPasteboard.general.string = target
++            }),
++            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
++            TextAlertAction(type: report.isSuspicious ? .destructiveAction : .defaultAction, title: "Перейти", action: {
++                lunagramLinkGuardBypass = true
++                proceed(target)
++            })
++        ]
++    )
++    context.sharedContext.presentGlobalController(controller, nil)
++    return true
++}
++
+ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
++    // Lunagram: спросить перед выходом наружу. Выключено — эта строка
++    // сразу возвращает «нет», и дальше всё идёт как в обычном Telegram.
++    if lunagramAskBeforeOpening(context: context, url: url, presentationData: presentationData, proceed: { target in
++        openExternalUrlImpl(context: context, urlContext: urlContext, url: target, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
++    }) {
++        return
++    }
+     if forceExternal || url.lowercased().hasPrefix("tel:") || url.lowercased().hasPrefix("calshow:") {
+         if url.lowercased().hasPrefix("tel:+888") {
+             context.sharedContext.presentGlobalController(textAlertController(context: context, title: nil, text: presentationData.strings.Conversation_CantPhoneCallAnonymousNumberError, actions: [
