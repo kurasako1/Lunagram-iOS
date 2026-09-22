@@ -1,0 +1,339 @@
+diff --git a/submodules/ChatListUI/BUILD b/submodules/ChatListUI/BUILD
+index 602ef675..7fac7e61 100644
+--- a/submodules/ChatListUI/BUILD
++++ b/submodules/ChatListUI/BUILD
+@@ -88,6 +88,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/ChatListTitleView",
+         "//submodules/AvatarNode:AvatarNode",
+         "//submodules/Lunagram",
++        "//submodules/CallListUI:CallListUI",
+         "//submodules/WallpaperBackgroundNode:WallpaperBackgroundNode",
+         "//submodules/AvatarVideoNode:AvatarVideoNode",
+         "//submodules/InviteLinksUI",
+diff --git a/submodules/ChatListUI/Sources/ChatListController.swift b/submodules/ChatListUI/Sources/ChatListController.swift
+index eafe9575..a718aadc 100644
+--- a/submodules/ChatListUI/Sources/ChatListController.swift
++++ b/submodules/ChatListUI/Sources/ChatListController.swift
+@@ -62,6 +62,8 @@ import GlobalControlPanelsContext
+ import AlertComponent
+ import AlertHeaderComponent
+ import AvatarComponent
++import CallListUI
++import Lunagram
+ 
+ private final class ContextControllerContentSourceImpl: ContextControllerContentSource {
+     let controller: ViewController
+@@ -351,12 +353,17 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController
+                         }
+                     )))
+                     
+-                    self.primaryContext?.rightButton = AnyComponentWithIdentity(id: "compose", component: AnyComponent(NavigationButtonComponent(
+-                        content: .icon(imageName: "Chat List/ComposeIcon"),
+-                        pressed: { [weak self] _ in
+-                            self?.composePressed()
+-                        }
+-                    )))
++                    // Lunagram: карандаш можно убрать совсем.
++                    if LunagramComposeButton.hidden {
++                        self.primaryContext?.rightButton = nil
++                    } else {
++                        self.primaryContext?.rightButton = AnyComponentWithIdentity(id: "compose", component: AnyComponent(NavigationButtonComponent(
++                            content: .icon(imageName: "Chat List/ComposeIcon"),
++                            pressed: { [weak self] _ in
++                                self?.composePressed()
++                            }
++                        )))
++                    }
+                     
+                     //let backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.DialogList_Title, style: .plain, target: nil, action: nil)
+                     //backBarButtonItem.accessibilityLabel = self.presentationData.strings.Common_Back
+@@ -4797,6 +4804,13 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController
+     }
+     
+     @objc fileprivate func composePressed() {
++        // Lunagram: карандаш может вести не к выбору собеседника, а куда
++        // хозяин скажет. Пока не переназначен — всё как в обычном Telegram,
++        // разбор ниже даже не начинается.
++        if LunagramComposeButton.isCustomized, self.lunagramComposeAction() {
++            return
++        }
++
+         guard !self.context.isFrozen else {
+             let controller = self.context.sharedContext.makeAccountFreezeInfoScreen(context: self.context)
+             self.push(controller)
+@@ -4819,6 +4833,52 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController
+         }
+     }
+     
++    /// Увести карандаш по своему пути. Вернёт «да», если увели.
++    private func lunagramComposeAction() -> Bool {
++        guard let navigationController = self.navigationController as? NavigationController else {
++            return false
++        }
++        switch LunagramComposeButton.action {
++        case .compose:
++            return false
++        case .saved:
++            self.lunagramOpenChat(peerId: self.context.account.peerId, navigationController: navigationController)
++            return true
++        case .calls:
++            navigationController.pushViewController(CallListController(context: self.context, mode: .navigation))
++            return true
++        case .search:
++            self.activateSearch()
++            return true
++        case .peer:
++            guard let raw = LunagramComposeButton.peerId else {
++                // Номер не задан — пусть лучше откроется обычный выбор
++                // собеседника, чем нажатие уйдёт в пустоту.
++                return false
++            }
++            self.lunagramOpenChat(peerId: EnginePeer.Id(raw), navigationController: navigationController)
++            return true
++        }
++    }
++
++    /// Открыть переписку по номеру. Сам человек может быть ещё не
++    /// вычитан, поэтому спрашиваем его у своей базы и открываем в ответе.
++    private func lunagramOpenChat(peerId: EnginePeer.Id, navigationController: NavigationController) {
++        let context = self.context
++        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
++        |> take(1)
++        |> deliverOnMainQueue).startStandalone(next: { [weak navigationController] peer in
++            guard let navigationController, let peer else {
++                return
++            }
++            context.sharedContext.navigateToChatController(NavigateToChatControllerParams(
++                navigationController: navigationController,
++                context: context,
++                chatLocation: .peer(peer)
++            ))
++        })
++    }
++
+     public override var keyShortcuts: [KeyShortcut] {
+         let strings = self.presentationData.strings
+         
+diff --git a/submodules/Lunagram/Sources/LunagramComposeButton.swift b/submodules/Lunagram/Sources/LunagramComposeButton.swift
+new file mode 100644
+index 00000000..6c88a0ba
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramComposeButton.swift
+@@ -0,0 +1,97 @@
++import Foundation
++
++/// Что делает кнопка «написать» — карандаш справа вверху списка чатов.
++///
++/// Задумка из Custom FAB (@itsv1eds, @immat0x1). В исходном плагине речь
++/// о плавающей круглой кнопке, но её нет ни в iPhone-версии Telegram, ни
++/// в настольной: там «написать» — это карандаш в шапке. Придумывать ради
++/// переноса чужую круглую кнопку я не стал — настраивается то, что есть.
++public enum LunagramComposeButton {
++    /// Куда ведёт карандаш.
++    public enum Action: Int, CaseIterable {
++        /// Как в обычном Telegram — выбор, кому написать.
++        case compose
++        /// Избранное, оно же «Сохранённые сообщения».
++        case saved
++        /// Список звонков.
++        case calls
++        /// Поиск по чатам — тот же, что по нажатию на строку поиска.
++        case search
++        /// Чей-то профиль по номеру.
++        case peer
++
++        public var title: String {
++            switch self {
++            case .compose:
++                return "Как обычно"
++            case .saved:
++                return "Избранное"
++            case .calls:
++                return "Звонки"
++            case .search:
++                return "Поиск"
++            case .peer:
++                return "Чей-то профиль"
++            }
++        }
++    }
++
++    private static let hiddenKey = "lunagram.compose.hidden"
++    private static let actionKey = "lunagram.compose.action"
++    private static let peerKey = "lunagram.compose.peer"
++
++    private static var defaults: UserDefaults {
++        return UserDefaults.standard
++    }
++
++    /// Убрать карандаш совсем.
++    public static var hidden: Bool {
++        get {
++            guard defaults.object(forKey: hiddenKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: hiddenKey)
++        }
++        set {
++            defaults.set(newValue, forKey: hiddenKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Что делать по нажатию.
++    public static var action: Action {
++        get {
++            let raw = defaults.integer(forKey: actionKey)
++            return Action(rawValue: raw) ?? .compose
++        }
++        set {
++            defaults.set(newValue.rawValue, forKey: actionKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Чей профиль открывать, если выбран профиль. Номер храним строкой:
++    /// он длиннее, чем помещается в обычное целое у настроек.
++    public static var peerId: Int64? {
++        get {
++            guard let text = defaults.string(forKey: peerKey), let value = Int64(text), value != 0 else {
++                return nil
++            }
++            return value
++        }
++        set {
++            if let newValue, newValue != 0 {
++                defaults.set(String(newValue), forKey: peerKey)
++            } else {
++                defaults.removeObject(forKey: peerKey)
++            }
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Трогаем ли мы карандаш вообще. Пока не трогаем — весь наш разбор
++    /// в сторону, и кнопка ведёт себя как в обычном Telegram.
++    public static var isCustomized: Bool {
++        return self.hidden || self.action != .compose
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 7a656cc3..d9d07a71 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -71,6 +71,7 @@ private enum LunagramToggle: Int32 {
+     case inputIcons
+     case mentionAvatars
+     case mentionAvatarsAfter
++    case composeHidden
+ 
+     var value: Bool {
+         switch self {
+@@ -176,6 +177,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramMentionAvatars.enabled
+         case .mentionAvatarsAfter:
+             return LunagramMentionAvatars.after
++        case .composeHidden:
++            return LunagramComposeButton.hidden
+         }
+     }
+ 
+@@ -283,6 +286,8 @@ private enum LunagramToggle: Int32 {
+             LunagramMentionAvatars.enabled = value
+         case .mentionAvatarsAfter:
+             LunagramMentionAvatars.after = value
++        case .composeHidden:
++            LunagramComposeButton.hidden = value
+         }
+     }
+ 
+@@ -390,6 +395,8 @@ private enum LunagramToggle: Int32 {
+             return "Аватарка у @ника"
+         case .mentionAvatarsAfter:
+             return "Аватарка после ника"
++        case .composeHidden:
++            return "Убрать карандаш"
+         }
+     }
+ 
+@@ -445,7 +452,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden:
+             return nil
+         }
+     }
+@@ -612,6 +619,8 @@ extension LunagramToggle {
+             return "person.crop.circle"
+         case .mentionAvatarsAfter:
+             return "arrow.right.to.line"
++        case .composeHidden:
++            return "square.and.pencil"
+         }
+     }
+ }
+@@ -1366,6 +1375,8 @@ private struct LunagramMediaState: Equatable {
+     var rippleSize: Int = 45
+     var rippleStrength: Int = 30
+     var mentionAvatarSize: Int = 50
++    var composeAction: Int = 0
++    var composePeer: Int64 = 0
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1390,6 +1401,8 @@ private struct LunagramMediaState: Equatable {
+         state.rippleSize = LunagramSettings.rippleSize
+         state.rippleStrength = LunagramSettings.rippleStrength
+         state.mentionAvatarSize = LunagramMentionAvatars.size
++        state.composeAction = LunagramComposeButton.action.rawValue
++        state.composePeer = LunagramComposeButton.peerId ?? 0
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -2106,6 +2119,21 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             }))
+         case .inputIcons:
+             shared.push?(lunagramInputIconsController(context: context))
++        case .composeAction:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Что делает карандаш", options: LunagramComposeButton.Action.allCases.map { $0.title }, selected: LunagramComposeButton.action.rawValue, info: "Карандаш справа вверху списка чатов. «Как обычно» — выбор, кому написать, как в исходном Telegram.\n\nДля «Чей-то профиль» ниже выбирается, чей именно.", select: { index in
++                LunagramComposeButton.action = LunagramComposeButton.Action(rawValue: index) ?? .compose
++                refreshMedia()
++            }))
++        case .composePeer:
++            // Выбираем из готового списка чатов: номер человека ещё поди
++            // узнай, а список у Telegram уже есть.
++            let selection = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: context, filter: [], hasChatListSelector: true, hasContactSelector: true))
++            selection.peerSelected = { [weak selection] peer, _ in
++                LunagramComposeButton.peerId = peer.id.toInt64()
++                refreshMedia()
++                selection?.dismiss()
++            }
++            shared.push?(selection)
+         case .ghostLocks:
+             // Отдельный экран с галочками: отмеченные общий выключатель
+             // не трогает. На ПК это замочек у каждой строки, у нас виджет
+@@ -2349,6 +2377,8 @@ private enum LunagramChoice: Int32 {
+     case wordingEditor = 60
+     case deletedIconColor = 70
+     case inputIcons = 80
++    case composeAction = 81
++    case composePeer = 82
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2709,6 +2739,13 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.composeHidden, value(.composeHidden), "Убрать карандаш", "square.and.pencil"))
++    rows.row(.value(LunagramChoice.composeAction.rawValue, "Что делает карандаш", LunagramComposeButton.Action(rawValue: media.composeAction)?.title ?? "Как обычно", "arrow.turn.down.right"))
++    if media.composeAction == LunagramComposeButton.Action.peer.rawValue {
++        rows.row(.value(LunagramChoice.composePeer.rawValue, "Чей профиль", media.composePeer == 0 ? "не выбран" : "выбран", "person"))
++    }
++    rows.info("Карандаш справа вверху списка чатов. Его можно убрать совсем или увести на Избранное, звонки, поиск или чей-то профиль.\n\nПлавающей круглой кнопки, как в Android-версии, в Telegram на айфоне нет — настраивается то, что есть. Пока карандаш не переназначен, он ведёт себя ровно как в обычном Telegram.")
++
+     rows.row(.toggle(.mentionAvatars, value(.mentionAvatars), "Аватарка у @ника", "person.crop.circle"))
+     rows.row(.toggle(.mentionAvatarsAfter, value(.mentionAvatarsAfter), "Аватарка после ника", "arrow.right.to.line"))
+     rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
