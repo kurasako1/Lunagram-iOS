@@ -1,0 +1,407 @@
+diff --git a/submodules/Lunagram/Sources/LunagramScamRegistry.swift b/submodules/Lunagram/Sources/LunagramScamRegistry.swift
+new file mode 100644
+index 00000000..35f3d0f6
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramScamRegistry.swift
+@@ -0,0 +1,126 @@
++import Foundation
++
++/// Упоминания из открытого реестра-канала.
++///
++/// Задумка из Scam Base Writer (0patient v Hoffman). Канал `@GID_ScamBase`
++/// ведёт список номеров, за которыми, по мнению его хозяев, стоят
++/// мошенники. Плагин по этому списку вешает в профиле красную строку
++/// «В SCAM БАЗЕ».
++///
++/// Формулировку я поменял намеренно, и это не придирка к словам. Список
++/// чужой, проверить его нечем, а ошибка в нём означает клеймо на живом
++/// человеке — причём показанное так, будто это сказал сам Telegram.
++/// Поэтому строка говорит ровно то, что мы знаем: **человек упомянут в
++/// таком-то канале**, вот ссылка, смотри сам. Это честно и так же
++/// полезно: увидев строку, в сделку не полезешь.
++///
++/// В сеть ходим только к самому Telegram — читаем открытый канал. Наружу
++/// не уходит ничего.
++public enum LunagramScamRegistry {
++    /// Канал-источник. Меняться ему незачем: список ведут там.
++    public static let channelName = "GID_ScamBase"
++    public static let channelLink = "https://t.me/GID_ScamBase"
++
++    /// Как часто перечитывать канал сами. Список меняется не каждый день,
++    /// а чтение — дело на сотни заявок.
++    public static let refreshInterval: Double = 30 * 24 * 60 * 60
++
++    /// Сколько сообщений канала просматриваем за один заход.
++    public static let maxMessages = 5000
++
++    private static let enabledKey = "lunagram.scamRegistry.enabled"
++    private static let idsKey = "lunagram.scamRegistry.ids"
++    private static let updatedKey = "lunagram.scamRegistry.updated"
++
++    private static var defaults: UserDefaults {
++        return UserDefaults.standard
++    }
++
++    /// Показывать строку в профиле.
++    public static var enabled: Bool {
++        get {
++            guard defaults.object(forKey: enabledKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: enabledKey)
++        }
++        set {
++            defaults.set(newValue, forKey: enabledKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Когда список читали в последний раз.
++    public static var updatedAt: Double {
++        get { return defaults.double(forKey: updatedKey) }
++        set { defaults.set(newValue, forKey: updatedKey) }
++    }
++
++    public static var needsRefresh: Bool {
++        return Date().timeIntervalSince1970 - self.updatedAt > self.refreshInterval
++    }
++
++    // Номера храним одной строкой через запятую и разбираем один раз:
++    // их тысячи, и перебирать строку на каждый открытый профиль — заметно.
++    private static var cacheSource: String?
++    private static var cache: Set<Int64>?
++
++    public static var ids: Set<Int64> {
++        let source = defaults.string(forKey: idsKey) ?? ""
++        if let cache, cacheSource == source {
++            return cache
++        }
++        var result = Set<Int64>()
++        for part in source.split(separator: ",") {
++            if let value = Int64(part) {
++                result.insert(value)
++            }
++        }
++        cacheSource = source
++        cache = result
++        return result
++    }
++
++    public static func setIds(_ ids: Set<Int64>) {
++        defaults.set(ids.map { String($0) }.joined(separator: ","), forKey: idsKey)
++        self.updatedAt = Date().timeIntervalSince1970
++        cacheSource = nil
++        cache = nil
++        LunagramSettings.changed()
++    }
++
++    public static var count: Int {
++        return self.ids.count
++    }
++
++    /// Упомянут ли этот номер в реестре.
++    public static func mentions(_ peerId: Int64) -> Bool {
++        guard self.enabled else {
++            return false
++        }
++        return self.ids.contains(peerId)
++    }
++
++    /// Номера из текста сообщений канала.
++    ///
++    /// В канале пишут по-разному, но номер всегда идёт после слова «ID».
++    /// Берём только такие: просто длинное число в тексте — это чаще всего
++    /// сумма или дата, а не человек.
++    public static func parseIds(from text: String) -> [Int64] {
++        var result: [Int64] = []
++        let pattern = "(?<![A-Za-zА-Яа-яЁё])ID\\s+(\\d{6,12})(?![0-9])"
++        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
++            return result
++        }
++        let range = NSRange(text.startIndex ..< text.endIndex, in: text)
++        regex.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
++            guard let match, match.numberOfRanges > 1,
++                  let digits = Range(match.range(at: 1), in: text),
++                  let value = Int64(text[digits]) else {
++                return
++            }
++            result.append(value)
++        }
++        return result
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramScamRegistryLoader.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramScamRegistryLoader.swift
+new file mode 100644
+index 00000000..0d29a7b1
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramScamRegistryLoader.swift
+@@ -0,0 +1,119 @@
++import AccountContext
++import Foundation
++import Lunagram
++import SwiftSignalKit
++import TelegramCore
++
++// Lunagram: чтение реестра-канала @GID_ScamBase.
++//
++// Ходим только к самому Telegram и только за открытым каналом. Наружу не
++// уходит ничего.
++//
++// Читаем не всю историю подряд, а поиском по слову «ID» внутри канала.
++// Так задумано: в реестре номер всегда пишут после этого слова, а
++// сообщений в канале тысячи — перебирать их целиком значило бы гонять
++// сотни заявок ради того же самого. Заодно не требуется подписка: поиск
++// по открытому каналу работает и без неё.
++//
++// Делаем это раз в месяц: список меняется не каждый день.
++
++private final class LunagramScamRegistryLoader {
++    static let shared = LunagramScamRegistryLoader()
++
++    private var isLoading = false
++    private var disposable: Disposable?
++
++    func load(context: AccountContext, force: Bool, done: @escaping (Int?) -> Void) {
++        if self.isLoading {
++            done(nil)
++            return
++        }
++        if !force && !LunagramScamRegistry.needsRefresh {
++            done(LunagramScamRegistry.count)
++            return
++        }
++        self.isLoading = true
++
++        self.disposable = (context.engine.peers.resolvePeerByName(name: LunagramScamRegistry.channelName, referrer: nil)
++        |> mapToSignal { result -> Signal<EnginePeer?, NoError> in
++            switch result {
++            case let .result(peer):
++                return .single(peer)
++            case .progress:
++                return .complete()
++            }
++        }
++        |> take(1)
++        |> mapToSignal { peer -> Signal<Set<Int64>, NoError> in
++            guard let peer else {
++                return .single([])
++            }
++            return lunagramScamRegistryScan(context: context, peer: peer)
++        }
++        |> deliverOnMainQueue).startStrict(next: { [weak self] ids in
++            self?.isLoading = false
++            if ids.isEmpty {
++                done(nil)
++            } else {
++                LunagramScamRegistry.setIds(ids)
++                done(ids.count)
++            }
++        }, completed: { [weak self] in
++            self?.isLoading = false
++        })
++    }
++}
++
++/// Пройти канал поиском и собрать номера.
++private func lunagramScamRegistryScan(context: AccountContext, peer: EnginePeer) -> Signal<Set<Int64>, NoError> {
++    return Signal { subscriber in
++        let disposable = MetaDisposable()
++        var collected = Set<Int64>()
++        var scanned = 0
++
++        func step(state: SearchMessagesState?) {
++            let signal = context.engine.messages.searchMessages(
++                location: .peer(peerId: peer.id, fromId: nil, tags: nil, reactions: nil, threadId: nil, minDate: nil, maxDate: nil),
++                query: "ID",
++                state: state,
++                limit: 100
++            )
++            |> take(1)
++            |> deliverOnMainQueue
++
++            disposable.set(signal.startStrict(next: { result, nextState in
++                let messages = result.messages
++                for message in messages {
++                    let text = message.text
++                    if text.isEmpty {
++                        continue
++                    }
++                    for id in LunagramScamRegistry.parseIds(from: text) {
++                        collected.insert(id)
++                    }
++                }
++                scanned += messages.count
++                if messages.isEmpty || scanned >= LunagramScamRegistry.maxMessages || result.completed {
++                    subscriber.putNext(collected)
++                    subscriber.putCompletion()
++                    return
++                }
++                step(state: nextState)
++            }))
++        }
++
++        step(state: nil)
++
++        return disposable
++    }
++}
++
++/// Перечитать реестр. Зовут при запуске (раз в месяц) и кнопкой в
++/// настройках.
++public func lunagramRefreshScamRegistry(context: AccountContext, force: Bool, done: @escaping (Int?) -> Void = { _ in }) {
++    guard LunagramScamRegistry.enabled else {
++        done(nil)
++        return
++    }
++    LunagramScamRegistryLoader.shared.load(context: context, force: force, done: done)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 86b12878..f8ce85fb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -74,6 +74,7 @@ private enum LunagramToggle: Int32 {
+     case composeHidden
+     case linkGuard
+     case linkGuardClean
++    case scamRegistry
+ 
+     var value: Bool {
+         switch self {
+@@ -185,6 +186,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramLinkGuard.enabled
+         case .linkGuardClean:
+             return LunagramLinkGuard.cleanTrackers
++        case .scamRegistry:
++            return LunagramScamRegistry.enabled
+         }
+     }
+ 
+@@ -298,6 +301,8 @@ private enum LunagramToggle: Int32 {
+             LunagramLinkGuard.enabled = value
+         case .linkGuardClean:
+             LunagramLinkGuard.cleanTrackers = value
++        case .scamRegistry:
++            LunagramScamRegistry.enabled = value
+         }
+     }
+ 
+@@ -411,6 +416,8 @@ private enum LunagramToggle: Int32 {
+             return "Спрашивать перед ссылкой"
+         case .linkGuardClean:
+             return "Вырезать метки слежения"
++        case .scamRegistry:
++            return "Метка из реестра GiD"
+         }
+     }
+ 
+@@ -466,7 +473,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -639,6 +646,8 @@ extension LunagramToggle {
+             return "link.badge.plus"
+         case .linkGuardClean:
+             return "scissors"
++        case .scamRegistry:
++            return "exclamationmark.bubble"
+         }
+     }
+ }
+@@ -1395,6 +1404,7 @@ private struct LunagramMediaState: Equatable {
+     var mentionAvatarSize: Int = 50
+     var composeAction: Int = 0
+     var composePeer: Int64 = 0
++    var scamCount: Int = 0
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1421,6 +1431,7 @@ private struct LunagramMediaState: Equatable {
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
++        state.scamCount = LunagramScamRegistry.count
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -2142,6 +2153,14 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramComposeButton.action = LunagramComposeButton.Action(rawValue: index) ?? .compose
+                 refreshMedia()
+             }))
++        case .scamRefresh:
++            lunagramRefreshScamRegistry(context: context, force: true, done: { count in
++                refreshMedia()
++                let text = count.map { "Реестр перечитан: \($0) номеров." } ?? "Не вышло перечитать реестр."
++                shared.present?(textAlertController(context: context, title: nil, text: text, actions: [
++                    TextAlertAction(type: .defaultAction, title: context.sharedContext.currentPresentationData.with({ $0 }).strings.Common_OK, action: {})
++                ]))
++            })
+         case .composePeer:
+             // Выбираем из готового списка чатов: номер человека ещё поди
+             // узнай, а список у Telegram уже есть.
+@@ -2397,6 +2416,7 @@ private enum LunagramChoice: Int32 {
+     case inputIcons = 80
+     case composeAction = 81
+     case composePeer = 82
++    case scamRefresh = 83
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2757,6 +2777,10 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.scamRegistry, value(.scamRegistry), "Метка из реестра GiD", "exclamationmark.bubble"))
++    rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
++    rows.info("В профиле появится строка, если человек упомянут в открытом канале-реестре @GID_ScamBase. Нажатие открывает сам канал.\n\nФормулировка намеренно осторожная: «упоминается в реестре», а не «мошенник». Список чужой, проверить его нечем, а ошибка в нём ударила бы по живому человеку — и выглядело бы это так, будто сказал сам Telegram. Смотри источник и решай сам.\n\nКанал перечитывается раз в месяц. В сеть ходим только к Telegram, наружу ничего не уходит.")
++
+     rows.row(.toggle(.linkGuard, value(.linkGuard), "Спрашивать перед ссылкой", "link.badge.plus"))
+     rows.row(.toggle(.linkGuardClean, value(.linkGuardClean), "Вырезать метки слежения", "scissors"))
+     rows.info("Перед выходом на чужой сайт покажем окошко: куда ссылка ведёт на самом деле, чем она подозрительна и какие метки из неё вырезаны. Кнопки — «Перейти», «Скопировать», «Отмена».\n\nЛовим три вещи: настоящий домен (в ссылке его прячут за длинным путём, за «@» перед именем и за поддоменами вроде sberbank.ru.xyz.com), подмену букв (кириллическая «о» от латинской не отличается) и хвосты, по которым тебя узнают на том конце.\n\nВсё считается на телефоне. Ни один запрос наружу не уходит — иначе адрес, по которому ты только собрался перейти, уже улетел бы на сторону.")
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index 840c6b22..a9352437 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -963,6 +963,16 @@ func infoItems(
+         }
+     }
+     
++    // Lunagram: упоминание в открытом реестре-канале. Говорим ровно то,
++    // что знаем: человек там упомянут, вот ссылка. Списка мы не
++    // проверяли, и вешать от своего имени клеймо «мошенник» было бы
++    // нечестно — ошибка в чужом списке ударила бы по живому человеку.
++    if let peerId = data.peer?.id, LunagramScamRegistry.mentions(peerId.toInt64()) {
++        items[.peerInfoTrailing]!.append(PeerInfoScreenDisclosureItem(id: 9101, label: .text("проверь сам"), text: "Упоминается в реестре GiD", icon: UIImage(bundleImageName: "Chat/Info/GroupInfoIcon"), action: {
++            context.sharedContext.applicationBindings.openUrl(LunagramScamRegistry.channelLink)
++        }))
++    }
++
+     // Lunagram: «Эмодзи и стикеры чата» — из каких наборов здесь что
+     // попадалось. В своём профиле ни к чему: свои наборы и так под рукой.
+     if LunagramSettings.chatStickers, let peerId = data.peer?.id, peerId != context.account.peerId {
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index ccb3b210..50408dcf 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -47,6 +47,7 @@ import ContextUI
+ import ContextControllerImpl
+ import ProxyServerPreviewScreen
+ import Lunagram
++import PeerInfoScreen // Lunagram: чтение реестра-канала при запуске.
+ 
+ #if canImport(AppCenter)
+ import AppCenter
+@@ -1351,6 +1352,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+                 // Lunagram: прибираем за снятой функцией скрытия — возвращаем
+                 // приватность тем, кого она успела спрятать.
+                 lunagramCleanUpHiding(context: context.context)
++                // Lunagram: раз в месяц перечитываем реестр-канал.
++                // Внутри стоит проверка срока: чаще он не пойдёт.
++                lunagramRefreshScamRegistry(context: context.context, force: false)
+                 let isReady = context.isReady.get()
+                 contextReadyDisposable.set((isReady
+                 |> filter { $0 }
