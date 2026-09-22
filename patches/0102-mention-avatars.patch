@@ -1,0 +1,461 @@
+diff --git a/submodules/Lunagram/Sources/LunagramMentionAvatars.swift b/submodules/Lunagram/Sources/LunagramMentionAvatars.swift
+new file mode 100644
+index 00000000..9173530a
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramMentionAvatars.swift
+@@ -0,0 +1,74 @@
++import CoreGraphics
++import Foundation
++
++/// Аватарка рядом с @упоминанием в сообщении.
++///
++/// Задумка из MentionAvatars (@limeplug), взята только она.
++///
++/// Тут лежат одни настройки: сама отрисовка живёт там, где Telegram
++/// собирает текст сообщения, и тянуть сюда весь его разметчик незачем.
++public enum LunagramMentionAvatars {
++    private static let enabledKey = "lunagram.mentionAvatars.enabled"
++    private static let sizeKey = "lunagram.mentionAvatars.size"
++    private static let afterKey = "lunagram.mentionAvatars.after"
++
++    private static var defaults: UserDefaults {
++        return UserDefaults.standard
++    }
++
++    /// Показывать ли аватарки у упоминаний.
++    public static var enabled: Bool {
++        get {
++            guard defaults.object(forKey: enabledKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: enabledKey)
++        }
++        set {
++            defaults.set(newValue, forKey: enabledKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Размер аватарки, проценты. Ноль — вровень с буквой, сто — заметно
++    /// крупнее её. В точки переводим сами: человеку понятнее «меньше —
++    /// больше», чем число точек, да и буквы у всех разного размера.
++    public static var size: Int {
++        get {
++            guard defaults.object(forKey: sizeKey) != nil else {
++                return 50
++            }
++            return max(0, min(100, defaults.integer(forKey: sizeKey)))
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: sizeKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Ставить аватарку после ника, а не перед ним.
++    public static var after: Bool {
++        get {
++            guard defaults.object(forKey: afterKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: afterKey)
++        }
++        set {
++            defaults.set(newValue, forKey: afterKey)
++            LunagramSettings.changed()
++        }
++    }
++
++    /// Во сколько раз аватарка больше буквы. От неё и считаем: в мелком
++    /// тексте крупная аватарка разорвала бы строку, в крупном мелкая
++    /// потерялась бы.
++    public static func scale() -> CGFloat {
++        return 0.9 + CGFloat(self.size) / 100.0 * 0.7
++    }
++
++    /// Размер аватарки для текста с такой высотой букв.
++    public static func itemSize(fontSize: CGFloat) -> CGFloat {
++        return floor(fontSize * self.scale())
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 9e9c63eb..7a656cc3 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -69,6 +69,8 @@ private enum LunagramToggle: Int32 {
+     case ripple
+     case pinnedSearchBar
+     case inputIcons
++    case mentionAvatars
++    case mentionAvatarsAfter
+ 
+     var value: Bool {
+         switch self {
+@@ -170,6 +172,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.pinnedSearchBar
+         case .inputIcons:
+             return LunagramInputIcons.enabled
++        case .mentionAvatars:
++            return LunagramMentionAvatars.enabled
++        case .mentionAvatarsAfter:
++            return LunagramMentionAvatars.after
+         }
+     }
+ 
+@@ -273,6 +279,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.pinnedSearchBar = value
+         case .inputIcons:
+             LunagramInputIcons.enabled = value
++        case .mentionAvatars:
++            LunagramMentionAvatars.enabled = value
++        case .mentionAvatarsAfter:
++            LunagramMentionAvatars.after = value
+         }
+     }
+ 
+@@ -376,6 +386,10 @@ private enum LunagramToggle: Int32 {
+             return "Строка поиска всегда вверху"
+         case .inputIcons:
+             return "Двигать кнопки полосы ввода"
++        case .mentionAvatars:
++            return "Аватарка у @ника"
++        case .mentionAvatarsAfter:
++            return "Аватарка после ника"
+         }
+     }
+ 
+@@ -431,7 +445,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter:
+             return nil
+         }
+     }
+@@ -594,6 +608,10 @@ extension LunagramToggle {
+             return "magnifyingglass"
+         case .inputIcons:
+             return "arrow.up.and.down.and.arrow.left.and.right"
++        case .mentionAvatars:
++            return "person.crop.circle"
++        case .mentionAvatarsAfter:
++            return "arrow.right.to.line"
+         }
+     }
+ }
+@@ -1347,6 +1365,7 @@ private struct LunagramMediaState: Equatable {
+     var typingBlurRadius: Int = 6
+     var rippleSize: Int = 45
+     var rippleStrength: Int = 30
++    var mentionAvatarSize: Int = 50
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1370,6 +1389,7 @@ private struct LunagramMediaState: Equatable {
+         state.typingBlurRadius = LunagramSettings.typingBlurRadius
+         state.rippleSize = LunagramSettings.rippleSize
+         state.rippleStrength = LunagramSettings.rippleStrength
++        state.mentionAvatarSize = LunagramMentionAvatars.size
+         if let tint = LunagramSettings.profileNameTint() {
+             state.nameColorRGB = UIColor(cgColor: tint).argb & 0xFFFFFF
+         }
+@@ -1988,6 +2008,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.rippleSize = value
+         case 94:
+             LunagramSettings.rippleStrength = value
++        case 92:
++            LunagramMentionAvatars.size = value
+         case 50:
+             LunagramSettings.sendWithoutSound = value
+         default:
+@@ -2687,6 +2709,11 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.mentionAvatars, value(.mentionAvatars), "Аватарка у @ника", "person.crop.circle"))
++    rows.row(.toggle(.mentionAvatarsAfter, value(.mentionAvatarsAfter), "Аватарка после ника", "arrow.right.to.line"))
++    rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
++    rows.info("Рядом с @упоминанием в сообщении появится маленькая аватарка. Размер считается от высоты букв, чтобы в мелком тексте она не разрывала строку.\n\nЕсли в упоминании есть номер человека — а он есть, когда тебя тегнули по имени, — аватарка будет сразу. Если в сообщении просто написано «@ник», номера в нём нет: тогда ищем среди тех, кто уже известен телефону, и ничего не спрашиваем у сервера. У совсем незнакомого ника аватарки не будет.")
++
+     rows.row(.toggle(.inputIcons, value(.inputIcons), "Двигать кнопки полосы ввода", "arrow.up.and.down.and.arrow.left.and.right"))
+     rows.row(.action(LunagramChoice.inputIcons.rawValue, "Раскладка кнопок", "slider.horizontal.3"))
+     rows.info("Скрепку, кнопку меню и микрофон можно сдвинуть и повернуть. Раскладка задаётся на своём экране по образцу полосы — таскаешь пальцем, а настоящая полоса берёт готовые числа.\n\nВ самой переписке ничего таскать не надо: режим правки поверх полосы дрался бы за каждое касание с набором текста. Пока ничего не сдвинуто, полоса рисуется ровно как обычно.")
+diff --git a/submodules/TelegramUI/Components/TextNodeWithEntities/BUILD b/submodules/TelegramUI/Components/TextNodeWithEntities/BUILD
+index 2381686b..e3b6f65a 100644
+--- a/submodules/TelegramUI/Components/TextNodeWithEntities/BUILD
++++ b/submodules/TelegramUI/Components/TextNodeWithEntities/BUILD
+@@ -18,6 +18,10 @@ swift_library(
+         "//submodules/TelegramUI/Components/AnimationCache:AnimationCache",
+         "//submodules/TelegramUI/Components/MultiAnimationRenderer:MultiAnimationRenderer",
+         "//submodules/InvisibleInkDustNode:InvisibleInkDustNode",
++        "//submodules/AvatarNode:AvatarNode",
++        "//submodules/Lunagram",
++        "//submodules/Postbox",
++        "//submodules/TelegramPresentationData:TelegramPresentationData",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/TextNodeWithEntities/Sources/TextNodeWithEntities.swift b/submodules/TelegramUI/Components/TextNodeWithEntities/Sources/TextNodeWithEntities.swift
+index cb5f59f8..c5145eee 100644
+--- a/submodules/TelegramUI/Components/TextNodeWithEntities/Sources/TextNodeWithEntities.swift
++++ b/submodules/TelegramUI/Components/TextNodeWithEntities/Sources/TextNodeWithEntities.swift
+@@ -9,6 +9,11 @@ import AnimationCache
+ import MultiAnimationRenderer
+ import TelegramCore
+ import InvisibleInkDustNode
++import AvatarNode
++import Lunagram
++import Postbox
++import SwiftSignalKit
++import TelegramPresentationData
+ 
+ private extension CGRect {
+     var center: CGPoint {
+@@ -16,6 +21,82 @@ private extension CGRect {
+     }
+ }
+ 
++// MARK: - Lunagram: аватарка у @упоминания
++//
++// Свои эмодзи Telegram вставляет в текст так: на месте эмодзи остаётся
++// знак-пустышка, ему приписывается «встроенный предмет» и указатель на
++// ширину, а поверх пустышки потом кладут слой с картинкой. Аватарку у
++// упоминания делаем ровно тем же способом — иначе пришлось бы лезть в
++// сам разметчик текста, а он общий на всё приложение.
++//
++// Оговорка, которую честнее сказать сразу: аватарка появляется там, где
++// в упоминании есть номер человека. Когда в сообщении просто написано
++// «@ник», номера в нём нет, и кто это — приходится искать. Ищем только
++// среди тех, кто уже известен телефону, и ничего не спрашиваем у сервера:
++// иначе каждое чужое сообщение отправляло бы запрос наружу.
++
++private final class LunagramMentionItem {
++    let peerId: EnginePeer.Id?
++    let mention: String
++    let fontSize: CGFloat
++
++    init(peerId: EnginePeer.Id?, mention: String, fontSize: CGFloat) {
++        self.peerId = peerId
++        self.mention = mention
++        self.fontSize = fontSize
++    }
++}
++
++/// Кто скрывается за «@ником». Ответы помним: одно и то же имя
++/// встречается в переписке десятки раз, и перебирать своих знакомых на
++/// каждое его появление незачем.
++private final class LunagramMentionLookup {
++    static let shared = LunagramMentionLookup()
++
++    private var known: [String: EnginePeer.Id?] = [:]
++    private var asking = Set<String>()
++    private var disposables: [String: Disposable] = [:]
++
++    func peerId(for mention: String) -> EnginePeer.Id? {
++        let key = mention.lowercased()
++        if let found = self.known[key] {
++            return found
++        }
++        return nil
++    }
++
++    func lookUp(mention: String, context: AccountContext, done: @escaping () -> Void) {
++        let key = mention.lowercased()
++        if self.known[key] != nil || self.asking.contains(key) {
++            return
++        }
++        self.asking.insert(key)
++        // Поиск по своей базе, без единого запроса наружу.
++        self.disposables[key] = (context.account.postbox.searchPeers(query: key)
++        |> take(1)
++        |> deliverOnMainQueue).startStrict(next: { [weak self] peers in
++            guard let self else {
++                return
++            }
++            self.asking.remove(key)
++            var found: EnginePeer.Id?
++            for rendered in peers {
++                guard let peer = rendered.peer else {
++                    continue
++                }
++                if let username = peer.addressName, username.lowercased() == key {
++                    found = peer.id
++                    break
++                }
++            }
++            self.known[key] = found
++            if found != nil {
++                done()
++            }
++        })
++    }
++}
++
+ private final class InlineStickerItem: Hashable {
+     let emoji: ChatTextInputTextCustomEmojiAttribute
+     let file: TelegramMediaFile?
+@@ -227,6 +308,69 @@ public final class TextNodeWithEntities {
+                     }
+                 }
+                 
++                // Lunagram: пустышка под аватарку у @упоминания. Делаем
++                // это после своих эмодзи, чтобы не перебивать их разбор.
++                // Идём с конца строки: вставка сдвигает всё, что правее, и
++                // при обратном ходе найденные места не разъезжаются.
++                if LunagramMentionAvatars.enabled {
++                    var mentions: [(NSRange, EnginePeer.Id?, String, UIFont)] = []
++                    let whole = NSRange(location: 0, length: string.length)
++                    string.enumerateAttributes(in: whole, options: [], using: { attributes, range, _ in
++                        guard let font = attributes[.font] as? UIFont else {
++                            return
++                        }
++                        if let value = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerMention)] as? TelegramPeerMention {
++                            mentions.append((range, value.peerId, value.mention, font))
++                        } else if let value = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerTextMention)] as? String {
++                            mentions.append((range, nil, value, font))
++                        }
++                    })
++                    let after = LunagramMentionAvatars.after
++                    for (range, peerId, mention, font) in mentions.reversed() {
++                        let itemSize = LunagramMentionAvatars.itemSize(fontSize: font.pointSize)
++                        let piece = NSMutableAttributedString(string: after ? "\u{00a0}&" : "&\u{00a0}")
++                        let pieceRange = NSRange(location: 0, length: piece.length)
++                        piece.addAttributes(string.attributes(at: range.location, effectiveRange: nil), range: pieceRange)
++                        // Ссылку с пустышки снимаем: нажатие по аватарке не
++                        // должно открывать профиль само по себе — это место
++                        // между словами, туда попадают промахом.
++                        piece.removeAttribute(NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerMention), range: pieceRange)
++                        piece.removeAttribute(NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerTextMention), range: pieceRange)
++                        piece.removeAttribute(NSAttributedString.Key(rawValue: TelegramTextAttributes.URL), range: pieceRange)
++
++                        let itemRange = NSRange(location: after ? 1 : 0, length: 1)
++                        piece.addAttribute(NSAttributedString.Key("Attribute__EmbeddedItem"), value: LunagramMentionItem(peerId: peerId, mention: mention, fontSize: font.pointSize), range: itemRange)
++
++                        let runDelegateData = RunDelegateData(
++                            ascent: font.ascender,
++                            descent: font.descender,
++                            width: itemSize
++                        )
++                        var callbacks = CTRunDelegateCallbacks(
++                            version: kCTRunDelegateCurrentVersion,
++                            dealloc: { dataRef in
++                                Unmanaged<RunDelegateData>.fromOpaque(dataRef).release()
++                            },
++                            getAscent: { dataRef in
++                                let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
++                                return data.takeUnretainedValue().ascent
++                            },
++                            getDescent: { dataRef in
++                                let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
++                                return data.takeUnretainedValue().descent
++                            },
++                            getWidth: { dataRef in
++                                let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
++                                return data.takeUnretainedValue().width
++                            }
++                        )
++                        if let runDelegate = CTRunDelegateCreate(&callbacks, Unmanaged.passRetained(runDelegateData).toOpaque()) {
++                            piece.addAttribute(NSAttributedString.Key(kCTRunDelegateAttributeName as String), value: runDelegate, range: itemRange)
++                        }
++                        string.insert(piece, at: after ? range.upperBound : range.location)
++                    }
++                }
++
+                 updatedString = string
+             }
+             
+@@ -253,6 +397,82 @@ public final class TextNodeWithEntities {
+         }
+     }
+     
++    /// Lunagram: аватарки у упоминаний. Живут рядом со своими эмодзи и
++    /// тем же порядком: пока предмет виден — слой на месте, пропал —
++    /// слой убирается.
++    private var lunagramAvatarNodes: [Int: AvatarNode] = [:]
++
++    private func lunagramUpdateMentionAvatars(context: AccountContext, textLayout: TextNodeLayout?, emojiOffset: CGPoint) {
++        var valid = Set<Int>()
++        if LunagramMentionAvatars.enabled, let textLayout {
++            var index = 0
++            for item in textLayout.embeddedItems {
++                guard let mention = item.value as? LunagramMentionItem else {
++                    continue
++                }
++                let key = index
++                index += 1
++                valid.insert(key)
++
++                let itemSize = LunagramMentionAvatars.itemSize(fontSize: mention.fontSize)
++                var frame = CGRect(origin: item.rect.offsetBy(dx: textLayout.insets.left + emojiOffset.x, dy: textLayout.insets.top + 1.0 + emojiOffset.y).center, size: CGSize()).insetBy(dx: -itemSize / 2.0, dy: -itemSize / 2.0)
++                frame.origin.x = floorToScreenPixels(frame.origin.x)
++                frame.origin.y = floorToScreenPixels(frame.origin.y)
++
++                let avatarNode: AvatarNode
++                if let current = self.lunagramAvatarNodes[key] {
++                    avatarNode = current
++                } else {
++                    avatarNode = AvatarNode(font: avatarPlaceholderFont(size: floor(itemSize * 0.5)))
++                    avatarNode.isUserInteractionEnabled = false
++                    self.lunagramAvatarNodes[key] = avatarNode
++                    self.textNode.addSubnode(avatarNode)
++                }
++                avatarNode.frame = frame
++
++                // Номер человека знаем не всегда: в «@нике» его нет. Тогда
++                // ищем среди уже известных телефону и перерисовываем, когда
++                // нашли. Наружу при этом ничего не уходит.
++                var peerId = mention.peerId
++                if peerId == nil {
++                    peerId = LunagramMentionLookup.shared.peerId(for: mention.mention)
++                    if peerId == nil {
++                        LunagramMentionLookup.shared.lookUp(mention: mention.mention, context: context, done: { [weak avatarNode] in
++                            avatarNode?.setNeedsLayout()
++                        })
++                    }
++                }
++                if let peerId {
++                    avatarNode.isHidden = false
++                    let theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++                    let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
++                    |> take(1)
++                    |> deliverOnMainQueue).startStandalone(next: { [weak avatarNode] peer in
++                        guard let avatarNode, let peer else {
++                            return
++                        }
++                        avatarNode.setPeer(context: context, theme: theme, peer: peer)
++                    })
++                } else {
++                    // Пока не нашли — прячем: пустой кружок хуже, чем
++                    // промежуток, который всё равно оставлен под аватарку.
++                    avatarNode.isHidden = true
++                }
++            }
++        }
++
++        var remove: [Int] = []
++        for (key, node) in self.lunagramAvatarNodes {
++            if !valid.contains(key) {
++                remove.append(key)
++                node.removeFromSupernode()
++            }
++        }
++        for key in remove {
++            self.lunagramAvatarNodes.removeValue(forKey: key)
++        }
++    }
++
+     private func isItemVisible(itemRect: CGRect) -> Bool {
+         if let visibilityRect = self.visibilityRect {
+             return itemRect.intersects(visibilityRect)
+@@ -263,6 +483,10 @@ public final class TextNodeWithEntities {
+     
+     private func updateInlineStickers(context: AccountContext, cache: AnimationCache, renderer: MultiAnimationRenderer, textLayout: TextNodeLayout?, placeholderColor: UIColor, attemptSynchronousLoad: Bool, emojiOffset: CGPoint, fontSizeNorm: CGFloat) {
+         self.energySavingEnableLooping = context.sharedContext.energyUsageSettings.loopEmoji
++
++        // Lunagram: аватарки у упоминаний обновляем тут же — место и время
++        // те же, что у своих эмодзи.
++        self.lunagramUpdateMentionAvatars(context: context, textLayout: textLayout, emojiOffset: emojiOffset)
+         
+         var nextIndexById: [Int64: Int] = [:]
+         var validIds: [InlineStickerItemLayer.Key] = []
