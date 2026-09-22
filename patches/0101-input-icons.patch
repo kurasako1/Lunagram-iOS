@@ -1,0 +1,649 @@
+diff --git a/submodules/Lunagram/Sources/LunagramInputIcons.swift b/submodules/Lunagram/Sources/LunagramInputIcons.swift
+new file mode 100644
+index 00000000..157b7202
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramInputIcons.swift
+@@ -0,0 +1,189 @@
++import CoreGraphics
++import Foundation
++import UIKit
++
++/// Раскладка кнопок полосы ввода: сдвиг и поворот.
++///
++/// Задумка из IconMover (@Darksourse399), взята только она. Плагин двигает
++/// что угодно по всему экрану; здесь — только три кнопки полосы ввода.
++/// Так решил хозяин, и так оно безопаснее: полоса ввода — самое частое
++/// место в приложении, и вольная правка чего угодно поверх неё кончилась бы
++/// недосягаемой кнопкой отправки.
++///
++/// Главное свойство: пока ничего не сдвинуто, превращение получается
++/// тождественным — то есть полоса ввода рисуется ровно так же, как без нас.
++/// Выключатель гасит всё сразу, не дожидаясь сброса каждой кнопки.
++public enum LunagramInputIcons {
++    /// Какие кнопки двигаем. Значки внутри поля ввода (смайлик и прочие)
++    /// сюда не берём: они стоят впритык к тексту, и сдвинутые лезли бы на
++    /// буквы.
++    public enum Slot: String, CaseIterable {
++        /// Скрепка слева.
++        case attach
++        /// Кнопка меню бота — она же слева, вместо скрепки.
++        case menu
++        /// Микрофон и отправка справа.
++        case send
++
++        public var title: String {
++            switch self {
++            case .attach:
++                return "Скрепка"
++            case .menu:
++                return "Меню"
++            case .send:
++                return "Микрофон и отправка"
++            }
++        }
++    }
++
++    /// Насколько кнопку разрешено уводить от её места, точки экрана.
++    public static let range: Int = 60
++    /// Насколько разрешено поворачивать, градусы.
++    public static let angleRange: Int = 180
++
++    public struct Placement: Equatable {
++        public var offsetX: Int = 0
++        public var offsetY: Int = 0
++        public var angle: Int = 0
++
++        public var isDefault: Bool {
++            return self.offsetX == 0 && self.offsetY == 0 && self.angle == 0
++        }
++
++        public init(offsetX: Int = 0, offsetY: Int = 0, angle: Int = 0) {
++            self.offsetX = offsetX
++            self.offsetY = offsetY
++            self.angle = angle
++        }
++    }
++
++    private static let enabledKey = "lunagram.inputIcons.enabled"
++    private static let mapKey = "lunagram.inputIcons.map"
++
++    private static var defaults: UserDefaults {
++        return UserDefaults.standard
++    }
++
++    /// Двигаем ли кнопки вообще.
++    public static var enabled: Bool {
++        get {
++            guard defaults.object(forKey: enabledKey) != nil else {
++                return false
++            }
++            return defaults.bool(forKey: enabledKey)
++        }
++        set {
++            defaults.set(newValue, forKey: enabledKey)
++            cache = nil
++            LunagramSettings.changed()
++        }
++    }
++
++    // MARK: Хранение
++
++    // Всё складываем одной строкой: «скрепка:10,-4,15;отправка:0,8,0».
++    // Заводить под каждую кнопку по три ключа — плодить девять настроек
++    // ради одной задумки.
++    private static var cacheSource: String?
++    private static var cache: [Slot: Placement]?
++
++    private static var map: [Slot: Placement] {
++        let source = defaults.string(forKey: mapKey) ?? ""
++        if let cache, cacheSource == source {
++            return cache
++        }
++        var result: [Slot: Placement] = [:]
++        for part in source.split(separator: ";") {
++            let pair = part.split(separator: ":")
++            guard pair.count == 2, let slot = Slot(rawValue: String(pair[0])) else {
++                continue
++            }
++            let numbers = pair[1].split(separator: ",").map { Int($0) ?? 0 }
++            guard numbers.count == 3 else {
++                continue
++            }
++            result[slot] = Placement(offsetX: numbers[0], offsetY: numbers[1], angle: numbers[2])
++        }
++        cacheSource = source
++        cache = result
++        return result
++    }
++
++    private static func store(_ map: [Slot: Placement]) {
++        // Порядок постоянный: иначе строка в настройках переписывалась бы
++        // при каждом сохранении, даже когда ничего не поменялось.
++        let text = Slot.allCases.compactMap { slot -> String? in
++            guard let placement = map[slot], !placement.isDefault else {
++                return nil
++            }
++            return "\(slot.rawValue):\(placement.offsetX),\(placement.offsetY),\(placement.angle)"
++        }.joined(separator: ";")
++        defaults.set(text, forKey: mapKey)
++        cacheSource = nil
++        cache = nil
++        LunagramSettings.changed()
++    }
++
++    public static func placement(_ slot: Slot) -> Placement {
++        return map[slot] ?? Placement()
++    }
++
++    public static func setPlacement(_ placement: Placement, for slot: Slot) {
++        var updated = map
++        let clamped = Placement(
++            offsetX: max(-range, min(range, placement.offsetX)),
++            offsetY: max(-range, min(range, placement.offsetY)),
++            angle: max(-angleRange, min(angleRange, placement.angle))
++        )
++        if clamped.isDefault {
++            updated.removeValue(forKey: slot)
++        } else {
++            updated[slot] = clamped
++        }
++        store(updated)
++    }
++
++    /// Вернуть всё на место.
++    public static func reset() {
++        store([:])
++    }
++
++    public static var hasAnyPlacement: Bool {
++        return !map.isEmpty
++    }
++
++    // MARK: Применение
++
++    /// Превращение для кнопки. Пока ничего не сдвинуто — тождественное, и
++    /// полоса ввода рисуется ровно как без нас.
++    public static func transform(for slot: Slot) -> CGAffineTransform {
++        guard self.enabled else {
++            return .identity
++        }
++        let placement = self.placement(slot)
++        guard !placement.isDefault else {
++            return .identity
++        }
++        var result = CGAffineTransform(translationX: CGFloat(placement.offsetX), y: CGFloat(placement.offsetY))
++        if placement.angle != 0 {
++            result = result.rotated(by: CGFloat(placement.angle) * .pi / 180.0)
++        }
++        return result
++    }
++
++    /// Поставить превращение слою, если оно поменялось.
++    ///
++    /// Сравниваем перед записью: полоса ввода перекладывается на каждый
++    /// набранный знак, а запись в слой каждый раз сбрасывала бы его
++    /// собственные переходы.
++    public static func apply(_ slot: Slot, to layer: CALayer?) {
++        guard let layer else {
++            return
++        }
++        let transform = CATransform3DMakeAffineTransform(self.transform(for: slot))
++        if !CATransform3DEqualToTransform(layer.transform, transform) {
++            layer.transform = transform
++        }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 95f711ac..d0e2afb4 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -2619,6 +2619,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         
+         let menuButtonFrame = CGRect(x: leftInset + 8.0, y: menuButtonOriginY, width: menuButtonExpanded ? menuButtonWidth : menuCollapsedButtonWidth, height: menuButtonHeight)
+         transition.updateFrameAsPositionAndBounds(node: self.menuButton, frame: menuButtonFrame)
++        // Lunagram: сдвиг и поворот кнопки. Пока ничего не сдвинуто,
++        // превращение тождественное — полоса рисуется ровно как обычно.
++        LunagramInputIcons.apply(.menu, to: self.menuButton.layer)
+         transition.updateFrame(view: self.menuButtonBackgroundView, frame: CGRect(origin: CGPoint(), size: menuButtonFrame.size))
+         self.menuButtonBackgroundView.update(size: menuButtonFrame.size, cornerRadius: menuButtonFrame.height * 0.5, isDark: interfaceState.theme.overallDarkAppearance, tintColor: defaultGlassTintWithInnerColor, transition: ComponentTransition(transition))
+         transition.updateFrame(node: self.menuButtonClippingNode, frame: CGRect(origin: CGPoint(x: 19.0, y: 0.0), size: CGSize(width: menuButtonWidth - 19.0, height: menuButtonFrame.height)))
+@@ -3437,6 +3440,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             mediaActionButtonsFrame.origin.x = width + 8.0
+         }
+         transition.updateFrame(node: self.mediaActionButtons, frame: mediaActionButtonsFrame)
++        LunagramInputIcons.apply(.send, to: self.mediaActionButtons.layer)
+         if let (rect, containerSize) = self.absoluteRect {
+             self.mediaActionButtons.updateAbsoluteRect(CGRect(x: rect.origin.x + mediaActionButtonsFrame.origin.x, y: rect.origin.y + mediaActionButtonsFrame.origin.y, width: mediaActionButtonsFrame.width, height: mediaActionButtonsFrame.height), within: containerSize, transition: transition)
+         }
+@@ -3569,6 +3573,8 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         // + tap target + disabled overlay + icon are pinned to the BOTTOM 40x40 slot of the capsule.
+         transition.updateFrame(layer: self.attachmentButton.layer, frame: CGRect(origin: CGPoint(x: 0.0, y: attachmentButtonFrame.height - 40.0), size: CGSize(width: 40.0, height: 40.0)))
+         transition.updateFrame(node: self.attachmentButtonDisabledNode, frame: CGRect(origin: CGPoint(x: attachmentButtonFrame.minX, y: attachmentButtonFrame.maxY - 40.0), size: CGSize(width: 40.0, height: 40.0)))
++        LunagramInputIcons.apply(.attach, to: self.attachmentButtonBackground.layer)
++        LunagramInputIcons.apply(.attach, to: self.attachmentButtonDisabledNode.layer)
+ 
+         if let _ = self.attachmentButtonIcon.image {
+             transition.updateFrame(view: self.attachmentButtonIcon, frame: CGRect(origin: CGPoint(x: 0.0, y: attachmentButtonFrame.height - 40.0), size: CGSize(width: 40, height: 40)))
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift
+new file mode 100644
+index 00000000..19cb5ac7
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift
+@@ -0,0 +1,332 @@
++import AccountContext
++import AsyncDisplayKit
++import Display
++import Foundation
++import Lunagram
++import TelegramPresentationData
++import UIKit
++
++// Lunagram: где какой кнопке стоять на полосе ввода.
++//
++// Двигать кнопки прямо в переписке я не стал. Полоса ввода — самое частое
++// место в приложении, и режим правки поверх неё дрался бы за каждое
++// касание с набором текста, прокруткой и долгим нажатием на отправку.
++// Поэтому тут свой образец полосы: таскаешь по нему, а настоящая полоса
++// потом просто берёт готовые числа.
++
++/// Образец полосы ввода, по которому таскают кнопки.
++private final class LunagramInputIconsPreview: UIView {
++    private let fieldView = UIView()
++    private var chips: [LunagramInputIcons.Slot: UIView] = [:]
++    private var dragging: LunagramInputIcons.Slot?
++    private var dragStart = CGPoint()
++    private var dragOrigin = LunagramInputIcons.Placement()
++
++    var selected: LunagramInputIcons.Slot = .attach {
++        didSet {
++            self.updateChips()
++        }
++    }
++    var selectionChanged: (() -> Void)?
++    var placementChanged: (() -> Void)?
++
++    private var theme: PresentationTheme
++
++    init(theme: PresentationTheme) {
++        self.theme = theme
++        super.init(frame: CGRect())
++
++        self.fieldView.layer.cornerRadius = 18.0
++        self.addSubview(self.fieldView)
++
++        for slot in LunagramInputIcons.Slot.allCases {
++            let chip = UIView()
++            chip.layer.cornerRadius = 20.0
++            chip.isUserInteractionEnabled = false
++
++            let label = UILabel()
++            label.textAlignment = .center
++            label.font = UIFont.systemFont(ofSize: 18.0)
++            label.text = LunagramInputIconsPreview.glyph(for: slot)
++            label.tag = 1
++            chip.addSubview(label)
++
++            self.addSubview(chip)
++            self.chips[slot] = chip
++        }
++
++        self.applyTheme()
++
++        let pan = UIPanGestureRecognizer(target: self, action: #selector(self.onPan))
++        self.addGestureRecognizer(pan)
++        let tap = UITapGestureRecognizer(target: self, action: #selector(self.onTap))
++        self.addGestureRecognizer(tap)
++    }
++
++    required init?(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    /// Значки рисуем буквами: тянуть сюда настоящие картинки Telegram ради
++    /// образца не стоит, а узнаются они и так.
++    private static func glyph(for slot: LunagramInputIcons.Slot) -> String {
++        switch slot {
++        case .attach:
++            return "📎"
++        case .menu:
++            return "☰"
++        case .send:
++            return "🎤"
++        }
++    }
++
++    func updateTheme(_ theme: PresentationTheme) {
++        self.theme = theme
++        self.applyTheme()
++    }
++
++    private func applyTheme() {
++        self.backgroundColor = self.theme.list.itemBlocksBackgroundColor
++        self.fieldView.backgroundColor = self.theme.chat.inputPanel.inputBackgroundColor
++        self.updateChips()
++    }
++
++    private func updateChips() {
++        for (slot, chip) in self.chips {
++            let isSelected = (slot == self.selected)
++            chip.backgroundColor = isSelected
++                ? self.theme.list.itemAccentColor.withAlphaComponent(0.22)
++                : self.theme.chat.inputPanel.inputBackgroundColor
++            chip.layer.borderWidth = isSelected ? 2.0 : 0.0
++            chip.layer.borderColor = self.theme.list.itemAccentColor.cgColor
++            if let label = chip.viewWithTag(1) as? UILabel {
++                label.textColor = self.theme.chat.inputPanel.inputTextColor
++            }
++        }
++        self.setNeedsLayout()
++    }
++
++    /// Куда кнопка встала бы без наших сдвигов.
++    private func basePosition(for slot: LunagramInputIcons.Slot, in size: CGSize) -> CGPoint {
++        let centerY = size.height / 2.0
++        switch slot {
++        case .attach:
++            return CGPoint(x: 40.0, y: centerY)
++        case .menu:
++            return CGPoint(x: 40.0, y: centerY - 46.0)
++        case .send:
++            return CGPoint(x: size.width - 40.0, y: centerY)
++        }
++    }
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        let size = self.bounds.size
++        self.fieldView.frame = CGRect(x: 68.0, y: size.height / 2.0 - 18.0, width: max(40.0, size.width - 68.0 - 68.0), height: 36.0)
++
++        for slot in LunagramInputIcons.Slot.allCases {
++            guard let chip = self.chips[slot] else {
++                continue
++            }
++            let base = self.basePosition(for: slot, in: size)
++            let placement = LunagramInputIcons.placement(slot)
++            chip.bounds = CGRect(origin: CGPoint(), size: CGSize(width: 40.0, height: 40.0))
++            chip.center = CGPoint(x: base.x + CGFloat(placement.offsetX), y: base.y + CGFloat(placement.offsetY))
++            chip.transform = placement.angle == 0
++                ? .identity
++                : CGAffineTransform(rotationAngle: CGFloat(placement.angle) * .pi / 180.0)
++            if let label = chip.viewWithTag(1) {
++                label.frame = chip.bounds
++            }
++        }
++    }
++
++    private func slot(at point: CGPoint) -> LunagramInputIcons.Slot? {
++        // Сверху вниз по списку: если кнопки наехали друг на друга, берём
++        // ту, что нарисована последней.
++        for slot in LunagramInputIcons.Slot.allCases.reversed() {
++            if let chip = self.chips[slot], chip.frame.insetBy(dx: -6.0, dy: -6.0).contains(point) {
++                return slot
++            }
++        }
++        return nil
++    }
++
++    @objc private func onTap(_ recognizer: UITapGestureRecognizer) {
++        guard let slot = self.slot(at: recognizer.location(in: self)) else {
++            return
++        }
++        self.selected = slot
++        self.selectionChanged?()
++    }
++
++    @objc private func onPan(_ recognizer: UIPanGestureRecognizer) {
++        let point = recognizer.location(in: self)
++        switch recognizer.state {
++        case .began:
++            guard let slot = self.slot(at: point) else {
++                return
++            }
++            self.dragging = slot
++            self.dragStart = point
++            self.dragOrigin = LunagramInputIcons.placement(slot)
++            self.selected = slot
++            self.selectionChanged?()
++        case .changed:
++            guard let slot = self.dragging else {
++                return
++            }
++            let delta = CGPoint(x: point.x - self.dragStart.x, y: point.y - self.dragStart.y)
++            var placement = self.dragOrigin
++            placement.offsetX = self.dragOrigin.offsetX + Int(delta.x)
++            placement.offsetY = self.dragOrigin.offsetY + Int(delta.y)
++            LunagramInputIcons.setPlacement(placement, for: slot)
++            self.setNeedsLayout()
++            self.placementChanged?()
++        default:
++            self.dragging = nil
++        }
++    }
++}
++
++private final class LunagramInputIconsNode: ASDisplayNode {
++    private var presentationData: PresentationData
++    private let scrollView = UIScrollView()
++    private let preview: LunagramInputIconsPreview
++    private let hintLabel = UILabel()
++    private let angleLabel = UILabel()
++    private let angleSlider = UISlider()
++    private let resetButton = UIButton(type: .system)
++
++    init(presentationData: PresentationData) {
++        self.presentationData = presentationData
++        self.preview = LunagramInputIconsPreview(theme: presentationData.theme)
++
++        super.init()
++
++        self.setViewBlock({
++            return UIView()
++        })
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        let theme = self.presentationData.theme
++        self.view.backgroundColor = theme.list.blocksBackgroundColor
++
++        self.view.addSubview(self.scrollView)
++        self.scrollView.alwaysBounceVertical = true
++        self.scrollView.addSubview(self.preview)
++
++        self.hintLabel.numberOfLines = 0
++        self.hintLabel.font = UIFont.systemFont(ofSize: 14.0)
++        self.hintLabel.textColor = theme.list.freeTextColor
++        self.hintLabel.text = "Перетащи кнопку пальцем по образцу. Нажми на неё, чтобы выбрать, и крути поворот ползунком.\n\nНастоящая полоса ввода возьмёт эти же числа. Пока ничего не сдвинуто, она рисуется ровно как обычно."
++        self.scrollView.addSubview(self.hintLabel)
++
++        self.angleLabel.font = UIFont.systemFont(ofSize: 15.0)
++        self.angleLabel.textColor = theme.list.itemPrimaryTextColor
++        self.scrollView.addSubview(self.angleLabel)
++
++        self.angleSlider.minimumValue = Float(-LunagramInputIcons.angleRange)
++        self.angleSlider.maximumValue = Float(LunagramInputIcons.angleRange)
++        self.angleSlider.addTarget(self, action: #selector(self.angleChanged), for: .valueChanged)
++        self.scrollView.addSubview(self.angleSlider)
++
++        self.resetButton.setTitle("Вернуть всё на место", for: .normal)
++        self.resetButton.setTitleColor(theme.list.itemDestructiveColor, for: .normal)
++        self.resetButton.addTarget(self, action: #selector(self.resetPressed), for: .touchUpInside)
++        self.scrollView.addSubview(self.resetButton)
++
++        self.preview.selectionChanged = { [weak self] in
++            self?.syncControls()
++        }
++        self.preview.placementChanged = { [weak self] in
++            self?.syncControls()
++        }
++        self.syncControls()
++    }
++
++    private func syncControls() {
++        let slot = self.preview.selected
++        let placement = LunagramInputIcons.placement(slot)
++        self.angleLabel.text = "\(slot.title): поворот \(placement.angle)°"
++        self.angleSlider.value = Float(placement.angle)
++    }
++
++    @objc private func angleChanged() {
++        let slot = self.preview.selected
++        var placement = LunagramInputIcons.placement(slot)
++        placement.angle = Int(self.angleSlider.value.rounded())
++        LunagramInputIcons.setPlacement(placement, for: slot)
++        self.preview.setNeedsLayout()
++        self.syncControls()
++    }
++
++    @objc private func resetPressed() {
++        LunagramInputIcons.reset()
++        self.preview.setNeedsLayout()
++        self.syncControls()
++    }
++
++    func updateLayout(layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
++        let sideInset = 16.0 + layout.safeInsets.left
++        let width = layout.size.width - sideInset * 2.0
++
++        self.scrollView.frame = CGRect(origin: CGPoint(), size: layout.size)
++        self.scrollView.contentInset = UIEdgeInsets(top: navigationHeight, left: 0.0, bottom: layout.intrinsicInsets.bottom, right: 0.0)
++
++        var y: CGFloat = 12.0
++        self.preview.frame = CGRect(x: sideInset, y: y, width: width, height: 160.0)
++        self.preview.layer.cornerRadius = 12.0
++        self.preview.clipsToBounds = true
++        y += 160.0 + 18.0
++
++        self.angleLabel.frame = CGRect(x: sideInset, y: y, width: width, height: 20.0)
++        y += 24.0
++        self.angleSlider.frame = CGRect(x: sideInset, y: y, width: width, height: 30.0)
++        y += 40.0
++
++        self.resetButton.frame = CGRect(x: sideInset, y: y, width: width, height: 44.0)
++        y += 52.0
++
++        let hintSize = self.hintLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
++        self.hintLabel.frame = CGRect(x: sideInset, y: y, width: width, height: hintSize.height)
++        y += hintSize.height + 24.0
++
++        self.scrollView.contentSize = CGSize(width: layout.size.width, height: y)
++    }
++}
++
++private final class LunagramInputIconsControllerImpl: ViewController {
++    private var presentationData: PresentationData
++
++    private var iconsNode: LunagramInputIconsNode {
++        return self.displayNode as! LunagramInputIconsNode
++    }
++
++    init(context: AccountContext) {
++        self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
++        self.title = "Раскладка кнопок"
++    }
++
++    required init(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    override func loadDisplayNode() {
++        self.displayNode = LunagramInputIconsNode(presentationData: self.presentationData)
++        self.displayNodeDidLoad()
++    }
++
++    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++        super.containerLayoutUpdated(layout, transition: transition)
++        self.iconsNode.updateLayout(layout: layout, navigationHeight: self.navigationLayout(layout: layout).navigationFrame.maxY, transition: transition)
++    }
++}
++
++/// Открыть экран раскладки кнопок полосы ввода.
++func lunagramInputIconsController(context: AccountContext) -> ViewController {
++    return LunagramInputIconsControllerImpl(context: context)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d21fe268..9e9c63eb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -68,6 +68,7 @@ private enum LunagramToggle: Int32 {
+     case typingCursor
+     case ripple
+     case pinnedSearchBar
++    case inputIcons
+ 
+     var value: Bool {
+         switch self {
+@@ -167,6 +168,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.rippleEnabled
+         case .pinnedSearchBar:
+             return LunagramSettings.pinnedSearchBar
++        case .inputIcons:
++            return LunagramInputIcons.enabled
+         }
+     }
+ 
+@@ -268,6 +271,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.rippleEnabled = value
+         case .pinnedSearchBar:
+             LunagramSettings.pinnedSearchBar = value
++        case .inputIcons:
++            LunagramInputIcons.enabled = value
+         }
+     }
+ 
+@@ -369,6 +374,8 @@ private enum LunagramToggle: Int32 {
+             return "Круг при нажатии"
+         case .pinnedSearchBar:
+             return "Строка поиска всегда вверху"
++        case .inputIcons:
++            return "Двигать кнопки полосы ввода"
+         }
+     }
+ 
+@@ -424,7 +431,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons:
+             return nil
+         }
+     }
+@@ -585,6 +592,8 @@ extension LunagramToggle {
+             return "circle.circle"
+         case .pinnedSearchBar:
+             return "magnifyingglass"
++        case .inputIcons:
++            return "arrow.up.and.down.and.arrow.left.and.right"
+         }
+     }
+ }
+@@ -2073,6 +2082,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramSettings.sendFontStyle = index
+                 refreshMedia()
+             }))
++        case .inputIcons:
++            shared.push?(lunagramInputIconsController(context: context))
+         case .ghostLocks:
+             // Отдельный экран с галочками: отмеченные общий выключатель
+             // не трогает. На ПК это замочек у каждой строки, у нас виджет
+@@ -2315,6 +2326,7 @@ private enum LunagramChoice: Int32 {
+     case composeReset = 51
+     case wordingEditor = 60
+     case deletedIconColor = 70
++    case inputIcons = 80
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2675,6 +2687,10 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+ 
+ 
++    rows.row(.toggle(.inputIcons, value(.inputIcons), "Двигать кнопки полосы ввода", "arrow.up.and.down.and.arrow.left.and.right"))
++    rows.row(.action(LunagramChoice.inputIcons.rawValue, "Раскладка кнопок", "slider.horizontal.3"))
++    rows.info("Скрепку, кнопку меню и микрофон можно сдвинуть и повернуть. Раскладка задаётся на своём экране по образцу полосы — таскаешь пальцем, а настоящая полоса берёт готовые числа.\n\nВ самой переписке ничего таскать не надо: режим правки поверх полосы дрался бы за каждое касание с набором текста. Пока ничего не сдвинуто, полоса рисуется ровно как обычно.")
++
+     rows.row(.toggle(.pinnedSearchBar, value(.pinnedSearchBar), "Строка поиска всегда вверху", "magnifyingglass"))
+     rows.info("Обычно при прокрутке списка строка поиска уезжает вверх и остаётся только значок. С этой галочкой она никуда не девается.\n\nЛенту историй это не трогает — она сворачивается сама, так Telegram устроен изначально.")
+ 
