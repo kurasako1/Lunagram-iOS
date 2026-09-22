@@ -1,0 +1,368 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotoPicker.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotoPicker.swift
+new file mode 100644
+index 00000000..092ae63f
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfilePhotoPicker.swift
+@@ -0,0 +1,335 @@
++import AccountContext
++import AsyncDisplayKit
++import Display
++import Foundation
++import PhotoResources
++import PresentationDataUtils
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import UIKit
++
++// Lunagram: выбрать, какие фото профиля удалить.
++//
++// Рядом уже есть «Удалить все» и «Оставить только главное» — они годятся,
++// когда чистишь всё подряд. А чтобы снести три снимка из двадцати, нужен
++// выбор. Задумка из Profile Photo Remover (@itsbodyq), взята только она.
++//
++// Сделано своим экраном, а не выделением в просмотрщике Telegram. Полоска
++// снимков внизу просмотрщика — общая для всех галерей, включая переписки:
++// добавь туда выделение, и рискуешь сломать просмотр вложений везде.
++// Свой экран трогает только себя, и худшее, что с ним может случиться, —
++// он сам.
++
++/// Один снимок в сетке: картинка, затемнение и галочка при выборе.
++private final class LunagramPhotoTileNode: GridItemNode {
++    private let imageNode = TransformImageNode()
++    private let dimNode = ASDisplayNode()
++    private let checkNode = ASImageNode()
++
++    private var theme: PresentationTheme?
++    private var isChosen = false
++    var tapped: (() -> Void)?
++
++    override init() {
++        super.init()
++
++        self.dimNode.isLayerBacked = true
++        self.dimNode.alpha = 0.0
++        self.checkNode.displaysAsynchronously = false
++        self.checkNode.alpha = 0.0
++
++        self.addSubnode(self.imageNode)
++        self.addSubnode(self.dimNode)
++        self.addSubnode(self.checkNode)
++    }
++
++    func setup(context: AccountContext, photo: TelegramPeerPhoto, theme: PresentationTheme, chosen: Bool) {
++        if self.theme !== theme {
++            self.theme = theme
++            self.dimNode.backgroundColor = theme.list.itemAccentColor.withAlphaComponent(0.45)
++            self.checkNode.image = generateCheckImage(color: theme.list.itemCheckColors.fillColor, tick: theme.list.itemCheckColors.foregroundColor)
++        }
++        self.imageNode.setSignal(mediaGridMessagePhoto(account: context.account, userLocation: .other, photoReference: .standalone(media: photo.image)))
++        self.setChosen(chosen, animated: false)
++    }
++
++    func setChosen(_ chosen: Bool, animated: Bool) {
++        guard self.isChosen != chosen || !animated else {
++            self.isChosen = chosen
++            self.dimNode.alpha = chosen ? 1.0 : 0.0
++            self.checkNode.alpha = chosen ? 1.0 : 0.0
++            return
++        }
++        self.isChosen = chosen
++        let target: CGFloat = chosen ? 1.0 : 0.0
++        if animated {
++            self.dimNode.layer.animateAlpha(from: self.dimNode.alpha, to: target, duration: 0.2)
++            self.checkNode.layer.animateAlpha(from: self.checkNode.alpha, to: target, duration: 0.2)
++        }
++        self.dimNode.alpha = target
++        self.checkNode.alpha = target
++    }
++
++    override func layout() {
++        super.layout()
++        let size = self.bounds.size
++        self.imageNode.frame = CGRect(origin: CGPoint(), size: size)
++        self.imageNode.asyncLayout()(TransformImageArguments(corners: ImageCorners(), imageSize: size, boundingSize: size, intrinsicInsets: UIEdgeInsets()))()
++        self.dimNode.frame = CGRect(origin: CGPoint(), size: size)
++        if let image = self.checkNode.image {
++            self.checkNode.frame = CGRect(origin: CGPoint(x: size.width - image.size.width - 5.0, y: size.height - image.size.height - 5.0), size: image.size)
++        }
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        self.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.onTap)))
++    }
++
++    @objc private func onTap() {
++        self.tapped?()
++    }
++}
++
++/// Галочка рисуется сама: готового значка нужного размера в наборе нет.
++private func generateCheckImage(color: UIColor, tick: UIColor) -> UIImage? {
++    let size = CGSize(width: 24.0, height: 24.0)
++    UIGraphicsBeginImageContextWithOptions(size, false, 0.0)
++    defer { UIGraphicsEndImageContext() }
++    guard let context = UIGraphicsGetCurrentContext() else {
++        return nil
++    }
++    context.setFillColor(color.cgColor)
++    context.fillEllipse(in: CGRect(origin: CGPoint(), size: size))
++    context.setStrokeColor(tick.cgColor)
++    context.setLineWidth(2.0)
++    context.setLineCap(.round)
++    context.setLineJoin(.round)
++    context.move(to: CGPoint(x: 6.5, y: 12.0))
++    context.addLine(to: CGPoint(x: 10.5, y: 16.0))
++    context.addLine(to: CGPoint(x: 17.5, y: 8.5))
++    context.strokePath()
++    return UIGraphicsGetImageFromCurrentImageContext()
++}
++
++private final class LunagramPhotoPickerNode: ASDisplayNode {
++    private let context: AccountContext
++    private var presentationData: PresentationData
++    private let gridNode = GridNode()
++
++    private var photos: [TelegramPeerPhoto] = []
++    private var chosen = Set<Int>()
++    private var insertedCount = 0
++
++    var chosenCountUpdated: ((Int) -> Void)?
++
++    init(context: AccountContext, presentationData: PresentationData) {
++        self.context = context
++        self.presentationData = presentationData
++
++        super.init()
++
++        self.backgroundColor = presentationData.theme.list.plainBackgroundColor
++        self.addSubnode(self.gridNode)
++    }
++
++    func setPhotos(_ photos: [TelegramPeerPhoto]) {
++        self.photos = photos
++        self.chosen.removeAll()
++        self.reload()
++    }
++
++    var chosenPhotos: [TelegramPeerPhoto] {
++        return self.chosen.sorted().compactMap { index in
++            index < self.photos.count ? self.photos[index] : nil
++        }
++    }
++
++    private func reload() {
++        let context = self.context
++        let theme = self.presentationData.theme
++        var items: [GridItem] = []
++        for index in 0 ..< self.photos.count {
++            let photo = self.photos[index]
++            items.append(LunagramPhotoGridItem(context: context, photo: photo, theme: theme, isChosen: { [weak self] in
++                return self?.chosen.contains(index) ?? false
++            }, action: { [weak self] in
++                self?.toggle(index)
++            }))
++        }
++        // Перед вставкой сносим прежние: иначе снимки задвоятся.
++        let deleteItems = self.insertedCount > 0 ? Array(0 ..< self.insertedCount) : []
++        self.insertedCount = items.count
++        self.gridNode.transaction(GridNodeTransaction(deleteItems: deleteItems, insertItems: items.enumerated().map { GridNodeInsertItem(index: $0.offset, item: $0.element, previousIndex: nil) }, updateItems: [], scrollToItem: nil, updateLayout: nil, itemTransition: .immediate, stationaryItems: .none, updateFirstIndexInSectionOffset: nil), completion: { _ in })
++        self.chosenCountUpdated?(self.chosen.count)
++    }
++
++    /// Нажали по снимку. Сетку целиком не перекладываем — плитка красится
++    /// сама, а при возврате из-за края спросит состояние заново.
++    private func toggle(_ index: Int) {
++        if self.chosen.contains(index) {
++            self.chosen.remove(index)
++        } else {
++            self.chosen.insert(index)
++        }
++        self.chosenCountUpdated?(self.chosen.count)
++    }
++
++    func updateLayout(layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
++        let bounds = CGRect(origin: CGPoint(), size: layout.size)
++        transition.updateFrame(node: self.gridNode, frame: bounds)
++
++        // Три в ряд на телефоне — крупнее, чем в галерее, чтобы лицо было
++        // видно и промахнуться пальцем было трудно.
++        let side = floor((layout.size.width - layout.safeInsets.left - layout.safeInsets.right) / 3.0)
++        let insets = UIEdgeInsets(top: navigationHeight, left: layout.safeInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.safeInsets.right)
++        self.gridNode.transaction(GridNodeTransaction(deleteItems: [], insertItems: [], updateItems: [], scrollToItem: nil, updateLayout: GridNodeUpdateLayout(layout: GridNodeLayout(size: layout.size, insets: insets, scrollIndicatorInsets: nil, preloadSize: side * 2.0, type: .fixed(itemSize: CGSize(width: side, height: side), fillWidth: nil, lineSpacing: 0.0, itemSpacing: nil)), transition: transition), itemTransition: .immediate, stationaryItems: .none, updateFirstIndexInSectionOffset: nil), completion: { _ in })
++    }
++}
++
++private final class LunagramPhotoGridItem: GridItem {
++    let context: AccountContext
++    let photo: TelegramPeerPhoto
++    let theme: PresentationTheme
++    let isChosen: () -> Bool
++    let action: () -> Void
++
++    let section: GridSection? = nil
++
++    init(context: AccountContext, photo: TelegramPeerPhoto, theme: PresentationTheme, isChosen: @escaping () -> Bool, action: @escaping () -> Void) {
++        self.context = context
++        self.photo = photo
++        self.theme = theme
++        self.isChosen = isChosen
++        self.action = action
++    }
++
++    func node(layout: GridNodeLayout, synchronousLoad: Bool) -> GridItemNode {
++        let node = LunagramPhotoTileNode()
++        self.apply(to: node)
++        return node
++    }
++
++    func update(node: GridItemNode) {
++        guard let node = node as? LunagramPhotoTileNode else {
++            return
++        }
++        self.apply(to: node)
++    }
++
++    private func apply(to node: LunagramPhotoTileNode) {
++        let isChosen = self.isChosen
++        let action = self.action
++        node.setup(context: self.context, photo: self.photo, theme: self.theme, chosen: isChosen())
++        node.tapped = { [weak node] in
++            action()
++            node?.setChosen(isChosen(), animated: true)
++        }
++    }
++}
++
++private final class LunagramPhotoPickerController: ViewController {
++    private let context: AccountContext
++    private var presentationData: PresentationData
++    private var pickerNode: LunagramPhotoPickerNode {
++        return self.displayNode as! LunagramPhotoPickerNode
++    }
++
++    private var photos: [TelegramPeerPhoto] = []
++    private var disposable: Disposable?
++
++    init(context: AccountContext) {
++        self.context = context
++        self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
++
++        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
++
++        self.title = "Выбрать фото"
++        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed))
++        self.updateDeleteButton(count: 0)
++    }
++
++    required init(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    deinit {
++        self.disposable?.dispose()
++    }
++
++    override func loadDisplayNode() {
++        self.displayNode = LunagramPhotoPickerNode(context: self.context, presentationData: self.presentationData)
++        self.pickerNode.chosenCountUpdated = { [weak self] count in
++            self?.updateDeleteButton(count: count)
++        }
++        self.displayNodeDidLoad()
++
++        self.disposable = (self.context.engine.peers.requestPeerPhotos(peerId: self.context.account.peerId)
++        |> take(1)
++        |> deliverOnMainQueue).startStrict(next: { [weak self] photos in
++            guard let self else {
++                return
++            }
++            self.photos = photos.filter { $0.reference != nil }
++            self.pickerNode.setPhotos(self.photos)
++        })
++    }
++
++    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++        super.containerLayoutUpdated(layout, transition: transition)
++        self.pickerNode.updateLayout(layout: layout, navigationHeight: self.navigationLayout(layout: layout).navigationFrame.maxY, transition: transition)
++    }
++
++    private func updateDeleteButton(count: Int) {
++        if count > 0 {
++            let item = UIBarButtonItem(title: "Удалить (\(count))", style: .done, target: self, action: #selector(self.deletePressed))
++            item.tintColor = self.presentationData.theme.list.itemDestructiveColor
++            self.navigationItem.rightBarButtonItem = item
++        } else {
++            self.navigationItem.rightBarButtonItem = nil
++        }
++    }
++
++    @objc private func cancelPressed() {
++        self.dismiss()
++    }
++
++    @objc private func deletePressed() {
++        let targets = self.pickerNode.chosenPhotos
++        guard !targets.isEmpty else {
++            return
++        }
++        let context = self.context
++        let strings = self.presentationData.strings
++        let ok = TextAlertAction(type: .defaultAction, title: strings.Common_OK, action: {})
++        self.present(textAlertController(context: context, title: "Фото профиля", text: "Удалить выбранные — \(targets.count)? Вернуть их будет нельзя.", actions: [
++            TextAlertAction(type: .genericAction, title: strings.Common_Cancel, action: {}),
++            TextAlertAction(type: .destructiveAction, title: "Удалить", action: { [weak self] in
++                // По одному, друг за другом: разом сервер может не принять.
++                var signal: Signal<Void, NoError> = .complete()
++                for photo in targets {
++                    signal = signal |> then(context.engine.accountData.removeAccountPhoto(reference: photo.reference))
++                }
++                let refresh = context.engine.peers.fetchAndUpdateCachedPeerData(peerId: context.account.peerId)
++                |> map { _ -> Void in
++                    return Void()
++                }
++                let _ = (signal
++                |> then(refresh)
++                |> deliverOnMainQueue).startStandalone(completed: { [weak self] in
++                    guard let self else {
++                        return
++                    }
++                    self.present(textAlertController(context: context, title: nil, text: "Готово: удалено \(targets.count) фото.", actions: [ok]), in: .window(.root))
++                    self.dismiss()
++                })
++            })
++        ]), in: .window(.root))
++    }
++}
++
++/// Открыть выбор фото профиля.
++func lunagramPickProfilePhotos(context: AccountContext, push: @escaping (ViewController) -> Void) {
++    push(LunagramPhotoPickerController(context: context))
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 9a8ee467..d21fe268 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1444,7 +1444,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             .disclosure(.profileStatus, "Статус в имени"),
+             .photoAction(.profileStatus, 0, "Удалить все фото профиля"),
+             .photoAction(.profileStatus, 1, "Оставить только главное фото"),
+-            .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя.")
++            .photoAction(.profileStatus, 3, "Выбрать, какие удалить"),
++            .info(.profileStatus, 0, "Статус через черту после имени — «Вова | на паре». Ставится и убирается одним нажатием, недавние запоминаются.\n\nФото профиля удаляются пачкой, а не по одному. Перед удалением спросим — вернуть их будет нельзя.\n\n«Выбрать, какие удалить» откроет снимки сеткой: нажимаешь по нужным, сверху появляется «Удалить».")
+         ]
+     case .profileBackground:
+         var entries: [LunagramSettingsEntry] = [
+@@ -1997,6 +1998,12 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             refreshMedia()
+             return
+         }
++        if index == 3 {
++            lunagramPickProfilePhotos(context: context, push: { c in
++                shared.push?(c)
++            })
++            return
++        }
+         lunagramDeleteProfilePhotos(context: context, keepMain: index == 1, present: { c in
+             shared.present?(c)
+         })
