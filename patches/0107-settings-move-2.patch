@@ -1,0 +1,277 @@
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
+index 4ed39ba4..e97a65ea 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
+@@ -8,6 +8,7 @@ import TelegramPresentationData
+ import TelegramUIPreferences
+ import TelegramCallsUI
+ import ItemListUI
++import Lunagram
+ import PresentationDataUtils
+ import AccountContext
+ import TelegramNotices
+@@ -45,11 +46,13 @@ private final class PrivacyAndSecurityControllerArguments {
+     let setupMessageAutoremove: () -> Void
+     let openDataSettings: () -> Void
+     let openBrowserSelection: () -> Void
++    // Lunagram: открыть наш экран по номеру места.
++    let openLunagramPlace: (Int32) -> Void
+     let openEmailSettings: (String?) -> Void
+     let openMessagePrivacy: () -> Void
+     let openGiftsPrivacy: () -> Void
+     
+-    init(account: Account, openBlockedUsers: @escaping () -> Void, openLastSeenPrivacy: @escaping () -> Void, openGroupsPrivacy: @escaping () -> Void, openVoiceCallPrivacy: @escaping () -> Void, openProfilePhotoPrivacy: @escaping () -> Void, openForwardPrivacy: @escaping () -> Void, openPhoneNumberPrivacy: @escaping () -> Void, openVoiceMessagePrivacy: @escaping () -> Void, openBioPrivacy: @escaping () -> Void, openBirthdayPrivacy: @escaping () -> Void, openSavedMusicPrivacy: @escaping () -> Void, openPasscode: @escaping () -> Void, openTwoStepVerification: @escaping (TwoStepVerificationAccessConfiguration?) -> Void, openPasskeys: @escaping () -> Void, openActiveSessions: @escaping () -> Void, toggleArchiveAndMuteNonContacts: @escaping (Bool) -> Void, setupAccountAutoremove: @escaping () -> Void, setupMessageAutoremove: @escaping () -> Void, openDataSettings: @escaping () -> Void, openBrowserSelection: @escaping () -> Void, openEmailSettings: @escaping (String?) -> Void, openMessagePrivacy: @escaping () -> Void, openGiftsPrivacy: @escaping () -> Void) {
++    init(account: Account, openBlockedUsers: @escaping () -> Void, openLastSeenPrivacy: @escaping () -> Void, openGroupsPrivacy: @escaping () -> Void, openVoiceCallPrivacy: @escaping () -> Void, openProfilePhotoPrivacy: @escaping () -> Void, openForwardPrivacy: @escaping () -> Void, openPhoneNumberPrivacy: @escaping () -> Void, openVoiceMessagePrivacy: @escaping () -> Void, openBioPrivacy: @escaping () -> Void, openBirthdayPrivacy: @escaping () -> Void, openSavedMusicPrivacy: @escaping () -> Void, openPasscode: @escaping () -> Void, openTwoStepVerification: @escaping (TwoStepVerificationAccessConfiguration?) -> Void, openPasskeys: @escaping () -> Void, openActiveSessions: @escaping () -> Void, toggleArchiveAndMuteNonContacts: @escaping (Bool) -> Void, setupAccountAutoremove: @escaping () -> Void, setupMessageAutoremove: @escaping () -> Void, openDataSettings: @escaping () -> Void, openBrowserSelection: @escaping () -> Void, openLunagramPlace: @escaping (Int32) -> Void, openEmailSettings: @escaping (String?) -> Void, openMessagePrivacy: @escaping () -> Void, openGiftsPrivacy: @escaping () -> Void) {
+         self.account = account
+         self.openBlockedUsers = openBlockedUsers
+         self.openLastSeenPrivacy = openLastSeenPrivacy
+@@ -71,6 +74,7 @@ private final class PrivacyAndSecurityControllerArguments {
+         self.setupMessageAutoremove = setupMessageAutoremove
+         self.openDataSettings = openDataSettings
+         self.openBrowserSelection = openBrowserSelection
++        self.openLunagramPlace = openLunagramPlace
+         self.openEmailSettings = openEmailSettings
+         self.openMessagePrivacy = openMessagePrivacy
+         self.openGiftsPrivacy = openGiftsPrivacy
+@@ -86,6 +90,9 @@ private enum PrivacyAndSecuritySection: Int32 {
+     case dataSettings
+     case loginEmail
+     case linkHandling
++    // Lunagram: свой блок внизу — то, что про приватность, стоит рядом с
++    // родной приватностью, а не за двумя чужими экранами.
++    case lunagram
+ }
+ 
+ public enum PrivacyAndSecurityEntryTag: ItemListItemTag {
+@@ -136,6 +143,8 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+     case dataSettings(PresentationTheme, String)
+     case dataSettingsInfo(PresentationTheme, String)
+     case openLinksIn(PresentationTheme, String, String)
++    case lunagramHeader(PresentationTheme, String)
++    case lunagramPlace(PresentationTheme, Int32, String)
+     
+     var section: ItemListSectionId {
+         switch self {
+@@ -153,6 +162,8 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+             return PrivacyAndSecuritySection.dataSettings.rawValue
+         case .openLinksIn:
+             return PrivacyAndSecuritySection.linkHandling.rawValue
++        case .lunagramHeader, .lunagramPlace:
++            return PrivacyAndSecuritySection.lunagram.rawValue
+         }
+     }
+     
+@@ -224,6 +235,10 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+                 return 32
+             case .openLinksIn:
+                 return 33
++            case .lunagramHeader:
++                return 40
++            case let .lunagramPlace(_, place, _):
++                return 41 + place
+         }
+     }
+     
+@@ -427,6 +442,18 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+                 } else {
+                     return false
+                 }
++            case let .lunagramHeader(lhsTheme, lhsText):
++                if case let .lunagramHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
++                    return true
++                } else {
++                    return false
++                }
++            case let .lunagramPlace(lhsTheme, lhsPlace, lhsText):
++                if case let .lunagramPlace(rhsTheme, rhsPlace, rhsText) = rhs, lhsTheme === rhsTheme, lhsPlace == rhsPlace, lhsText == rhsText {
++                    return true
++                } else {
++                    return false
++                }
+         }
+     }
+     
+@@ -550,6 +577,12 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+                 return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: value, sectionId: self.section, style: .blocks, action: {
+                     arguments.openBrowserSelection()
+                 })
++            case let .lunagramHeader(_, text):
++                return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++            case let .lunagramPlace(_, place, text):
++                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: "", sectionId: self.section, style: .blocks, action: {
++                    arguments.openLunagramPlace(place)
++                })
+         }
+     }
+ }
+@@ -825,6 +858,12 @@ private func privacyAndSecurityControllerEntries(
+     
+     entries.append(.openLinksIn(presentationData.theme, presentationData.strings.ChatSettings_OpenLinksIn, defaultWebBrowser))
+ 
++    // Lunagram: то, что про приватность, — рядом с родной приватностью.
++    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
++    for place in [LunagramPlace.ghost, .privacy, .safety] {
++        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
++    }
++
+     return entries
+ }
+ 
+@@ -1457,6 +1496,10 @@ public func privacyAndSecurityController(
+         }))
+     }, openDataSettings: {
+         pushControllerImpl?(dataPrivacyController(context: context), true)
++    }, openLunagramPlace: { place in
++        if let screen = context.sharedContext.makeLunagramPlaceController(context: context, place: place) {
++            pushControllerImpl?(screen, true)
++        }
+     }, openBrowserSelection: {
+         let controller = webBrowserSettingsController(context: context)
+         pushControllerImpl?(controller, true)
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 965bca36..d09b4bd2 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -7,6 +7,7 @@ import TelegramCore
+ import TelegramPresentationData
+ import TelegramUIPreferences
+ import ItemListUI
++import Lunagram
+ import PresentationDataUtils
+ import AlertUI
+ import PresentationDataUtils
+@@ -28,6 +29,8 @@ private final class ThemeSettingsControllerArguments {
+     let context: AccountContext
+     let selectTheme: (PresentationThemeReference) -> Void
+     let openThemeSettings: () -> Void
++    // Lunagram: открыть наш экран по номеру места.
++    let openLunagramPlace: (Int32) -> Void
+     let openWallpaperSettings: () -> Void
+     let openNameColorSettings: () -> Void
+     let selectAccentColor: (PresentationThemeAccentColor?) -> Void
+@@ -49,6 +52,7 @@ private final class ThemeSettingsControllerArguments {
+         context: AccountContext,
+         selectTheme: @escaping (PresentationThemeReference) -> Void,
+         openThemeSettings: @escaping () -> Void,
++        openLunagramPlace: @escaping (Int32) -> Void,
+         openWallpaperSettings: @escaping () -> Void,
+         openNameColorSettings: @escaping () -> Void,
+         selectAccentColor: @escaping (PresentationThemeAccentColor?) -> Void,
+@@ -69,6 +73,7 @@ private final class ThemeSettingsControllerArguments {
+         self.context = context
+         self.selectTheme = selectTheme
+         self.openThemeSettings = openThemeSettings
++        self.openLunagramPlace = openLunagramPlace
+         self.openWallpaperSettings = openWallpaperSettings
+         self.openNameColorSettings = openNameColorSettings
+         self.selectAccentColor = selectAccentColor
+@@ -95,6 +100,8 @@ private enum ThemeSettingsControllerSection: Int32 {
+     case icon
+     case powerSaving
+     case other
++    // Lunagram: свой блок внизу — всё про вид рядом с родным видом.
++    case lunagram
+ }
+ 
+ public enum ThemeSettingsEntryTag: ItemListItemTag {
+@@ -139,6 +146,8 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+     case sendWithCmdEnter(PresentationTheme, String, Bool)
+     case showNextMediaOnTap(PresentationTheme, String, Bool)
+     case showNextMediaOnTapInfo(PresentationTheme, String)
++    case lunagramHeader(PresentationTheme, String)
++    case lunagramPlace(PresentationTheme, Int32, String)
+     
+     var section: ItemListSectionId {
+         switch self {
+@@ -154,6 +163,8 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+                 return ThemeSettingsControllerSection.message.rawValue
+             case .otherHeader, .sendWithCmdEnter, .showNextMediaOnTap, .showNextMediaOnTapInfo:
+                 return ThemeSettingsControllerSection.other.rawValue
++            case .lunagramHeader, .lunagramPlace:
++                return ThemeSettingsControllerSection.lunagram.rawValue
+         }
+     }
+     
+@@ -195,6 +206,10 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+             return 16
+         case .showNextMediaOnTapInfo:
+             return 17
++        case .lunagramHeader:
++            return 40
++        case let .lunagramPlace(_, place, _):
++            return 41 + place
+         }
+     }
+     
+@@ -308,6 +323,18 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+                 } else {
+                     return false
+                 }
++            case let .lunagramHeader(lhsTheme, lhsText):
++                if case let .lunagramHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
++                    return true
++                } else {
++                    return false
++                }
++            case let .lunagramPlace(lhsTheme, lhsPlace, lhsText):
++                if case let .lunagramPlace(rhsTheme, rhsPlace, rhsText) = rhs, lhsTheme === rhsTheme, lhsPlace == rhsPlace, lhsText == rhsText {
++                    return true
++                } else {
++                    return false
++                }
+         }
+     }
+     
+@@ -394,6 +421,12 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+                 }, tag: ThemeSettingsEntryTag.tapForNextMedia)
+             case let .showNextMediaOnTapInfo(_, text):
+                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++            case let .lunagramHeader(_, text):
++                return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++            case let .lunagramPlace(_, place, text):
++                return ItemListDisclosureItem(presentationData: presentationData, title: text, label: "", sectionId: self.section, style: .blocks, action: {
++                    arguments.openLunagramPlace(place)
++                })
+         }
+     }
+ }
+@@ -493,6 +526,12 @@ private func themeSettingsControllerEntries(
+     }
+     entries.append(.showNextMediaOnTap(presentationData.theme, strings.Appearance_ShowNextMediaOnTap, mediaSettings.showNextMediaOnTap))
+     entries.append(.showNextMediaOnTapInfo(presentationData.theme, strings.Appearance_ShowNextMediaOnTapInfo))
++
++    // Lunagram: всё про вид — здесь же, где тема, обои и размер текста.
++    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
++    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .conversation, .wording] {
++        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
++    }
+     
+     return entries
+ }
+@@ -571,6 +610,10 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
+     
+     let arguments = ThemeSettingsControllerArguments(context: context, selectTheme: { theme in
+         selectThemeImpl?(theme)
++    }, openLunagramPlace: { place in
++        if let screen = context.sharedContext.makeLunagramPlaceController(context: context, place: place) {
++            pushControllerImpl?(screen)
++        }
+     }, openThemeSettings: {
+         pushControllerImpl?(themePickerController(context: context))
+     }, openWallpaperSettings: {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index a52bb18d..79dfd4d2 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -2999,6 +2999,11 @@ private func lunagramPlaceEntries(
+         rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
+         rows.row(.toggle(.roundFromVideo, value(.roundFromVideo), "Кружок из любого видео", "video.circle"))
+         rows.info("Любое видео из галереи можно отправить кружком: оно обрежется по кругу и ужмётся до нужной длительности.")
++
++        rows.header("Наборы в переписке")
++        rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
++        rows.info("В профиле собеседника или канала появится строка со списком наборов, которые в этой переписке встречались, и сколько раз. Нажатие открывает набор.\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем: ползунок задаёт, сколько сообщений просматривать.")
++        rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
+     }
+ 
+     return rows.entries
