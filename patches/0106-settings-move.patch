@@ -1,0 +1,651 @@
+diff --git a/submodules/AccountContext/Sources/AccountContext.swift b/submodules/AccountContext/Sources/AccountContext.swift
+index 37397476..e1213e5b 100644
+--- a/submodules/AccountContext/Sources/AccountContext.swift
++++ b/submodules/AccountContext/Sources/AccountContext.swift
+@@ -1437,6 +1437,10 @@ public protocol SharedAccountContext: AnyObject {
+     func makeContactSelectionController(_ params: ContactSelectionControllerParams) -> ContactSelectionController
+     func makeContactMultiselectionController(_ params: ContactMultiselectionControllerParams) -> ContactMultiselectionController
+     func makePeerSelectionController(_ params: PeerSelectionControllerParams) -> PeerSelectionController
++    // Lunagram: собрать наш экран по номеру места. Родные экраны настроек
++    // наших экранов не видят — те лежат вместе с профилем, а профиль сам
++    // зависит от родных настроек, и связь напрямую дала бы кольцо.
++    func makeLunagramPlaceController(context: AccountContext, place: Int32) -> ViewController?
+     func makeProxySettingsController(context: AccountContext) -> ViewController
+     func makeLocalizationListController(context: AccountContext) -> ViewController
+     func makeCreateGroupController(context: AccountContext, peerIds: [EnginePeer.Id], initialTitle: String?, mode: CreateGroupMode, completion: ((EnginePeer.Id, @escaping () -> Void) -> Void)?) -> ViewController
+diff --git a/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift b/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
+index de6602ed..6839de47 100644
+--- a/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
++++ b/submodules/ItemListUI/Sources/Items/ItemListExpandableSwitchItem.swift
+@@ -373,7 +373,10 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+             var descriptionApply: (() -> TextNode)?
+             var descriptionSize = CGSize()
+             if let expandedText = item.expandedText {
+-                let (descriptionLayout, descriptionApplyFn) = makeDescriptionLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: expandedText, font: Font.regular(14.0), textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 16.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
++                // Свёрнуто показываем две строки, дальше многоточие: видно, о
++                // чём речь, и понятно, что под стрелкой есть продолжение.
++                let descriptionLines = item.isExpanded ? 0 : 2
++                let (descriptionLayout, descriptionApplyFn) = makeDescriptionLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: expandedText, font: Font.regular(14.0), textColor: item.presentationData.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: descriptionLines, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - params.rightInset - 16.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+                 descriptionApply = descriptionApplyFn
+                 descriptionSize = descriptionLayout.size
+                 descriptionHeight = descriptionTopPadding + descriptionLayout.size.height + descriptionBottomPadding
+@@ -391,12 +394,12 @@ public class ItemListExpandableSwitchItemNode: ListViewItemNode, ItemListItemNod
+             
+             let mainContentHeight = contentSize.height
+             var effectiveSubItemsHeight: CGFloat = 0.0
+-            if item.isExpanded {
+-                if item.expandedText != nil {
+-                    effectiveSubItemsHeight = descriptionHeight
+-                } else {
+-                    effectiveSubItemsHeight = CGFloat(item.subItems.count) * (item.systemStyle == .glass ? 52.0 : 44.0)
+-                }
++            if item.expandedText != nil {
++                // Место под описание держим всегда: свёрнутое — это две
++                // строки, а не пустота.
++                effectiveSubItemsHeight = descriptionHeight
++            } else if item.isExpanded {
++                effectiveSubItemsHeight = CGFloat(item.subItems.count) * (item.systemStyle == .glass ? 52.0 : 44.0)
+             }
+             contentSize.height += effectiveSubItemsHeight
+             
+diff --git a/submodules/Lunagram/Sources/LunagramPlaces.swift b/submodules/Lunagram/Sources/LunagramPlaces.swift
+new file mode 100644
+index 00000000..6466d106
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramPlaces.swift
+@@ -0,0 +1,106 @@
++import Foundation
++
++/// Куда разложены настройки Lunagram по родным разделам Telegram.
++///
++/// Раньше всё жило на двух своих экранах — «Функции» и «Оформление», — и до
++/// маскировки устройства надо было идти тремя нажатиями мимо всего
++/// остального. Теперь каждая настройка стоит там, где стоит то, чего она
++/// касается: маскировка — в «Устройствах», призрак — в «Конфиденциальности»,
++/// вид — в «Оформлении».
++///
++/// Этот перечень нужен, чтобы родные экраны могли открыть наш. Напрямую они
++/// не могут: наши экраны лежат в том же куске сборки, что и профиль, а тот
++/// сам зависит от родных настроек — вышло бы кольцо. Поэтому родной экран
++/// называет место числом, а собирает экран тот, кто знает обе стороны.
++public enum LunagramPlace: Int32, CaseIterable {
++    /// Режим призрака целиком, с замочками.
++    case ghost = 1
++    /// Скрыть номер, режим стримера и прочее про себя.
++    case privacy = 2
++    /// Разбор ссылок и метка из открытого реестра.
++    case safety = 3
++    /// Маскировка устройства — в «Устройствах».
++    case deviceMask = 4
++    /// Обои переписки.
++    case wallpaper = 5
++    /// Список переписок: плитки, текст поверх, строка поиска, карандаш.
++    case dialogList = 6
++    /// Аватарки: форма, скругление, рамка.
++    case avatars = 7
++    /// Частицы в переписке.
++    case particles = 8
++    /// Как выглядит сама переписка: буквы, упоминания, панели, полоса ввода.
++    case conversation = 9
++    /// Свои надписи вместо телеграмовских — в «Языке».
++    case wording = 10
++    /// Эмодзи и стикеры чата — в «Стикерах».
++    case chatStickers = 11
++    /// Удалённые и изменённые сообщения — свой раздел в корне.
++    case deleted = 12
++    /// Сообщения и отправка — свой раздел в корне.
++    case messages = 13
++
++    public var title: String {
++        switch self {
++        case .ghost:
++            return "Режим призрака"
++        case .privacy:
++            return "Приватность"
++        case .safety:
++            return "Ссылки и метки"
++        case .deviceMask:
++            return "Маскировка устройства"
++        case .wallpaper:
++            return "Обои"
++        case .dialogList:
++            return "Список переписок"
++        case .avatars:
++            return "Аватарки"
++        case .particles:
++            return "Частицы"
++        case .conversation:
++            return "Переписка"
++        case .wording:
++            return "Надписи"
++        case .chatStickers:
++            return "Эмодзи и стикеры чата"
++        case .deleted:
++            return "Удалённые и изменённые"
++        case .messages:
++            return "Сообщения"
++        }
++    }
++
++    /// Значок из набора системы. Свои значки строк у нас рисуются по
++    /// этому имени, если человек не подставил свою картинку.
++    public var iconName: String {
++        switch self {
++        case .ghost:
++            return "eye.slash"
++        case .privacy:
++            return "hand.raised"
++        case .safety:
++            return "link.badge.plus"
++        case .deviceMask:
++            return "iphone.gen3"
++        case .wallpaper:
++            return "photo"
++        case .dialogList:
++            return "bubble.left.and.bubble.right"
++        case .avatars:
++            return "person.crop.circle"
++        case .particles:
++            return "sparkles"
++        case .conversation:
++            return "text.bubble"
++        case .wording:
++            return "textformat"
++        case .chatStickers:
++            return "face.smiling"
++        case .deleted:
++            return "trash"
++        case .messages:
++            return "paperplane"
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 4914e28b..b08d9106 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -394,13 +394,7 @@ public final class LunagramSettings {
+     /// настройка лежит в LunagramRestrictionSettings: её читает сетевая
+     /// часть Telegram. Здесь только пересылка туда и рассылка о смене.
+     public static var openRestricted: Bool {
+-        get {
+-            return LunagramRestrictionSettings.openRestricted
+-        }
+-        set {
+-            LunagramRestrictionSettings.openRestricted = newValue
+-            changed()
+-        }
++        return LunagramRestrictionSettings.openRestricted
+     }
+ 
+     // MARK: Замки призрака
+diff --git a/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift b/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift
+index c5d99bd7..28476489 100644
+--- a/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramRestrictionSettings.swift
+@@ -11,14 +11,13 @@ public enum LunagramRestrictionSettings {
+         static let openRestricted = "lunagram.restriction.open"
+     }
+ 
+-    /// Не считать канал закрытым от копирования. Тогда возвращаются
+-    /// «Копировать», выделение текста и сохранение картинок и видео.
++    /// Не считать канал закрытым от копирования: возвращаются «Копировать»,
++    /// выделение текста, сохранение картинок и видео и пересылка.
++    ///
++    /// Выключателя у этого больше нет — работает всегда. Прежнее значение
++    /// в настройках остаётся лежать и никому не мешает: вдруг когда-нибудь
++    /// понадобится обратно.
+     public static var openRestricted: Bool {
+-        get {
+-            return defaults.bool(forKey: Key.openRestricted)
+-        }
+-        set {
+-            defaults.set(newValue, forKey: Key.openRestricted)
+-        }
++        return true
+     }
+ }
+diff --git a/submodules/SettingsUI/BUILD b/submodules/SettingsUI/BUILD
+index b8a0540a..e88a7bb7 100644
+--- a/submodules/SettingsUI/BUILD
++++ b/submodules/SettingsUI/BUILD
+@@ -32,6 +32,7 @@ swift_library(
+         "//submodules/GalleryUI:GalleryUI",
+         "//submodules/Geocoding:Geocoding",
+         "//submodules/ItemListUI:ItemListUI",
++        "//submodules/Lunagram",
+         "//submodules/ItemListStickerPackItem:ItemListStickerPackItem",
+         "//submodules/ItemListPeerItem:ItemListPeerItem",
+         "//submodules/ItemListPeerActionItem:ItemListPeerActionItem",
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift
+index a177304e..4acda80e 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
+@@ -6,6 +6,7 @@ import TelegramCore
+ import TelegramPresentationData
+ import TelegramUIPreferences
+ import ItemListUI
++import Lunagram
+ import PresentationDataUtils
+ import AccountContext
+ import ItemListPeerActionItem
+@@ -24,6 +25,9 @@ private final class RecentSessionsControllerArguments {
+     let removeSession: (Int64) -> Void
+     let terminateOtherSessions: () -> Void
+     
++    // Lunagram: открыть выбор маскировки устройства.
++    let openLunagramMask: () -> Void
++
+     let openSession: (RecentAccountSession) -> Void
+     let openConnectedBotSession: (TelegramAccountConnectedBot) -> Void
+     let openWebSession: (WebAuthorization, EnginePeer?) -> Void
+@@ -39,8 +43,9 @@ private final class RecentSessionsControllerArguments {
+     let openDesktopLink: () -> Void
+     let openWebLink: () -> Void
+     
+-    init(context: AccountContext, setSessionIdWithRevealedOptions: @escaping (Int64?, Int64?) -> Void, removeSession: @escaping (Int64) -> Void, terminateOtherSessions: @escaping () -> Void, openSession: @escaping (RecentAccountSession) -> Void, openConnectedBotSession: @escaping (TelegramAccountConnectedBot) -> Void, openWebSession: @escaping (WebAuthorization, EnginePeer?) -> Void, removeWebSession: @escaping (Int64) -> Void, terminateAllWebSessions: @escaping () -> Void, addDevice: @escaping () -> Void, openOtherAppsUrl: @escaping () -> Void, setupAuthorizationTTL: @escaping () -> Void, openDesktopLink: @escaping () -> Void, openWebLink: @escaping () -> Void) {
++    init(context: AccountContext, openLunagramMask: @escaping () -> Void, setSessionIdWithRevealedOptions: @escaping (Int64?, Int64?) -> Void, removeSession: @escaping (Int64) -> Void, terminateOtherSessions: @escaping () -> Void, openSession: @escaping (RecentAccountSession) -> Void, openConnectedBotSession: @escaping (TelegramAccountConnectedBot) -> Void, openWebSession: @escaping (WebAuthorization, EnginePeer?) -> Void, removeWebSession: @escaping (Int64) -> Void, terminateAllWebSessions: @escaping () -> Void, addDevice: @escaping () -> Void, openOtherAppsUrl: @escaping () -> Void, setupAuthorizationTTL: @escaping () -> Void, openDesktopLink: @escaping () -> Void, openWebLink: @escaping () -> Void) {
+         self.context = context
++        self.openLunagramMask = openLunagramMask
+         self.setSessionIdWithRevealedOptions = setSessionIdWithRevealedOptions
+         self.removeSession = removeSession
+         self.terminateOtherSessions = terminateOtherSessions
+@@ -82,6 +87,8 @@ private enum RecentSessionsEntryStableId: Hashable {
+     case index(Int32)
+     case devicesInfo
+     case ttl(Int32)
++    // Lunagram: маскировка устройства живёт здесь же, где сами устройства.
++    case lunagramMask
+ }
+ 
+ private struct SortIndex: Comparable {
+@@ -117,6 +124,7 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+     case terminateOtherSessions(SortIndex, String)
+     case terminateAllWebSessions(SortIndex, String)
+     case currentAddDevice(SortIndex, String)
++    case lunagramMask(SortIndex, String, String)
+     case currentSessionInfo(SortIndex, String)
+     case pendingSessionsHeader(SortIndex, String)
+     case pendingSession(index: Int32, sortIndex: SortIndex, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, session: RecentAccountSession, enabled: Bool, editing: Bool, revealed: Bool)
+@@ -157,6 +165,8 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+             return .index(3)
+         case .terminateAllWebSessions:
+             return .index(4)
++        case .lunagramMask:
++            return .lunagramMask
+         case .currentAddDevice:
+             return .index(5)
+         case .currentSessionInfo:
+@@ -198,6 +208,8 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+             return index
+         case let .terminateAllWebSessions(index, _):
+             return index
++        case let .lunagramMask(index, _, _):
++            return index
+         case let .currentAddDevice(index, _):
+             return index
+         case let .currentSessionInfo(index, _):
+@@ -253,6 +265,12 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+             } else {
+                 return false
+             }
++        case let .lunagramMask(lhsSortIndex, lhsText, lhsValue):
++            if case let .lunagramMask(rhsSortIndex, rhsText, rhsValue) = rhs, lhsSortIndex == rhsSortIndex, lhsText == rhsText, lhsValue == rhsValue {
++                return true
++            } else {
++                return false
++            }
+         case let .currentAddDevice(lhsSortIndex, lhsText):
+             if case let .currentAddDevice(rhsSortIndex, rhsText) = rhs, lhsSortIndex == rhsSortIndex, lhsText == rhsText {
+                 return true
+@@ -378,6 +396,10 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+             return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesItemList.blockDestructiveIcon(presentationData.theme), title: text, sectionId: self.section, height: .generic, color: .destructive, editing: false, action: {
+                 arguments.terminateAllWebSessions()
+             }, tag: RecentSessionsEntryTag.terminateOtherSessions)
++        case let .lunagramMask(_, text, value):
++            return ItemListDisclosureItem(presentationData: presentationData, title: text, label: value, sectionId: self.section, style: .blocks, action: {
++                arguments.openLunagramMask()
++            })
+         case let .currentAddDevice(_, text):
+             return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesItemList.addDeviceIcon(presentationData.theme), title: text, sectionId: self.section, height: .generic, color: .accent, editing: false, action: {
+                 arguments.addDevice()
+@@ -535,6 +557,13 @@ private func recentSessionsControllerEntries(presentationData: PresentationData,
+ //                entries.append(.currentAddDevice(SortIndex(section: 1, item: 4), presentationData.strings.AuthSessions_AddDevice))
+                 entries.append(.currentSessionInfo(SortIndex(section: 1, item: 5), presentationData.strings.AuthSessions_OtherDevices))
+             }
++            // Lunagram: маскировка стоит здесь же, где сами устройства, —
++            // иначе до неё идти через два чужих экрана.
++            do {
++                let masks = LunagramSettings.deviceMaskPresets
++                let mask = masks[max(0, min(masks.count - 1, LunagramSettings.deviceMaskIndex))]
++                entries.append(.lunagramMask(SortIndex(section: 1, item: 20), LunagramPlace.deviceMask.title, mask.title))
++            }
+             
+             let filteredPendingSessions: [RecentAccountSession] = sessionsState.sessions.filter({ $0.flags.contains(.passwordPending) })
+             if !filteredPendingSessions.isEmpty {
+@@ -735,7 +764,11 @@ public func recentSessionsController(context: AccountContext, activeSessionsCont
+     
+     let connectedBotAndPeerValue = Atomic<(TelegramAccountConnectedBot?, EnginePeer?)>(value: (nil, nil))
+     
+-    let arguments = RecentSessionsControllerArguments(context: context, setSessionIdWithRevealedOptions: { sessionId, fromSessionId in
++    let arguments = RecentSessionsControllerArguments(context: context, openLunagramMask: {
++        if let screen = context.sharedContext.makeLunagramPlaceController(context: context, place: LunagramPlace.deviceMask.rawValue) {
++            pushControllerImpl?(screen)
++        }
++    }, setSessionIdWithRevealedOptions: { sessionId, fromSessionId in
+         updateState { state in
+             if (sessionId == nil && fromSessionId == state.sessionIdWithRevealedOptions) || (sessionId != nil && fromSessionId == nil) {
+                 return state.withUpdatedSessionIdWithRevealedOptions(sessionId)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f8ce85fb..a52bb18d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -55,7 +55,6 @@ private enum LunagramToggle: Int32 {
+     case avatarSingleCorner
+     case composeAuto
+     case settingIcons
+-    case openRestricted
+     case multiSearch
+     case glassSquare
+     case chatStickers
+@@ -148,8 +147,6 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.composeAuto
+         case .settingIcons:
+             return LunagramSettings.settingIcons
+-        case .openRestricted:
+-            return LunagramSettings.openRestricted
+         case .multiSearch:
+             return LunagramSettings.multiSearch
+         case .glassSquare:
+@@ -263,8 +260,6 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.composeAuto = value
+         case .settingIcons:
+             LunagramSettings.settingIcons = value
+-        case .openRestricted:
+-            LunagramSettings.openRestricted = value
+         case .multiSearch:
+             LunagramSettings.multiSearch = value
+         case .glassSquare:
+@@ -378,8 +373,6 @@ private enum LunagramToggle: Int32 {
+             return "Плёнка подстраивается сама"
+         case .settingIcons:
+             return "Свои значки в настройках"
+-        case .openRestricted:
+-            return "Копирование из закрытых каналов"
+         case .multiSearch:
+             return "Поиск сразу по нескольким словам"
+         case .glassSquare:
+@@ -473,7 +466,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .openRestricted, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -608,8 +601,6 @@ extension LunagramToggle {
+             return "wand.and.stars"
+         case .settingIcons:
+             return "swatchpalette,paintpalette"
+-        case .openRestricted:
+-            return "lock.open"
+         case .multiSearch:
+             return "line.3.horizontal.decrease.circle"
+         case .glassSquare:
+@@ -2749,8 +2740,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.info("Отправляет сообщения по умолчанию без звука.")
+     rows.row(.toggle(.suggestGhostForStories, value(.suggestGhostForStories), "Предлагать призрака для сторис", nil))
+     rows.info("Показывает предупреждение перед открытием сторис, предлагая включить режим призрака.")
+-    rows.row(.toggle(.openRestricted, value(.openRestricted), "Копирование из закрытых каналов", "lock.open"))
+-    rows.info("В каналах и группах, где копировать запрещено, вернутся «Копировать», выделение текста, сохранение картинок и видео в галерею и «Переслать».\n\nПересылка идёт в обход: сервер такие сообщения пересылать не даёт, поэтому вложение скачивается и отправляется заново, как своё. Поэтому у получателя не будет пометки «переслано», а большое видео уходит не сразу.")
+     rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", nil))
+     rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", nil))
+     rows.split()
+@@ -2858,6 +2847,188 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     return rows.entries
+ }
+ 
++// MARK: - Настройки по местам
++//
++// Раньше всё жило на двух своих экранах, и до нужной галочки приходилось
++// идти тремя нажатиями мимо всего остального. Теперь каждая настройка
++// стоит там, где стоит то, чего она касается: маскировка устройства — в
++// «Устройствах», призрак — в «Конфиденциальности», вид — в «Оформлении».
++//
++// Здесь собраны сами наборы строк. Какой экран открыть по номеру места —
++// решает lunagramPlaceController ниже.
++
++private func lunagramPlaceEntries(
++    place: LunagramPlace,
++    values: [LunagramToggle: Bool],
++    media: LunagramMediaState,
++    ghostExpanded: Bool,
++    expandedToggles: Set<Int32>
++) -> [LunagramSettingsEntry] {
++    func value(_ toggle: LunagramToggle) -> Bool {
++        return values[toggle] ?? toggle.value
++    }
++    var rows = LunagramRowsBuilder()
++    rows.expanded = expandedToggles
++
++    switch place {
++    case .ghost:
++        rows.row(.ghost(ghostExpanded, lunagramGhostToggles.map { value($0) }))
++        rows.row(.read(false, [value(.markReadAfterAction)]))
++        rows.info("Помечает сообщение прочитанным, когда ты отвечаешь в этой переписке, ставишь реакцию или голосуешь в опросе. Призрак при этом остаётся включённым — читается только то, где ты и так себя обнаружил.")
++        rows.row(.action(LunagramChoice.ghostLocks.rawValue, "Что не трогать общим выключателем", "lock"))
++        rows.info("Отмеченные галочки общий выключатель призрака не переключает — они остаются как есть.")
++        rows.row(.toggle(.useScheduledSend, value(.useScheduledSend), "Использовать отложку", "clock"))
++        rows.info("Сообщение уходит с задержкой около двенадцати секунд, а с вложением дольше. Пока оно ждёт отправки, ты не появляешься в сети.\n\nНа слабом интернете лучше выключить: отложенное может уйти позже, чем ты ждёшь.")
++        let sound = max(0, min(LunagramSettings.sendWithoutSoundTitles.count - 1, media.sendWithoutSound))
++        rows.row(.value(LunagramChoice.sendWithoutSound.rawValue, "Отправлять без звука", LunagramSettings.sendWithoutSoundTitles[sound], "speaker.slash"))
++        rows.info("Сообщения уходят без звука уведомления у получателя.")
++        rows.row(.toggle(.suggestGhostForStories, value(.suggestGhostForStories), "Предлагать призрака для историй", "eye"))
++        rows.info("Перед открытием чужой истории спросит, включить ли призрака: иначе автор увидит, что ты смотрел.")
++        rows.row(.toggle(.ghostAutoOffline, value(.ghostAutoOffline), "Уходить в офлайн сразу", "moon"))
++        rows.info("Сразу после отправки сообщения показывает тебя офлайн, не дожидаясь обычной паузы.")
++
++    case .privacy:
++        rows.row(.toggle(.hideOwnPhone, value(.hideOwnPhone), "Скрыть свой номер", "phone"))
++        rows.info("В твоём профиле вместо номера будут точки. Сам номер не меняется — прячется только его показ на экране, чтобы не попал на снимок.")
++        rows.row(.toggle(.streamerMode, value(.streamerMode), "Режим стримера", "dot.radiowaves.left.and.right"))
++        rows.info("Прячет содержимое переписок, пока идёт запись или трансляция экрана. Включается сам: айфон сообщает приложению, что экран пишется.")
++        rows.row(.toggle(.showPeerId, value(.showPeerId), "Показывать ID", "number"))
++        rows.info("В профиле человека, группы или канала появится их числовой номер.")
++
++    case .safety:
++        rows.row(.toggle(.linkGuard, value(.linkGuard), "Спрашивать перед ссылкой", "link.badge.plus"))
++        rows.info("Перед переходом на чужой сайт показывает, куда ссылка ведёт на самом деле.\n\nПроверяются три вещи: настоящий домен — его прячут за длинным путём, за знаком «@» перед именем и за поддоменами вроде sberbank.ru.xyz.com; подмена букв — кириллическая «о» от латинской не отличается; и метки слежения в хвосте ссылки.\n\nВсё считается на телефоне, наружу не уходит ни одного запроса.")
++        rows.row(.toggle(.linkGuardClean, value(.linkGuardClean), "Вырезать метки слежения", "scissors"))
++        rows.info("Из ссылки убираются хвосты, по которым на том конце узнают, откуда ты пришёл.")
++        rows.row(.toggle(.scamRegistry, value(.scamRegistry), "Метка из реестра GiD", "exclamationmark.bubble"))
++        rows.info("В профиле появится строка, если человек упомянут в открытом канале-реестре @GID_ScamBase.\n\nФормулировка осторожная: «упоминается в реестре», а не «мошенник». Список чужой, проверить его нечем — смотри источник и решай сам.\n\nКанал перечитывается раз в месяц.")
++        rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
++
++    case .deviceMask:
++        let masks = LunagramSettings.deviceMaskPresets
++        let mask = masks[max(0, min(masks.count - 1, media.deviceMask))]
++        rows.row(.value(LunagramChoice.deviceMask.rawValue, "Маскировка устройства", mask.title, "iphone"))
++        rows.info("В списке твоих сеансов Telegram покажет выбранное устройство вместо настоящего, вместе с его значком. Начнёт действовать после перезапуска.")
++
++    case .wallpaper:
++        return lunagramWallpaperEntries(values: values, media: media)
++
++    case .dialogList:
++        return lunagramCardsEntries(values: values, media: media)
++
++    case .avatars:
++        return lunagramAvatarsEntries(values: values, media: media)
++
++    case .particles:
++        return lunagramParticlesEntries(values: values, media: media)
++
++    case .wording:
++        return lunagramWordingEntries(media: media)
++
++    case .chatStickers:
++        rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
++        rows.info("В профиле собеседника или канала появится строка со списком наборов, которые в этой переписке встречались, и сколько раз. Нажатие открывает набор.\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем.")
++        rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
++
++    case .conversation:
++        rows.header("Буквы прилетают")
++        rows.row(.toggle(.typingLetters, value(.typingLetters), "Буквы прилетают", "character.cursor.ibeam"))
++        rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной.\n\nПрячется только отрисовка: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.")
++        rows.row(.toggle(.typingSlide, value(.typingSlide), "Прилетают сверху", "arrow.down.to.line"))
++        rows.row(.toggle(.typingScale, value(.typingScale), "Подрастают", "arrow.up.left.and.arrow.down.right"))
++        rows.row(.toggle(.typingRotate, value(.typingRotate), "С поворотом", "rotate.right"))
++        rows.row(.toggle(.typingBlur, value(.typingBlur), "Из размытия", "drop"))
++        rows.row(.toggle(.typingThanos, value(.typingThanos), "Распад при удалении", "wind"))
++        rows.info("Стёртая буква рассыпается и разлетается.")
++        rows.row(.toggle(.typingCursor, value(.typingCursor), "След за курсором", "cursorarrow.motionlines"))
++        rows.info("При перескоке за курсором тянется полоска, которая догоняет его и тает. Сам курсор остаётся системным: выделение и ручки не меняются.")
++        rows.row(.slider(97, "Сколько длится полёт", media.typingDuration, 50, 1000, 10))
++        rows.row(.slider(98, "Высота, откуда летит", media.typingDistance, 0, 60, 2))
++        rows.row(.slider(99, "Сила размытия", media.typingBlurRadius, 1, 20, 1))
++
++        rows.header("Упоминания")
++        rows.row(.toggle(.mentionAvatars, value(.mentionAvatars), "Аватарка у @ника", "person.crop.circle"))
++        rows.info("Рядом с упоминанием в сообщении появится маленькая аватарка. Размер считается от высоты букв, чтобы в мелком тексте она не разрывала строку.\n\nЕсли человека тегнули по имени, аватарка будет сразу. Если написано просто «@ник», ищем среди тех, кто уже известен телефону, и у сервера не спрашиваем — у незнакомого ника аватарки не будет.")
++        rows.row(.toggle(.mentionAvatarsAfter, value(.mentionAvatarsAfter), "Аватарка после ника", "arrow.right.to.line"))
++        rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
++
++        rows.header("Панели и кнопки")
++        rows.row(.toggle(.glassSquare, value(.glassSquare), "Квадратнее матовые панели", "square.on.square"))
++        rows.info("Полоса ввода, меню и всплывающие окошки скругляются так, как решил Telegram. Ползунок оставляет от этого скругления свою долю: сто процентов — как было, ноль — прямые углы.")
++        rows.row(.slider(95, "Скругление панелей", media.glassCorner, 0, 100, 5))
++        rows.row(.toggle(.inputIcons, value(.inputIcons), "Двигать кнопки полосы ввода", "arrow.up.and.down.and.arrow.left.and.right"))
++        rows.info("Скрепку, кнопку меню и микрофон можно сдвинуть и повернуть. Раскладка задаётся на своём экране по образцу полосы: таскаешь пальцем, а настоящая полоса берёт готовые числа.")
++        rows.row(.action(LunagramChoice.inputIcons.rawValue, "Раскладка кнопок", "slider.horizontal.3"))
++
++        rows.header("Нажатия")
++        rows.row(.toggle(.ripple, value(.ripple), "Круг при нажатии", "circle.circle"))
++        rows.info("При нажатии по экрану из-под пальца расходится круг и тает.\n\nНажатия он себе не забирает: смотрит, где коснулись, и сразу уходит с дороги. Кнопки, прокрутка и долгие нажатия работают как работали. Цвет подбирается сам — белый на тёмной теме, чёрный на светлой.")
++        rows.row(.slider(93, "Размер круга", media.rippleSize, 0, 100, 5))
++        rows.row(.slider(94, "Насколько заметен", media.rippleStrength, 0, 100, 5))
++
++    case .deleted:
++        rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", "trash"))
++        rows.info("Удалённое собеседником сообщение остаётся в переписке с корзинкой вместо галочек. Хранится только у тебя на телефоне.")
++        rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", "pencil"))
++        rows.info("У изменённого сообщения можно посмотреть, как оно выглядело раньше.")
++        rows.row(.toggle(.saveForBots, value(.saveForBots), "Сохранять в чатах с ботами", "gearshape"))
++        rows.info("То же самое в переписках с ботами. Отдельно, потому что боты правят свои сообщения часто, и история там разрастается быстро.")
++        rows.row(.toggle(.replyToDeleted, value(.replyToDeleted), "Отвечать на удалённое", "arrowshape.turn.up.left"))
++        rows.info("Позволяет ответить на сообщение, которое собеседник удалил. Он увидит ответ без того, на что он дан.")
++        rows.row(.toggle(.showMutedDeleted, value(.showMutedDeleted), "Показывать заглушённые", "square.grid.2x2"))
++        rows.info("Заглушить человека можно долгим нажатием на его сообщение. Его новые сообщения приходят с корзинкой, как удалённые. Выключи — и они не будут появляться вовсе.")
++        rows.row(.color(LunagramChoice.deletedIconColor.rawValue, "Цвет корзинки", media.deletedIconColor))
++        rows.info("Корзинка у удалённых сообщений. Цветом времени она сливалась с текстом, поэтому по умолчанию красная.")
++
++    case .messages:
++        let fonts = LunagramSendFont.allCases
++        let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
++        rows.row(.value(LunagramChoice.sendFont.rawValue, "Шрифт отправки", font.title, "textformat"))
++        rows.info("Буквы заменяются похожими знаками Юникода, поэтому стиль видят все и в любом клиенте. Обратная сторона: такой текст не находится поиском Telegram.")
++        rows.row(.toggle(.multiSearch, value(.multiSearch), "Поиск сразу по нескольким словам", "line.3.horizontal.decrease.circle"))
++        rows.info("Раздели слова чертой «|» — «кот | пёс», — и найдётся и то и другое. Работает везде, где есть поиск по сообщениям.\n\nУ такого поиска нет «показать ещё»: Telegram отдаёт метку продолжения на один запрос, а их здесь несколько. Каждое слово отдаёт свою первую сотню.")
++        rows.row(.toggle(.searchFilterButton, value(.searchFilterButton), "Фильтр в поиске по переписке", "magnifyingglass"))
++        rows.info("Внизу поиска рядом с календарём появится кнопка: период, автор и вид сообщений. Отбор сбрасывается, когда закрываешь поиск.")
++        rows.row(.toggle(.showMessageShot, value(.showMessageShot), "Снимок сообщения", "eye"))
++        rows.info("Собирает выделенные сообщения в аккуратную картинку: зажми сообщение и выбери «Снимок сообщения».")
++        rows.row(.toggle(.disableAds, value(.disableAds), "Отключить рекламу", "nosign"))
++        rows.info("Скрывает спонсорские сообщения в каналах.")
++        rows.row(.toggle(.showMessageSeconds, value(.showMessageSeconds), "Время с секундами", "stopwatch"))
++        rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
++        rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
++        rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
++        rows.row(.toggle(.roundFromVideo, value(.roundFromVideo), "Кружок из любого видео", "video.circle"))
++        rows.info("Любое видео из галереи можно отправить кружком: оно обрежется по кругу и ужмётся до нужной длительности.")
++    }
++
++    return rows.entries
++}
++
++/// Экран одного места. Своё свежее состояние — чтобы открываться откуда
++/// угодно, в том числе из родных настроек Telegram.
++public func lunagramPlaceController(context: AccountContext, place: LunagramPlace) -> ViewController {
++    let shared = LunagramSharedState()
++    let arguments = lunagramMakeArguments(context: context, shared: shared)
++    shared.arguments = arguments
++
++    let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get(), shared.expandedTogglesPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, currentValues, media, ghostExpanded, expandedToggles -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let entries = lunagramPlaceEntries(place: place, values: currentValues, media: media, ghostExpanded: ghostExpanded, expandedToggles: expandedToggles)
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(place.title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    let controller = ItemListController(context: context, state: signal)
++    shared.push = { [weak controller] c in
++        controller?.push(c)
++    }
++    shared.present = { [weak controller] c in
++        controller?.present(c, in: .window(.root))
++    }
++    return controller
++}
++
+ private func lunagramFunctionsController(context: AccountContext, shared: LunagramSharedState) -> ViewController {
+     let arguments = shared.arguments!
+     let signal = combineLatest(context.sharedContext.presentationData, shared.valuesPromise.get(), shared.mediaPromise.get(), shared.ghostExpandedPromise.get(), shared.expandedTogglesPromise.get())
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index ae8e241d..3aae6085 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -307,11 +307,22 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+         }
+     }
+     
+-    // Lunagram: свой раздел настроек — первой строкой, выше «Мой аккаунт».
+-    // Стоит всегда, без условий, в отличие от «Паспорта» и «Apple Watch».
+-    items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, text: "Lunagram", icon: PresentationResourcesSettings.appearance, action: {
+-        interaction.openSettings(.lunagram)
+-    }))
++    // Lunagram: то, чему нет места в родных разделах, — своими строками в
++    // корне. Остальное переехало туда, где стоит то, чего оно касается:
++    // маскировка устройства в «Устройства», призрак в «Конфиденциальность»,
++    // вид в «Оформление».
++    do {
++        let pushPlace: (LunagramPlace) -> Void = { place in
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(lunagramPlaceController(context: context, place: place))
++        }
++        let theme = presentationData.theme
++        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: LunagramPlace.deleted.title, icon: lunagramContourIcon(LunagramPlace.deleted.iconName, theme: theme), action: {
++            pushPlace(.deleted)
++        }))
++        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 101, label: .text(""), text: LunagramPlace.messages.title, icon: lunagramContourIcon(LunagramPlace.messages.iconName, theme: theme), action: {
++            pushPlace(.messages)
++        }))
++    }
+ 
+     if let settings = data.globalSettings {
+         if settings.hasPassport {
+diff --git a/submodules/TelegramUI/Sources/SharedAccountContext.swift b/submodules/TelegramUI/Sources/SharedAccountContext.swift
+index 5637c9e3..95be91de 100644
+--- a/submodules/TelegramUI/Sources/SharedAccountContext.swift
++++ b/submodules/TelegramUI/Sources/SharedAccountContext.swift
+@@ -111,6 +111,7 @@ import TextProcessingScreen
+ import CreateBotScreen
+ import EmojiStatusSelectionComponent
+ import EntityKeyboard
++import Lunagram // Lunagram: перечень мест настроек.
+ 
+ private final class AccountUserInterfaceInUseContext {
+     let subscribers = Bag<(Bool) -> Void>()
+@@ -2324,6 +2325,13 @@ public final class SharedAccountContextImpl: SharedAccountContext {
+         return ComposeControllerImpl(context: context)
+     }
+     
++    public func makeLunagramPlaceController(context: AccountContext, place: Int32) -> ViewController? {
++        guard let value = LunagramPlace(rawValue: place) else {
++            return nil
++        }
++        return lunagramPlaceController(context: context, place: value)
++    }
++
+     public func makeProxySettingsController(context: AccountContext) -> ViewController {
+         return proxySettingsController(context: context)
+     }
