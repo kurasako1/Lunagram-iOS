@@ -1,0 +1,226 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index cdc8c518..26c4b923 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -934,6 +934,16 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Отпечаток настроек, которые вшиваются в разметку сообщения.
++    ///
++    /// Значок «удалено» рисуется своим цветом, а время бывает с секундами —
++    /// и то и другое попадает в сообщение, когда оно раскладывается.
++    /// Переписка сверяет этот отпечаток и перекладывается, только если он
++    /// изменился: на остальные наши настройки ей смотреть незачем.
++    public static var chatLayoutStamp: String {
++        return "\(deletedIconColor)-\(showMessageSeconds ? 1 : 0)"
++    }
++
+     /// Сохранять удалённое и в переписках с ботами.
+     public static var saveForBots: Bool {
+         get { return LunagramSpySettings.saveForBots }
+@@ -1674,16 +1684,14 @@ public final class LunagramSettings {
+         }
+     }
+ 
+-    /// Ответ на сохранённое удалённое — цитатой с именем автора, как в
+-    /// AyuGram. Включено сразу — так договорились с хозяином.
++    /// Ответ на сохранённое удалённое — цитатой с именем автора.
++    ///
++    /// Выключателя нет намеренно: в AyuGram его тоже нет — там это делает
++    /// `prependPseudoReply`, и делает всегда. Отвечать на удалённое иначе
++    /// вообще нельзя: у сервера этого сообщения уже не существует, сослаться
++    /// не на что, и без цитаты ответ ушёл бы в пустоту.
+     public static var replyToDeleted: Bool {
+-        get {
+-            return defaults.bool(forKey: Key.replyToDeleted)
+-        }
+-        set {
+-            defaults.set(newValue, forKey: Key.replyToDeleted)
+-            changed()
+-        }
++        return true
+     }
+ 
+     /// Показывать в меню сообщения строку «Снимок сообщения».
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 79dfd4d2..6f8705d9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -45,7 +45,6 @@ private enum LunagramToggle: Int32 {
+     case markReadAfterAction
+     case useScheduledSend
+     case showMessageShot
+-    case replyToDeleted
+     case ghostAutoOffline
+     case showMutedDeleted
+     case voiceLengthInList
+@@ -127,8 +126,6 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.useScheduledSend
+         case .showMessageShot:
+             return LunagramSettings.showMessageShot
+-        case .replyToDeleted:
+-            return LunagramSettings.replyToDeleted
+         case .ghostAutoOffline:
+             return LunagramSettings.ghostAutoOffline
+         case .showMutedDeleted:
+@@ -240,8 +237,6 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.useScheduledSend = value
+         case .showMessageShot:
+             LunagramSettings.showMessageShot = value
+-        case .replyToDeleted:
+-            LunagramSettings.replyToDeleted = value
+         case .ghostAutoOffline:
+             LunagramSettings.ghostAutoOffline = value
+         case .showMutedDeleted:
+@@ -353,8 +348,6 @@ private enum LunagramToggle: Int32 {
+             return "Использовать отложку"
+         case .showMessageShot:
+             return "Показывать снимок сообщений"
+-        case .replyToDeleted:
+-            return "Ответ на удалённое"
+         case .ghostAutoOffline:
+             return "Автоматический «офлайн»"
+         case .showMutedDeleted:
+@@ -460,8 +453,6 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.notifications
+         case .showMessageShot:
+             return PresentationResourcesSettings.appearance
+-        case .replyToDeleted:
+-            return PresentationResourcesSettings.savedMessages
+         case .ghostAutoOffline:
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+@@ -515,8 +506,6 @@ private enum LunagramToggle: Int32 {
+             return "Сообщение уходит не сразу, а через 12 секунд (30 для вложений — их надо успеть закачать). Отправляет сервер, поэтому в сеть ты не выходишь. Пока оно ждёт, его видно в «Отложенных». На слабом интернете лучше не включать."
+         case .showMutedDeleted:
+             return "Сообщения заглушённых приходят с корзинкой, как удалённые, — не отвлекают, но видны. Выключи — и они не будут появляться у тебя вовсе. Уже пришедшие останутся."
+-        case .replyToDeleted:
+-            return "Удалённое у сервера уже не существует, и сослаться на него в ответе нельзя. Поэтому, как в AyuGram, в начало твоего сообщения ставится цитата: имя автора ссылкой (он получит уведомление) и начало его текста. В личке имени нет — и так понятно, чья это цитата."
+         case .showMessageShot:
+             return "Зажми сообщение → «Снимок сообщения». Получится картинка с самим пузырём, обоями и реакциями, но без панели ввода и шапки. Дальше — сохранить, скопировать или отправить.\n\nСнимается то, что на экране: если пузырь уехал за край, сначала пролистай к нему."
+         default:
+@@ -583,8 +572,6 @@ extension LunagramToggle {
+             return "clock"
+         case .showMessageShot:
+             return "eye"
+-        case .replyToDeleted:
+-            return "arrowshape.turn.up.left"
+         case .showMutedDeleted:
+             return "square.grid.2x2"
+         case .voiceLengthInList:
+@@ -1473,7 +1460,6 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             tgl(.spy, .keepDeleted),
+             tgl(.spy, .keepEditHistory),
+             tgl(.spy, .saveForBots),
+-            tgl(.spy, .replyToDeleted),
+             tgl(.spy, .showMutedDeleted),
+             .info(.spy, 0, "Заглушить человека: зажми его сообщение → «Заглушить». Его новые сообщения будут приходить сразу с корзинкой, как удалённые, — не отвлекают, но видны. Снять — там же.\n\nНа ПК заглушённое ещё и стирается у собеседника; на айфоне чужое на сервере не удалить, поэтому только пометка у тебя.")
+         ]
+@@ -2836,7 +2822,7 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+ 
+     // Этого на экране ПК нет — айфонное. Внизу того же экрана, как решили.
+     rows.header("Только на айфоне")
+-    let phoneOnly: [LunagramToggle] = [.roundFromVideo, .showPeerId, .replyToDeleted]
++    let phoneOnly: [LunagramToggle] = [.roundFromVideo, .showPeerId]
+     for toggle in phoneOnly {
+         rows.row(.toggle(toggle, value(toggle), toggle.title, toggle.iconName))
+         if let text = toggle.descriptionText {
+@@ -2968,13 +2954,11 @@ private func lunagramPlaceEntries(
+ 
+     case .deleted:
+         rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", "trash"))
+-        rows.info("Удалённое собеседником сообщение остаётся в переписке с корзинкой вместо галочек. Хранится только у тебя на телефоне.")
++        rows.info("Удалённое собеседником сообщение остаётся в переписке с корзинкой вместо галочек. Хранится только у тебя на телефоне.\n\nОтветить на такое сообщение можно как на обычное. Сослаться на него нельзя — у сервера его больше нет, — поэтому в начало ответа встаёт цитата: имя автора и начало его текста.")
+         rows.row(.toggle(.keepEditHistory, value(.keepEditHistory), "Сохранять историю правок", "pencil"))
+         rows.info("У изменённого сообщения можно посмотреть, как оно выглядело раньше.")
+         rows.row(.toggle(.saveForBots, value(.saveForBots), "Сохранять в чатах с ботами", "gearshape"))
+         rows.info("То же самое в переписках с ботами. Отдельно, потому что боты правят свои сообщения часто, и история там разрастается быстро.")
+-        rows.row(.toggle(.replyToDeleted, value(.replyToDeleted), "Отвечать на удалённое", "arrowshape.turn.up.left"))
+-        rows.info("Позволяет ответить на сообщение, которое собеседник удалил. Он увидит ответ без того, на что он дан.")
+         rows.row(.toggle(.showMutedDeleted, value(.showMutedDeleted), "Показывать заглушённые", "square.grid.2x2"))
+         rows.info("Заглушить человека можно долгим нажатием на его сообщение. Его новые сообщения приходят с корзинкой, как удалённые. Выключи — и они не будут появляться вовсе.")
+         rows.row(.color(LunagramChoice.deletedIconColor.rawValue, "Цвет корзинки", media.deletedIconColor))
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+index 0a9dc17f..f338d03d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+@@ -1307,7 +1307,13 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+                     }
+                     if let reference = gift.reference {
+                         let added = !gift.savedToProfile
+-                        profileGifts.updateStarGiftAddedToProfile(reference: reference, added: added)
++                        // Lunagram: свою копию прячем у себя — на сервере её нет,
++                        // и просьбу спрятать он просто отбросит.
++                        if LunagramFakeGifts.isFake(reference: reference) {
++                            LunagramFakeGifts.setSaved(reference: reference, saved: added)
++                        } else {
++                            profileGifts.updateStarGiftAddedToProfile(reference: reference, added: added)
++                        }
+                         
+                         var animationFile: TelegramMediaFile?
+                         switch gift.gift {
+diff --git a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
+index 394eb6b1..529d1894 100644
+--- a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
++++ b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
+@@ -626,6 +626,10 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+     private var currentPresentationData: ChatPresentationData
+     private var chatPresentationDataPromise: Promise<ChatPresentationData>
+     private var presentationDataDisposable: Disposable?
++
++    // Lunagram: следим за своими настройками вида сообщений.
++    private var lunagramSettingsObserver: NSObjectProtocol?
++    private var lunagramLayoutStamp: String = LunagramSettings.chatLayoutStamp
+     
+     private let historyAppearsClearedPromise = ValuePromise<Bool>(false)
+     var historyAppearsCleared: Bool = false {
+@@ -1102,6 +1106,11 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+         self.refreshDisplayedItemRangeTimer?.start()
+         
+         self.beginPresentationDataManagement(updated: updatedPresentationData.signal)
++
++        // Lunagram: свои настройки вида сообщений меняются мимо телеграмовских.
++        self.lunagramSettingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++            self?.lunagramSettingsChanged()
++        })
+         
+         self.listView.visibleContentOffsetChanged = { [weak self] offset, _ in
+             if let strongSelf = self {
+@@ -1301,6 +1310,9 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+         self.genericReactionEffectDisposable?.dispose()
+         self.adMessagesDisposable?.dispose()
+         self.presentationDataDisposable?.dispose()
++        if let lunagramSettingsObserver = self.lunagramSettingsObserver {
++            NotificationCenter.default.removeObserver(lunagramSettingsObserver)
++        }
+         self.messageReadMetricsTrackerPendingMetricTimer?.invalidate()
+         self.messageReadMetricsTrackerDisposable?.dispose()
+         self.messageReadMetricsTracker = nil
+@@ -2524,6 +2536,26 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+         self.historyDisposable.set(nil)
+     }
+     
++    /// Lunagram: перечитать вид сообщений.
++    ///
++    /// Цвет значка «удалено» и секунды у времени вшиваются в сообщение, когда
++    /// его раскладывают, — уже разложенные сообщения о смене настройки не
++    /// знают. Выдаём тот же набор данных оформления заново: переписка
++    /// сравнивает его по совпадению, а не по содержимому, поэтому новый
++    /// набор заставляет разложить всё заново. Ровно это Telegram делает при
++    /// смене темы.
++    private func lunagramSettingsChanged() {
++        let stamp = LunagramSettings.chatLayoutStamp
++        if stamp == self.lunagramLayoutStamp {
++            return
++        }
++        self.lunagramLayoutStamp = stamp
++        let data = self.currentPresentationData
++        let renewed = data.withTheme(data.theme)
++        self.currentPresentationData = renewed
++        self.chatPresentationDataPromise.set(.single(renewed))
++    }
++
+     private func beginReadHistoryManagement() {
+         let previousMaxIncomingMessageIndexByNamespace = Atomic<[MessageId.Namespace: MessageIndex]>(value: [:])
+         let readHistory = combineLatest(self.maxVisibleIncomingMessageIndex.get(), self.canReadHistory.get())
