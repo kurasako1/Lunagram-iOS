@@ -102,10 +102,23 @@ index 00000000..827cc5b5
 +    }
 +}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
-index 5e19348b..289eeea1 100644
+index 5e19348b..5b3d58d7 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
-@@ -82,8 +82,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+@@ -52,6 +52,12 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+     private var contentsColor: UIColor = .white
+     
+     var performAction: ((PeerInfoHeaderNavigationButtonKey, ContextReferenceContentNode?, ContextGesture?) -> Void)?
++
++    /// Lunagram: свой цвет кнопок. Пусто — считаем как Telegram.
++    ///
++    /// Держатель цвет кнопок пересчитывает сам и довод `contentsColor` для
++    /// них не использует — подменять приходится здесь, а не снаружи.
++    var lunagramContentsTint: UIColor?
+     
+     override init() {
+         self.backgroundContainer = GlassBackgroundContainerView()
+@@ -82,8 +88,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
              return
          }
          
@@ -121,7 +134,7 @@ index 5e19348b..289eeea1 100644
          
          for (spec, button) in self.leftButtonNodes {
              button.updateContentsColor(contentsColor: spec.isForExpandedView ? expandedButtonContentsColor : normalButtonContentsColor, transition: transition)
-@@ -116,8 +121,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+@@ -116,8 +127,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
          
          let maxBlur: CGFloat = 5.0
          
