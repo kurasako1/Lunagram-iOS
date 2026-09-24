@@ -1,0 +1,233 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift
+new file mode 100644
+index 00000000..827cc5b5
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift
+@@ -0,0 +1,97 @@
++import Foundation
++import UIKit
++import Display
++import TelegramPresentationData
++import AccountContext
++import Lunagram
++
++// Lunagram: свой цвет кнопок и подписи под аватаркой.
++//
++// Кнопку QR, «Изменить», строку с номером и @ником Telegram красит сам —
++// подбирает цвет под обложку профиля. Подбор бывает неудачным: хозяин
++// сказал, что на его аватарке «немного не совпадает». Значит, нужен способ
++// выбрать цвет руками.
++//
++// Один цвет на все четыре — так и выбрали. Пока цвет не выбран, ничего не
++// подменяется: профиль выглядит ровно как выглядел. Только свой профиль,
++// как баннер, рамка и имя.
++//
++// Отдельной строки в настройках нет намеренно: хозяин выбрал «зажать прямо
++// на них». Зажатие по кнопке и зажатие по строке с номером открывают одно и
++// то же окошко.
++enum LunagramProfileButtonsColor {
++    /// Палитра держит делегата слабо, поэтому держим его сами: иначе он
++    /// умрёт сразу после показа и цвет не запомнится.
++    private static var pickerDelegate: AnyObject?
++
++    static var isSet: Bool {
++        return LunagramSettings.profileButtonsColor != nil
++    }
++
++    static func reset() {
++        LunagramSettings.profileButtonsColor = nil
++    }
++
++    /// Показать выбор. `reset` — предлагать ли возврат к телеграмовскому
++    /// подбору: если цвет ещё не выбран, возвращать не к чему.
++    static func present(context: AccountContext, reset: Bool) {
++        guard reset else {
++            self.presentPicker(context: context)
++            return
++        }
++        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        let sheet = ActionSheetController(presentationData: presentationData)
++        sheet.setItemGroups([
++            ActionSheetItemGroup(items: [
++                ActionSheetButtonItem(title: "Выбрать цвет", action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                    LunagramProfileButtonsColor.presentPicker(context: context)
++                }),
++                ActionSheetButtonItem(title: "Вернуть как было", color: .destructive, action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                    LunagramProfileButtonsColor.reset()
++                })
++            ]),
++            ActionSheetItemGroup(items: [
++                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
++                    sheet?.dismissAnimated()
++                })
++            ])
++        ])
++        context.sharedContext.mainWindow?.present(sheet, on: .root)
++    }
++
++    private static func presentPicker(context: AccountContext) {
++        guard #available(iOS 14.0, *) else {
++            return
++        }
++        let picker = UIColorPickerViewController()
++        picker.supportsAlpha = false
++        if let rgb = LunagramSettings.profileButtonsColor {
++            picker.selectedColor = UIColor(rgb: rgb)
++        }
++        let delegate = PickerDelegate()
++        self.pickerDelegate = delegate
++        picker.delegate = delegate
++        (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++    }
++
++    @available(iOS 14.0, *)
++    private final class PickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
++        func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
++            var red: CGFloat = 0.0
++            var green: CGFloat = 0.0
++            var blue: CGFloat = 0.0
++            var alpha: CGFloat = 0.0
++            color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
++            let r = UInt32(max(0.0, min(1.0, red)) * 255.0)
++            let g = UInt32(max(0.0, min(1.0, green)) * 255.0)
++            let b = UInt32(max(0.0, min(1.0, blue)) * 255.0)
++            LunagramSettings.profileButtonsColor = (r << 16) | (g << 8) | b
++        }
++
++        func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
++            LunagramProfileButtonsColor.pickerDelegate = nil
++        }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+index 5e19348b..289eeea1 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+@@ -82,8 +82,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+             return
+         }
+         
+-        let normalButtonContentsColor: UIColor = self.isOverColoredContents ? .white :  presentationData.theme.chat.inputPanel.panelControlColor
+-        let expandedButtonContentsColor: UIColor = presentationData.theme.chat.inputPanel.panelControlColor
++        var normalButtonContentsColor: UIColor = self.isOverColoredContents ? .white :  presentationData.theme.chat.inputPanel.panelControlColor
++        var expandedButtonContentsColor: UIColor = presentationData.theme.chat.inputPanel.panelControlColor
++        // Lunagram: свой цвет кнопок, если хозяин его выбрал.
++        if let lunagramContentsTint = self.lunagramContentsTint {
++            normalButtonContentsColor = lunagramContentsTint
++            expandedButtonContentsColor = lunagramContentsTint
++        }
+         
+         for (spec, button) in self.leftButtonNodes {
+             button.updateContentsColor(contentsColor: spec.isForExpandedView ? expandedButtonContentsColor : normalButtonContentsColor, transition: transition)
+@@ -116,8 +121,13 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+         
+         let maxBlur: CGFloat = 5.0
+         
+-        let normalButtonContentsColor: UIColor = self.isOverColoredContents ? .white :  presentationData.theme.chat.inputPanel.panelControlColor
+-        let expandedButtonContentsColor: UIColor = presentationData.theme.chat.inputPanel.panelControlColor
++        var normalButtonContentsColor: UIColor = self.isOverColoredContents ? .white :  presentationData.theme.chat.inputPanel.panelControlColor
++        var expandedButtonContentsColor: UIColor = presentationData.theme.chat.inputPanel.panelControlColor
++        // Lunagram: свой цвет кнопок, если хозяин его выбрал.
++        if let lunagramContentsTint = self.lunagramContentsTint {
++            normalButtonContentsColor = lunagramContentsTint
++            expandedButtonContentsColor = lunagramContentsTint
++        }
+         
+         if self.currentLeftButtons != leftButtons || presentationData.strings !== self.presentationData?.strings {
+             self.currentLeftButtons = leftButtons
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index 92a52e49..edfd568a 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1163,12 +1163,20 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         
+         var actualNavigationContentsColor = navigationContentsAccentColor
+         actualNavigationContentsColor = presentationData.theme.chat.inputPanel.panelControlColor
++
++        // Lunagram: свой цвет кнопок и подписи — только в своём профиле и
++        // только если хозяин его выбрал. Не выбрал — ничего не подменяем.
++        var lunagramButtonsTint: UIColor?
++        if self.isSettings || self.isMyProfile {
++            lunagramButtonsTint = LunagramSettings.profileButtonsTint().flatMap { UIColor(cgColor: $0) }
++        }
+         
++        self.navigationButtonContainer.lunagramContentsTint = lunagramButtonsTint
+         self.navigationButtonContainer.updateContentsColor(backgroundContentColor: headerButtonBackgroundColor, contentsColor: actualNavigationContentsColor, isOverColoredContents: !navigationContentsCanBeExpanded, transition: navigationTransition)
+         
+         self.titleNode.updateTintColor(color: navigationContentsPrimaryColor, transition: navigationTransition)
+-        self.subtitleNode.updateTintColor(color: navigationContentsSecondaryColor, transition: navigationTransition)
+-        self.panelSubtitleNode.updateTintColor(color: navigationContentsSecondaryColor, transition: navigationTransition)
++        self.subtitleNode.updateTintColor(color: lunagramButtonsTint ?? navigationContentsSecondaryColor, transition: navigationTransition)
++        self.panelSubtitleNode.updateTintColor(color: lunagramButtonsTint ?? navigationContentsSecondaryColor, transition: navigationTransition)
+         if let navigationBar = self.controller?.navigationBar {
+             if let mainContentNode = navigationBar.backButtonNode.mainContentNode {
+                 navigationTransition.updateTintColor(layer: mainContentNode.layer, color: navigationContentsAccentColor)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index bca2382e..f1b43a18 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -1648,6 +1648,14 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             guard let strongSelf = self else {
+                 return
+             }
++            // Lunagram: зажал QR или «Изменить» в своём профиле — открывается
++            // выбор цвета для них и для строки с номером. Обычное нажатие
++            // работает как работало.
++            if gesture != nil, strongSelf.isSettings || strongSelf.isMyProfile, key == .qrCode || key == .edit {
++                gesture?.cancel()
++                LunagramProfileButtonsColor.present(context: strongSelf.context, reset: LunagramProfileButtonsColor.isSet)
++                return
++            }
+             switch key {
+             case .back:
+                 strongSelf.controller?.dismiss()
+@@ -2182,6 +2190,22 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                     }))
+                 }
+                 
++                // Lunagram: отсюда же выбирается цвет кнопок и подписи — по той
++                // самой строке, которую и зажимают.
++                if strongSelf.isSettings || strongSelf.isMyProfile {
++                    actions.append(ContextMenuAction(content: .text(title: "Цвет кнопок", accessibilityLabel: "Цвет кнопок"), action: { [weak self] in
++                        guard let strongSelf = self else {
++                            return
++                        }
++                        LunagramProfileButtonsColor.present(context: strongSelf.context, reset: false)
++                    }))
++                    if LunagramProfileButtonsColor.isSet {
++                        actions.append(ContextMenuAction(content: .text(title: "Вернуть цвет", accessibilityLabel: "Вернуть цвет"), action: {
++                            LunagramProfileButtonsColor.reset()
++                        }))
++                    }
++                }
++
+                 let contextMenuController = makeContextMenuController(actions: actions)
+                 strongSelf.controller?.present(contextMenuController, in: .window(.root), with: ContextMenuControllerPresentationArguments(sourceNodeAndRect: { [weak self] in
+                     if let strongSelf = self {
+@@ -6000,7 +6024,24 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                     leftNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .back, isForExpandedView: true))
+                 }
+             }
++            // Lunagram: свой цвет кнопок ставим и здесь: держатель считает
++            // их цвет и в своей раскладке, а она бывает раньше шапки.
++            if self.isSettings || self.isMyProfile {
++                self.headerNode.navigationButtonContainer.lunagramContentsTint = LunagramSettings.profileButtonsTint().flatMap { UIColor(cgColor: $0) }
++            }
+             self.headerNode.navigationButtonContainer.update(size: CGSize(width: layout.size.width - layout.safeInsets.left * 2.0, height: navigationBarHeight), presentationData: self.presentationData, leftButtons: leftNavigationButtons, rightButtons: rightNavigationButtons, expandFraction: effectiveAreaExpansionFraction, shouldAnimateIn: animateHeader, transition: transition)
++
++            // Lunagram: долгое нажатие Telegram включает только у «⋮» —
++            // включаем и у QR с «Изменить», чтобы зажатием выбирать цвет.
++            // Только в своём профиле: чужие кнопки ведут себя как вели.
++            if self.isSettings || self.isMyProfile {
++                for (spec, button) in self.headerNode.navigationButtonContainer.leftButtonNodes where spec.key == .qrCode || spec.key == .edit {
++                    button.containerNode.isGestureEnabled = true
++                }
++                for (spec, button) in self.headerNode.navigationButtonContainer.rightButtonNodes where spec.key == .qrCode || spec.key == .edit {
++                    button.containerNode.isGestureEnabled = true
++                }
++            }
+         }
+     }
+     
