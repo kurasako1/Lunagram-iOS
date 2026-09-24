@@ -202,10 +202,10 @@ index 762bb6b2..12d13196 100644
          self.textNode.isUserInteractionEnabled = isEnabled
          self.textNode.alpha = isEnabled ? 1.0 : 0.6
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
-index 3aae6085..d569eca8 100644
+index 3aae6085..090a93b1 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
-@@ -433,7 +433,14 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+@@ -433,7 +433,12 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
          items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Имя", icon: lunagramContourIcon("pencil", theme: theme), action: {
              pushDecor(lunagramProfileNameScreen(context: context))
          }))
@@ -215,9 +215,7 @@ index 3aae6085..d569eca8 100644
 +        items[.lunagramDecor]!.append(PeerInfoScreenSwitchItem(id: 208, text: "Матовые поля", value: LunagramSettings.editProfileGlass, icon: lunagramContourIcon("rectangle.on.rectangle", theme: theme), toggled: { value in
 +            LunagramSettings.editProfileGlass = value
 +        }))
-+        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.
-+
-+«Матовые поля» — про поля выше: имя, фамилию, @ник и «о себе». Родные — сплошная заливка без скруглений; с настройкой они становятся матовыми и скруглёнными, как остальные панели."))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.\n\n«Матовые поля» — про поля выше: имя, фамилию, @ник и «о себе». Родные — сплошная заливка без скруглений; с настройкой они становятся матовыми и скруглёнными, как остальные панели."))
      }
  
      if let cachedData = data.cachedData as? CachedUserData {
