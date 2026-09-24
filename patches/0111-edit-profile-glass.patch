@@ -1,0 +1,223 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 26c4b923..f9fab752 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -77,11 +77,13 @@ public final class LunagramSettings {
+         static let streamerMode = "lunagram.other.streamerMode"
+         static let useScheduledSend = "lunagram.ghost.useScheduledSend"
+         static let showMessageSeconds = "lunagram.other.showMessageSeconds"
++        static let editProfileGlass = "lunagram.profile.editGlass"
+         static let profileNameColor = "lunagram.profile.nameColor"
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+         // Свечение имени в процентах — ползунком, как на ПК (раньше ступени).
+         static let profileNameGlowPercent = "lunagram.profile.nameGlowPercent"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
++        static let profileButtonsColor = "lunagram.profile.buttonsColor"
+         static let profileBackgroundFile = "lunagram.profile.backgroundFile"
+         static let profileBackgroundDim = "lunagram.profile.backgroundDim"
+         static let profileBackgroundBlur = "lunagram.profile.backgroundBlur"
+@@ -934,6 +936,23 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Матовые скруглённые поля на экране «Изменить профиль».
++    ///
++    /// Включено сразу: хозяин сам об этом попросил, а родной вид тех полей —
++    /// три сплошные полосы без скруглений — ему и не нравился.
++    public static var editProfileGlass: Bool {
++        get {
++            guard defaults.object(forKey: Key.editProfileGlass) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.editProfileGlass)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.editProfileGlass)
++            changed()
++        }
++    }
++
+     /// Отпечаток настроек, которые вшиваются в разметку сообщения.
+     ///
+     /// Значок «удалено» рисуется своим цветом, а время бывает с секундами —
+@@ -1018,6 +1037,36 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Свой цвет кнопок QR и «Изменить» и строки с номером и @ником.
++    ///
++    /// Пусто — Telegram подбирает цвет сам, под обложку профиля. Своего
++    /// значения по умолчанию тут нет намеренно: пока хозяин не выбрал цвет,
++    /// всё должно выглядеть ровно так, как выглядело.
++    public static var profileButtonsColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileButtonsColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileButtonsColor))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileButtonsColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileButtonsColor)
++            }
++            changed()
++        }
++    }
++
++    /// Цвет кнопок профиля, или `nil` — тогда всё как у Telegram.
++    public static func profileButtonsTint() -> CGColor? {
++        guard let rgb = profileButtonsColor else {
++            return nil
++        }
++        return color(from: rgb, alpha: 1.0)
++    }
++
+     /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
+     public static func profileNameTint() -> CGColor? {
+         if let custom = profileNameCustomColor {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+new file mode 100644
+index 00000000..098fe286
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+@@ -0,0 +1,90 @@
++import Foundation
++import UIKit
++import AsyncDisplayKit
++import Display
++import TelegramPresentationData
++import Lunagram
++
++// Lunagram: матовые скруглённые поля на экране «Изменить профиль».
++//
++// Родные поля там — сплошная заливка во всю ширину, и на айфоне без единого
++// скругления. Так вышло не по недосмотру: скругление Telegram рисует
++// картинкой-маской и только тогда, когда у блока есть отступ от краёв
++// экрана, а на айфоне отступ нулевой. Под обложкой профиля три сплошные
++// полосы выглядят заплаткой, о чём хозяин и сказал.
++//
++// Делаем как у остальных панелей: вместо заливки — матовое стекло, у краёв
++// блока — скругление (сверху у первого поля, снизу у последнего). Ширину и
++// положение не трогаем: за них отвечает сам Telegram, и лезть туда значит
++// ломать его разметку.
++
++/// Стекло под полем. Помнит, под какую тему сделано: пересобирать его на
++/// каждую раскладку дорого, а тема меняется редко.
++private final class LunagramEditFieldBlurView: UIVisualEffectView {
++    var appliedDark: Bool?
++}
++
++enum LunagramEditFieldLook {
++    static var isActive: Bool {
++        return LunagramSettings.editProfileGlass
++    }
++
++    /// Зовётся из раскладки поля, уже после того, как ему поставили рамку.
++    static func update(
++        background: ASDisplayNode,
++        separator: ASDisplayNode,
++        theme: PresentationTheme,
++        roundTop: Bool,
++        roundBottom: Bool
++    ) {
++        var existing: LunagramEditFieldBlurView?
++        for subview in background.view.subviews {
++            if let blur = subview as? LunagramEditFieldBlurView {
++                existing = blur
++                break
++            }
++        }
++
++        guard self.isActive else {
++            existing?.removeFromSuperview()
++            background.backgroundColor = theme.list.itemBlocksBackgroundColor
++            background.cornerRadius = 0.0
++            separator.alpha = 1.0
++            return
++        }
++
++        // Заливку убираем совсем: цвет поверх стекла съел бы прозрачность.
++        background.backgroundColor = .clear
++        background.clipsToBounds = true
++        background.cornerRadius = 12.0
++        background.layer.cornerCurve = .continuous
++        var corners: CACornerMask = []
++        if roundTop {
++            corners.insert(.layerMinXMinYCorner)
++            corners.insert(.layerMaxXMinYCorner)
++        }
++        if roundBottom {
++            corners.insert(.layerMinXMaxYCorner)
++            corners.insert(.layerMaxXMaxYCorner)
++        }
++        background.layer.maskedCorners = corners
++
++        let dark = theme.overallDarkAppearance
++        let blur: LunagramEditFieldBlurView
++        if let existing = existing {
++            blur = existing
++        } else {
++            blur = LunagramEditFieldBlurView(effect: nil)
++            blur.isUserInteractionEnabled = false
++            background.view.insertSubview(blur, at: 0)
++        }
++        if blur.appliedDark != dark {
++            blur.appliedDark = dark
++            blur.effect = UIBlurEffect(style: dark ? .systemThinMaterialDark : .systemThinMaterialLight)
++        }
++        blur.frame = background.bounds
++
++        // Черта между полями поверх стекла слишком резкая — приглушаем.
++        separator.alpha = 0.4
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
+index 9d253d3f..6363152b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
+@@ -168,6 +168,9 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
+         
+         self.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: true) : nil
+         self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
++
++        // Lunagram: матовая скруглённая подложка вместо сплошной заливки.
++        LunagramEditFieldLook.update(background: self.backgroundNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
+         
+         return height
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
+index 762bb6b2..12d13196 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
+@@ -145,6 +145,9 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
+         
+         self.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: true) : nil
+         self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
++
++        // Lunagram: матовая скруглённая подложка вместо сплошной заливки.
++        LunagramEditFieldLook.update(background: self.backgroundNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
+         
+         self.textNode.isUserInteractionEnabled = isEnabled
+         self.textNode.alpha = isEnabled ? 1.0 : 0.6
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 3aae6085..d569eca8 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -433,7 +433,14 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+         items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Имя", icon: lunagramContourIcon("pencil", theme: theme), action: {
+             pushDecor(lunagramProfileNameScreen(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе."))
++        // Матовые поля — прямо здесь: правит оно то самое окно, в котором
++        // строка и стоит, так что видно сразу.
++        items[.lunagramDecor]!.append(PeerInfoScreenSwitchItem(id: 208, text: "Матовые поля", value: LunagramSettings.editProfileGlass, icon: lunagramContourIcon("rectangle.on.rectangle", theme: theme), toggled: { value in
++            LunagramSettings.editProfileGlass = value
++        }))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.
++
++«Матовые поля» — про поля выше: имя, фамилию, @ник и «о себе». Родные — сплошная заливка без скруглений; с настройкой они становятся матовыми и скруглёнными, как остальные панели."))
+     }
+ 
+     if let cachedData = data.cachedData as? CachedUserData {
