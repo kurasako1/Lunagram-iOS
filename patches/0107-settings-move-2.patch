@@ -1,5 +1,5 @@
 diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
-index 4ed39ba4..e97a65ea 100644
+index 4ed39ba4..3c2a52e3 100644
 --- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
 +++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
 @@ -8,6 +8,7 @@ import TelegramPresentationData
@@ -117,19 +117,19 @@ index 4ed39ba4..e97a65ea 100644
      return entries
  }
  
-@@ -1457,6 +1496,10 @@ public func privacyAndSecurityController(
-         }))
-     }, openDataSettings: {
-         pushControllerImpl?(dataPrivacyController(context: context), true)
+@@ -1460,6 +1499,10 @@ public func privacyAndSecurityController(
+     }, openBrowserSelection: {
+         let controller = webBrowserSettingsController(context: context)
+         pushControllerImpl?(controller, true)
 +    }, openLunagramPlace: { place in
 +        if let screen = context.sharedContext.makeLunagramPlaceController(context: context, place: place) {
 +            pushControllerImpl?(screen, true)
 +        }
-     }, openBrowserSelection: {
-         let controller = webBrowserSettingsController(context: context)
-         pushControllerImpl?(controller, true)
+     }, openEmailSettings: { emailPattern in
+         if let emailPattern, !emailPattern.contains(" ") {
+             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
 diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
-index 965bca36..d09b4bd2 100644
+index 965bca36..695bb964 100644
 --- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
 +++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
 @@ -7,6 +7,7 @@ import TelegramCore
@@ -149,14 +149,14 @@ index 965bca36..d09b4bd2 100644
      let openWallpaperSettings: () -> Void
      let openNameColorSettings: () -> Void
      let selectAccentColor: (PresentationThemeAccentColor?) -> Void
-@@ -49,6 +52,7 @@ private final class ThemeSettingsControllerArguments {
+@@ -48,6 +51,7 @@ private final class ThemeSettingsControllerArguments {
+     init(
          context: AccountContext,
          selectTheme: @escaping (PresentationThemeReference) -> Void,
-         openThemeSettings: @escaping () -> Void,
 +        openLunagramPlace: @escaping (Int32) -> Void,
+         openThemeSettings: @escaping () -> Void,
          openWallpaperSettings: @escaping () -> Void,
          openNameColorSettings: @escaping () -> Void,
-         selectAccentColor: @escaping (PresentationThemeAccentColor?) -> Void,
 @@ -69,6 +73,7 @@ private final class ThemeSettingsControllerArguments {
          self.context = context
          self.selectTheme = selectTheme
