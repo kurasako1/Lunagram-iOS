@@ -1,0 +1,113 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b08d9106..cdc8c518 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -1996,7 +1996,30 @@ public final class LunagramSettings {
+         return folder
+     }
+ 
++    /// Оповещение уже назначено и ещё не разослано.
++    ///
++    /// Читается и пишется только с главной очереди — оттуда же, откуда
++    /// рассылается само оповещение.
++    private static var changePending = false
++
+     static func changed() {
+-        NotificationCenter.default.post(name: didChangeNotification, object: nil)
++        if Thread.isMainThread {
++            scheduleChanged()
++        } else {
++            DispatchQueue.main.async {
++                scheduleChanged()
++            }
++        }
++    }
++
++    private static func scheduleChanged() {
++        guard !changePending else {
++            return
++        }
++        changePending = true
++        DispatchQueue.main.async {
++            changePending = false
++            NotificationCenter.default.post(name: didChangeNotification, object: nil)
++        }
+     }
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+index 6e5a87c0..627dc501 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+@@ -9,8 +9,8 @@ import ItemListUI
+ import PresentationDataUtils
+ 
+ /// Ползунок «сила настройки» — как на ПК. Слева название, справа текущее
+-/// значение, снизу сам ползунок. Значение идёт ступенями от `minValue` до
+-/// `maxValue` с шагом `step`, но тянется плавно.
++/// значение, снизу сам ползунок. Тянется плавно, без делений под пальцем;
++/// в настройку уходит ближайшее значение, кратное `step`.
+ ///
+ /// Свой, потому что готового ползунка-строки в наборе Telegram-iOS нет:
+ /// единственный ползунок там — `TGPhotoEditorSliderView` из LegacyComponents,
+@@ -105,13 +105,22 @@ final class LunagramSliderItemNode: ListViewItemNode {
+         self.addSubnode(self.valueNode)
+     }
+ 
+-    /// Сколько ступеней у ползунка.
+-    private func positions(_ item: LunagramSliderItem) -> Int {
+-        return max(2, (item.maxValue - item.minValue) / item.step + 1)
++    /// Ползунок считает от нуля, поэтому длина хода — это разница между
++    /// краями, а не сами края: так `minimumValue` всегда ноль и не нужно
++    /// думать про отрицательные значения.
++    private func sliderRange(_ item: LunagramSliderItem) -> CGFloat {
++        return CGFloat(max(1, item.maxValue - item.minValue))
+     }
+ 
+     private func sliderPosition(_ item: LunagramSliderItem) -> CGFloat {
+-        return CGFloat((item.value - item.minValue) / item.step)
++        return CGFloat(item.value - item.minValue)
++    }
++
++    /// Ближайшее к `raw` место, кратное шагу.
++    private func steppedPosition(_ raw: CGFloat, _ item: LunagramSliderItem) -> CGFloat {
++        let step = CGFloat(item.step)
++        let snapped = (raw / step).rounded() * step
++        return max(0.0, min(self.sliderRange(item), snapped))
+     }
+ 
+     override func didLoad() {
+@@ -121,14 +130,11 @@ final class LunagramSliderItemNode: ListViewItemNode {
+         sliderView.enablePanHandling = true
+         sliderView.trackCornerRadius = 2.0
+         sliderView.lineSize = 4.0
+-        sliderView.dotSize = 5.0
+         sliderView.minimumValue = 0.0
+         sliderView.startValue = 0.0
+         sliderView.disablesInteractiveTransitionGestureRecognizer = true
+-        sliderView.useLinesForPositions = true
+         if let item = self.item, let params = self.layoutParams {
+-            sliderView.maximumValue = CGFloat(self.positions(item) - 1)
+-            sliderView.positionsCount = self.positions(item)
++            sliderView.maximumValue = self.sliderRange(item)
+             sliderView.value = self.sliderPosition(item)
+             sliderView.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
+             sliderView.backColor = item.presentationData.theme.list.itemSwitchColors.frameColor
+@@ -146,7 +152,7 @@ final class LunagramSliderItemNode: ListViewItemNode {
+         guard let item = self.item, let sliderView = self.sliderView else {
+             return
+         }
+-        let newValue = item.minValue + Int(sliderView.value.rounded()) * item.step
++        let newValue = item.minValue + Int(self.steppedPosition(sliderView.value, item))
+         let clamped = max(item.minValue, min(item.maxValue, newValue))
+         if clamped != item.value {
+             item.updated(clamped)
+@@ -240,8 +246,7 @@ final class LunagramSliderItemNode: ListViewItemNode {
+                         sliderView.trackColor = item.presentationData.theme.list.itemAccentColor
+                         sliderView.knobImage = PresentationResourcesItemList.knobImage(item.presentationData.theme)
+                     }
+-                    sliderView.maximumValue = CGFloat(strongSelf.positions(item) - 1)
+-                    sliderView.positionsCount = strongSelf.positions(item)
++                    sliderView.maximumValue = strongSelf.sliderRange(item)
+                     sliderView.frame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: 37.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 15.0 * 2.0, height: 44.0))
+                     sliderView.hitTestEdgeInsets = UIEdgeInsets(top: -sliderView.frame.minX, left: 0.0, bottom: 0.0, right: -sliderView.frame.minX)
+                     let position = strongSelf.sliderPosition(item)
