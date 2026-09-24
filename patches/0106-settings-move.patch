@@ -218,7 +218,7 @@ index b8a0540a..e88a7bb7 100644
          "//submodules/ItemListPeerItem:ItemListPeerItem",
          "//submodules/ItemListPeerActionItem:ItemListPeerActionItem",
 diff --git a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift
-index a177304e..4acda80e 100644
+index a177304e..1f526922 100644
 --- a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
 +++ b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
 @@ -6,6 +6,7 @@ import TelegramCore
@@ -267,6 +267,15 @@ index a177304e..4acda80e 100644
      case currentSessionInfo(SortIndex, String)
      case pendingSessionsHeader(SortIndex, String)
      case pendingSession(index: Int32, sortIndex: SortIndex, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, session: RecentAccountSession, enabled: Bool, editing: Bool, revealed: Bool)
+@@ -134,7 +142,7 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
+         switch self {
+             case .header:
+                 return RecentSessionsSection.header.rawValue
+-            case .currentSessionHeader, .currentSession, .terminateOtherSessions, .terminateAllWebSessions, .currentAddDevice, .currentSessionInfo:
++            case .currentSessionHeader, .currentSession, .terminateOtherSessions, .terminateAllWebSessions, .currentAddDevice, .currentSessionInfo, .lunagramMask:
+                 return RecentSessionsSection.currentSession.rawValue
+             case .pendingSessionsHeader, .pendingSession, .pendingSessionsInfo:
+                 return RecentSessionsSection.pendingSessions.rawValue
 @@ -157,6 +165,8 @@ private enum RecentSessionsEntry: ItemListNodeEntry {
              return .index(3)
          case .terminateAllWebSessions:
