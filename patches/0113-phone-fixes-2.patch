@@ -1,0 +1,855 @@
+diff --git a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+new file mode 100644
+index 00000000..4b543bc0
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+@@ -0,0 +1,129 @@
++import Foundation
++import UIKit
++
++// Lunagram: цветные плашки у наших строк в родных настройках.
++//
++// Родные строки Telegram помечены цветными квадратиками со значком внутри —
++// по цвету раздел узнаётся раньше, чем прочитано название. Наши строки
++// стояли с пустым местом слева и выглядели чужими и сухими.
++//
++// Рисуем такую же плашку сами: скруглённый квадрат с наклонной заливкой и
++// белый знак поверх. Знаки берём системные — за них отвечает Apple, и они
++// есть на любом телефоне. Цвета свои: телеграмовские заняты родными
++// разделами, и повторять их значило бы путать.
++public enum LunagramPlaceIcon {
++    private static let lock = NSLock()
++    private static var cache: [String: UIImage] = [:]
++
++    /// Плашка 30×30: заливка от `top` к `bottom`, внутри системный знак.
++    ///
++    /// `symbols` — список имён через запятую: берём первое, которое эта
++    /// версия iOS знает. Новые знаки появляются с новыми версиями, и запасное
++    /// имя избавляет от пустого места на старом телефоне.
++    public static func image(symbols: String, top: UInt32, bottom: UInt32) -> UIImage? {
++        let key = "\(symbols)|\(top)|\(bottom)"
++        lock.lock()
++        if let cached = cache[key] {
++            lock.unlock()
++            return cached
++        }
++        lock.unlock()
++
++        let configuration = UIImage.SymbolConfiguration(pointSize: 15.0, weight: .semibold)
++        var glyph: UIImage?
++        for name in symbols.split(separator: ",") {
++            if let symbol = UIImage(systemName: String(name).trimmingCharacters(in: .whitespaces), withConfiguration: configuration) {
++                glyph = symbol.withTintColor(.white, renderingMode: .alwaysOriginal)
++                break
++            }
++        }
++
++        let size = CGSize(width: 30.0, height: 30.0)
++        let image = UIGraphicsImageRenderer(size: size).image { context in
++            let bounds = CGRect(origin: CGPoint(), size: size)
++            let path = UIBezierPath(roundedRect: bounds, cornerRadius: 8.0)
++            path.addClip()
++
++            let space = CGColorSpaceCreateDeviceRGB()
++            let colors = [color(top).cgColor, color(bottom).cgColor] as CFArray
++            var locations: [CGFloat] = [0.0, 1.0]
++            if let gradient = CGGradient(colorsSpace: space, colors: colors, locations: &locations) {
++                context.cgContext.drawLinearGradient(
++                    gradient,
++                    start: CGPoint(x: 0.0, y: 0.0),
++                    end: CGPoint(x: 0.0, y: size.height),
++                    options: []
++                )
++            } else {
++                color(top).setFill()
++                path.fill()
++            }
++
++            if let glyph = glyph {
++                let glyphSize = glyph.size
++                glyph.draw(in: CGRect(
++                    x: floor((size.width - glyphSize.width) / 2.0),
++                    y: floor((size.height - glyphSize.height) / 2.0),
++                    width: glyphSize.width,
++                    height: glyphSize.height
++                ))
++            }
++        }
++
++        lock.lock()
++        cache[key] = image
++        lock.unlock()
++        return image
++    }
++
++    private static func color(_ rgb: UInt32) -> UIColor {
++        return UIColor(
++            red: CGFloat((rgb >> 16) & 0xFF) / 255.0,
++            green: CGFloat((rgb >> 8) & 0xFF) / 255.0,
++            blue: CGFloat(rgb & 0xFF) / 255.0,
++            alpha: 1.0
++        )
++    }
++}
++
++public extension LunagramPlace {
++    /// Цвета плашки: сверху светлее, снизу темнее — как у родных.
++    var iconColors: (top: UInt32, bottom: UInt32) {
++        switch self {
++        case .ghost:
++            return (0x9E8BFF, 0x6C4BFF)
++        case .privacy:
++            return (0x6FA0F5, 0x3A6FE0)
++        case .safety:
++            return (0x3FD0C0, 0x16A394)
++        case .deviceMask:
++            return (0x8D9BB4, 0x5A6A85)
++        case .wallpaper:
++            return (0xFFB25A, 0xFF7A1A)
++        case .dialogList:
++            return (0x5FD98E, 0x23A95A)
++        case .avatars:
++            return (0xFF8FB0, 0xFF4D80)
++        case .particles:
++            return (0xFFD95A, 0xFFB01A)
++        case .conversation:
++            return (0x6CCCF8, 0x1E9FE0)
++        case .wording:
++            return (0xC79BFC, 0xA855F7)
++        case .chatStickers:
++            return (0x7BE3C4, 0x2FB99A)
++        case .deleted:
++            return (0xFF8272, 0xE63B26)
++        case .messages:
++            return (0x74B4FF, 0x2E7BE6)
++        case .profileButtons:
++            return (0xA8B4C8, 0x6E7C93)
++        }
++    }
++
++    /// Готовая плашка для строки настроек.
++    var tileIcon: UIImage? {
++        let colors = self.iconColors
++        return LunagramPlaceIcon.image(symbols: self.iconName, top: colors.top, bottom: colors.bottom)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramPlaces.swift b/submodules/Lunagram/Sources/LunagramPlaces.swift
+index 6466d106..88971291 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaces.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaces.swift
+@@ -39,6 +39,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+     case deleted = 12
+     /// Сообщения и отправка — свой раздел в корне.
+     case messages = 13
++    /// Вид кнопок под аватаркой: цвет букв, цвет оболочки, её густота.
++    case profileButtons = 15
+ 
+     public var title: String {
+         switch self {
+@@ -68,6 +70,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "Удалённые и изменённые"
+         case .messages:
+             return "Сообщения"
++        case .profileButtons:
++            return "Кнопки профиля"
+         }
+     }
+ 
+@@ -82,11 +86,11 @@ public enum LunagramPlace: Int32, CaseIterable {
+         case .safety:
+             return "link.badge.plus"
+         case .deviceMask:
+-            return "iphone.gen3"
++            return "iphone.gen3,iphone"
+         case .wallpaper:
+             return "photo"
+         case .dialogList:
+-            return "bubble.left.and.bubble.right"
++            return "bubble.left.and.bubble.right,bubble.left"
+         case .avatars:
+             return "person.crop.circle"
+         case .particles:
+@@ -101,6 +105,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "trash"
+         case .messages:
+             return "paperplane"
++        case .profileButtons:
++            return "capsule.portrait,capsule"
+         }
+     }
+ }
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index f9fab752..b8950dca 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -84,6 +84,12 @@ public final class LunagramSettings {
+         static let profileNameGlowPercent = "lunagram.profile.nameGlowPercent"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
+         static let profileButtonsColor = "lunagram.profile.buttonsColor"
++        static let profileGlassColor = "lunagram.profile.glassColor"
++        static let profileGlassStrength = "lunagram.profile.glassStrength"
++        static let profileGlassColor = "lunagram.profile.glassColor"
++        static let profileGlassStrength = "lunagram.profile.glassStrength"
++        static let profileGlassColor = "lunagram.profile.glassColor"
++        static let profileGlassStrength = "lunagram.profile.glassStrength"
+         static let profileBackgroundFile = "lunagram.profile.backgroundFile"
+         static let profileBackgroundDim = "lunagram.profile.backgroundDim"
+         static let profileBackgroundBlur = "lunagram.profile.backgroundBlur"
+@@ -938,19 +944,11 @@ public final class LunagramSettings {
+ 
+     /// Матовые скруглённые поля на экране «Изменить профиль».
+     ///
+-    /// Включено сразу: хозяин сам об этом попросил, а родной вид тех полей —
+-    /// три сплошные полосы без скруглений — ему и не нравился.
++    /// Выключателя нет намеренно: выбирать тут нечего. Родной вид тех полей —
++    /// три сплошные полосы без скруглений — хозяину и не нравился, ради него
++    /// всё и делалось.
+     public static var editProfileGlass: Bool {
+-        get {
+-            guard defaults.object(forKey: Key.editProfileGlass) != nil else {
+-                return true
+-            }
+-            return defaults.bool(forKey: Key.editProfileGlass)
+-        }
+-        set {
+-            defaults.set(newValue, forKey: Key.editProfileGlass)
+-            changed()
+-        }
++        return true
+     }
+ 
+     /// Отпечаток настроек, которые вшиваются в разметку сообщения.
+@@ -1067,6 +1065,138 @@ public final class LunagramSettings {
+         return color(from: rgb, alpha: 1.0)
+     }
+ 
++    /// Свой цвет стеклянной оболочки вокруг кнопок профиля.
++    ///
++    /// Пусто — оболочку красит Telegram, подбирая под обложку. Своего
++    /// значения по умолчанию нет намеренно: пока цвет не выбран, всё должно
++    /// выглядеть ровно так, как выглядело.
++    public static var profileGlassColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileGlassColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileGlassColor))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileGlassColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileGlassColor)
++            }
++            changed()
++        }
++    }
++
++    /// Насколько густая оболочка, 0…100 %. Работает, только когда выбран цвет.
++    public static var profileGlassStrength: Int {
++        get {
++            guard defaults.object(forKey: Key.profileGlassStrength) != nil else {
++                return 60
++            }
++            return max(0, min(100, defaults.integer(forKey: Key.profileGlassStrength)))
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.profileGlassStrength)
++            changed()
++        }
++    }
++
++    /// Цвет оболочки с учётом густоты, или `nil` — тогда как у Telegram.
++    public static func profileGlassTint() -> CGColor? {
++        guard let rgb = profileGlassColor else {
++            return nil
++        }
++        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
++    }
++
++    /// Свой цвет стеклянной оболочки вокруг кнопок профиля.
++    ///
++    /// Пусто — оболочку красит Telegram, подбирая под обложку. Своего
++    /// значения по умолчанию нет намеренно: пока цвет не выбран, всё должно
++    /// выглядеть ровно так, как выглядело.
++    public static var profileGlassColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileGlassColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileGlassColor))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileGlassColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileGlassColor)
++            }
++            changed()
++        }
++    }
++
++    /// Насколько густая оболочка, 0…100 %. Работает, только когда выбран цвет.
++    public static var profileGlassStrength: Int {
++        get {
++            guard defaults.object(forKey: Key.profileGlassStrength) != nil else {
++                return 60
++            }
++            return max(0, min(100, defaults.integer(forKey: Key.profileGlassStrength)))
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.profileGlassStrength)
++            changed()
++        }
++    }
++
++    /// Цвет оболочки с учётом густоты, или `nil` — тогда как у Telegram.
++    public static func profileGlassTint() -> CGColor? {
++        guard let rgb = profileGlassColor else {
++            return nil
++        }
++        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
++    }
++
++    /// Свой цвет стеклянной оболочки вокруг кнопок профиля.
++    ///
++    /// Пусто — оболочку красит Telegram, подбирая под обложку. Своего
++    /// значения по умолчанию нет намеренно: пока цвет не выбран, всё должно
++    /// выглядеть ровно так, как выглядело.
++    public static var profileGlassColor: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileGlassColor) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileGlassColor))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileGlassColor)
++            } else {
++                defaults.removeObject(forKey: Key.profileGlassColor)
++            }
++            changed()
++        }
++    }
++
++    /// Насколько густая оболочка, 0…100 %. Работает, только когда выбран цвет.
++    public static var profileGlassStrength: Int {
++        get {
++            guard defaults.object(forKey: Key.profileGlassStrength) != nil else {
++                return 60
++            }
++            return max(0, min(100, defaults.integer(forKey: Key.profileGlassStrength)))
++        }
++        set {
++            defaults.set(max(0, min(100, newValue)), forKey: Key.profileGlassStrength)
++            changed()
++        }
++    }
++
++    /// Цвет оболочки с учётом густоты, или `nil` — тогда как у Telegram.
++    public static func profileGlassTint() -> CGColor? {
++        guard let rgb = profileGlassColor else {
++            return nil
++        }
++        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
++    }
++
+     /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
+     public static func profileNameTint() -> CGColor? {
+         if let custom = profileNameCustomColor {
+@@ -1614,13 +1744,38 @@ public final class LunagramSettings {
+     /// Пусто — настоящая версия айфона: для айфона и айпада она и так своя.
+     public static let deviceMaskPresets: [(title: String, device: String, system: String)] = [
+         ("Настоящее устройство", "", ""),
++        // Значок в списке сеансов Telegram выбирает по имени и системе:
++        // iPhone и iPad узнаются по слову в имени, андроид — по системе.
++        // Поэтому у андроидных система указана обязательно, иначе настоящая
++        // подпись перебьёт маску и значок останется телефонным.
++        ("iPhone 16 Pro Max", "iPhone 16 Pro Max", ""),
++        ("iPhone 16 Pro", "iPhone 16 Pro", ""),
++        ("iPhone 16", "iPhone 16", ""),
++        ("iPhone 15 Pro Max", "iPhone 15 Pro Max", ""),
+         ("iPhone 15 Pro", "iPhone 15 Pro", ""),
++        ("iPhone 15", "iPhone 15", ""),
++        ("iPhone 14 Pro", "iPhone 14 Pro", ""),
+         ("iPhone 14", "iPhone 14", ""),
++        ("iPhone 13", "iPhone 13", ""),
++        ("iPhone SE", "iPhone SE", ""),
+         ("iPad Pro", "iPad Pro", ""),
++        ("iPad Air", "iPad Air", ""),
++        ("iPad mini", "iPad mini", ""),
++        ("Samsung Galaxy S24 Ultra", "Samsung Galaxy S24 Ultra", "SDK 34"),
+         ("Samsung Galaxy S24", "Samsung Galaxy S24", "SDK 34"),
++        ("Samsung Galaxy S23", "Samsung Galaxy S23", "SDK 34"),
++        ("Samsung Galaxy A55", "Samsung Galaxy A55", "SDK 34"),
++        ("Google Pixel 9 Pro", "Google Pixel 9 Pro", "SDK 34"),
+         ("Google Pixel 8", "Google Pixel 8", "SDK 34"),
+         ("Xiaomi 14", "Xiaomi 14", "SDK 34"),
+-        ("MacBook Pro", "MacBook Pro", "macOS 14.5")
++        ("Xiaomi Redmi Note 13", "Xiaomi Redmi Note 13", "SDK 34"),
++        ("OnePlus 12", "OnePlus 12", "SDK 34"),
++        ("Huawei P60 Pro", "Huawei P60 Pro", "SDK 34"),
++        ("MacBook Pro", "MacBook Pro", "macOS 14.5"),
++        ("MacBook Air", "MacBook Air", "macOS 14.5"),
++        ("iMac", "iMac", "macOS 14.5"),
++        ("Windows 11", "Desktop", "Windows 11"),
++        ("Linux", "Desktop", "Linux")
+     ]
+ 
+     /// Какая маска выбрана: 0 — настоящее, дальше по списку. Считается по
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
+index 3c2a52e3..6be9f7a5 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
+@@ -235,10 +235,12 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+                 return 32
+             case .openLinksIn:
+                 return 33
++            // Наш блок — выше родных. Порядок строк задаётся этим числом,
++            // поэтому «наверх» здесь значит «меньше нуля».
+             case .lunagramHeader:
+-                return 40
++                return -20
+             case let .lunagramPlace(_, place, _):
+-                return 41 + place
++                return -19 + place
+         }
+     }
+     
+@@ -580,7 +582,8 @@ private enum PrivacyAndSecurityEntry: ItemListNodeEntry {
+             case let .lunagramHeader(_, text):
+                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+             case let .lunagramPlace(_, place, text):
+-                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: text, label: "", sectionId: self.section, style: .blocks, action: {
++                let icon = LunagramPlace(rawValue: place)?.tileIcon
++                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: text, label: "", labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                     arguments.openLunagramPlace(place)
+                 })
+         }
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 695bb964..96887a23 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -206,10 +206,11 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+             return 16
+         case .showNextMediaOnTapInfo:
+             return 17
++        // Наш блок — выше родных.
+         case .lunagramHeader:
+-            return 40
++            return -20
+         case let .lunagramPlace(_, place, _):
+-            return 41 + place
++            return -19 + place
+         }
+     }
+     
+@@ -424,7 +425,8 @@ private enum ThemeSettingsControllerEntry: ItemListNodeEntry {
+             case let .lunagramHeader(_, text):
+                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+             case let .lunagramPlace(_, place, text):
+-                return ItemListDisclosureItem(presentationData: presentationData, title: text, label: "", sectionId: self.section, style: .blocks, action: {
++                let icon = LunagramPlace(rawValue: place)?.tileIcon
++                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: text, label: "", labelStyle: .text, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                     arguments.openLunagramPlace(place)
+                 })
+         }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+index 098fe286..ba0faeff 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+@@ -56,7 +56,9 @@ enum LunagramEditFieldLook {
+         // Заливку убираем совсем: цвет поверх стекла съел бы прозрачность.
+         background.backgroundColor = .clear
+         background.clipsToBounds = true
+-        background.cornerRadius = 12.0
++        // Число не выдумано: ровно такой радиус Telegram берёт для маски
++        // углов у своих стеклянных блоков.
++        background.cornerRadius = 26.0
+         background.layer.cornerCurve = .continuous
+         var corners: CACornerMask = []
+         if roundTop {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index e97baf06..08c96e37 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -210,8 +210,10 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             case .wallpaper, .particles, .banner:
+                 previewHeight = 170.0
+             case .profileBackground:
+-                // Высокий, как на ПК: фон ложится под весь список профиля.
+-                previewHeight = 320.0
++                // Выше ширины экрана: фон ложится под весь список профиля, и
++                // образец должен читаться стоячим прямоугольником. При 320 он
++                // выходил почти квадратным и вводил в заблуждение.
++                previewHeight = 420.0
+             case .music:
+                 previewHeight = 76.0
+             case .avatar:
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift
+deleted file mode 100644
+index 827cc5b5..00000000
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileButtonsColor.swift
++++ /dev/null
+@@ -1,97 +0,0 @@
+-import Foundation
+-import UIKit
+-import Display
+-import TelegramPresentationData
+-import AccountContext
+-import Lunagram
+-
+-// Lunagram: свой цвет кнопок и подписи под аватаркой.
+-//
+-// Кнопку QR, «Изменить», строку с номером и @ником Telegram красит сам —
+-// подбирает цвет под обложку профиля. Подбор бывает неудачным: хозяин
+-// сказал, что на его аватарке «немного не совпадает». Значит, нужен способ
+-// выбрать цвет руками.
+-//
+-// Один цвет на все четыре — так и выбрали. Пока цвет не выбран, ничего не
+-// подменяется: профиль выглядит ровно как выглядел. Только свой профиль,
+-// как баннер, рамка и имя.
+-//
+-// Отдельной строки в настройках нет намеренно: хозяин выбрал «зажать прямо
+-// на них». Зажатие по кнопке и зажатие по строке с номером открывают одно и
+-// то же окошко.
+-enum LunagramProfileButtonsColor {
+-    /// Палитра держит делегата слабо, поэтому держим его сами: иначе он
+-    /// умрёт сразу после показа и цвет не запомнится.
+-    private static var pickerDelegate: AnyObject?
+-
+-    static var isSet: Bool {
+-        return LunagramSettings.profileButtonsColor != nil
+-    }
+-
+-    static func reset() {
+-        LunagramSettings.profileButtonsColor = nil
+-    }
+-
+-    /// Показать выбор. `reset` — предлагать ли возврат к телеграмовскому
+-    /// подбору: если цвет ещё не выбран, возвращать не к чему.
+-    static func present(context: AccountContext, reset: Bool) {
+-        guard reset else {
+-            self.presentPicker(context: context)
+-            return
+-        }
+-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+-        let sheet = ActionSheetController(presentationData: presentationData)
+-        sheet.setItemGroups([
+-            ActionSheetItemGroup(items: [
+-                ActionSheetButtonItem(title: "Выбрать цвет", action: { [weak sheet] in
+-                    sheet?.dismissAnimated()
+-                    LunagramProfileButtonsColor.presentPicker(context: context)
+-                }),
+-                ActionSheetButtonItem(title: "Вернуть как было", color: .destructive, action: { [weak sheet] in
+-                    sheet?.dismissAnimated()
+-                    LunagramProfileButtonsColor.reset()
+-                })
+-            ]),
+-            ActionSheetItemGroup(items: [
+-                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
+-                    sheet?.dismissAnimated()
+-                })
+-            ])
+-        ])
+-        context.sharedContext.mainWindow?.present(sheet, on: .root)
+-    }
+-
+-    private static func presentPicker(context: AccountContext) {
+-        guard #available(iOS 14.0, *) else {
+-            return
+-        }
+-        let picker = UIColorPickerViewController()
+-        picker.supportsAlpha = false
+-        if let rgb = LunagramSettings.profileButtonsColor {
+-            picker.selectedColor = UIColor(rgb: rgb)
+-        }
+-        let delegate = PickerDelegate()
+-        self.pickerDelegate = delegate
+-        picker.delegate = delegate
+-        (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
+-    }
+-
+-    @available(iOS 14.0, *)
+-    private final class PickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
+-        func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
+-            var red: CGFloat = 0.0
+-            var green: CGFloat = 0.0
+-            var blue: CGFloat = 0.0
+-            var alpha: CGFloat = 0.0
+-            color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+-            let r = UInt32(max(0.0, min(1.0, red)) * 255.0)
+-            let g = UInt32(max(0.0, min(1.0, green)) * 255.0)
+-            let b = UInt32(max(0.0, min(1.0, blue)) * 255.0)
+-            LunagramSettings.profileButtonsColor = (r << 16) | (g << 8) | b
+-        }
+-
+-        func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
+-            LunagramProfileButtonsColor.pickerDelegate = nil
+-        }
+-    }
+-}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 6f8705d9..67cca185 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -706,6 +706,8 @@ private enum LunagramRow: Equatable {
+     case cornerSlider(Int)
+     // Строка выбора с галочкой: что выбираем, название, выбрано ли.
+     case choice(Int, String, Bool)
++    // То же для маскировки устройства: номер в списке, название, выбрано ли.
++    case device(Int, String, Bool)
+     case info(String)
+ }
+ 
+@@ -839,13 +841,15 @@ private final class LunagramSettingsControllerArguments {
+     let tile: (Int32, String, Bool) -> Void
+     // Выбран набор надписей.
+     let chooseWording: (Int) -> Void
++    let chooseDevice: (Int) -> Void
+     // Нужен образцам: по нему берётся своя аватарка.
+     let context: AccountContext
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, chooseWording: @escaping (Int) -> Void, context: AccountContext) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, chooseWording: @escaping (Int) -> Void, chooseDevice: @escaping (Int) -> Void, context: AccountContext) {
+         self.openChoice = openChoice
+         self.tile = tile
+         self.chooseWording = chooseWording
++        self.chooseDevice = chooseDevice
+         self.context = context
+         self.toggle = toggle
+         self.pick = pick
+@@ -1383,6 +1387,9 @@ private struct LunagramMediaState: Equatable {
+     var composeAction: Int = 0
+     var composePeer: Int64 = 0
+     var scamCount: Int = 0
++    var profileTextColor: UInt32? = nil
++    var profileGlassColor: UInt32? = nil
++    var profileGlassStrength: Int = 60
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1406,6 +1413,9 @@ private struct LunagramMediaState: Equatable {
+         state.typingBlurRadius = LunagramSettings.typingBlurRadius
+         state.rippleSize = LunagramSettings.rippleSize
+         state.rippleStrength = LunagramSettings.rippleStrength
++        state.profileTextColor = LunagramSettings.profileButtonsColor
++        state.profileGlassColor = LunagramSettings.profileGlassColor
++        state.profileGlassStrength = LunagramSettings.profileGlassStrength
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
+@@ -2021,6 +2031,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.typingBlurRadius = value
+         case 96:
+             LunagramSettings.chatStickersDepth = value
++        case 120:
++            LunagramSettings.profileGlassStrength = value
+         case 95:
+             LunagramSettings.glassCorner = value
+         case 93:
+@@ -2233,6 +2245,38 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case .musicReset:
+             LunagramSettings.clearProfileMusicBackground()
+             refreshMedia()
++        case .profileTextReset:
++            LunagramSettings.profileButtonsColor = nil
++            refreshMedia()
++            return
++        case .profileGlassReset:
++            LunagramSettings.profileGlassColor = nil
++            refreshMedia()
++            return
++        case .profileTextColor, .profileGlassColor:
++            guard #available(iOS 14.0, *) else {
++                return
++            }
++            let isText = (choice == .profileTextColor)
++            let picker = UIColorPickerViewController()
++            picker.supportsAlpha = false
++            if let current = isText ? LunagramSettings.profileButtonsColor : LunagramSettings.profileGlassColor {
++                picker.selectedColor = UIColor(rgb: current)
++            }
++            let delegate = LunagramColorPickerDelegate(changed: { color in
++                if isText {
++                    LunagramSettings.profileButtonsColor = lunagramPackColor(color)
++                } else {
++                    LunagramSettings.profileGlassColor = lunagramPackColor(color)
++                }
++                refreshMedia()
++            }, finished: {
++                shared.pickerHolder.delegate = nil
++            })
++            shared.pickerHolder.delegate = delegate
++            picker.delegate = delegate
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(picker, animated: true, completion: nil)
++            return
+         case .composeColor:
+             guard #available(iOS 14.0, *) else {
+                 return
+@@ -2353,6 +2397,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+     }, chooseWording: { pack in
+         LunagramWording.pack = pack
+         refreshMedia()
++    }, chooseDevice: { index in
++        LunagramSettings.setDeviceMask(index)
++        refreshMedia()
+     }, context: context)
+ }
+ 
+@@ -2394,6 +2441,11 @@ private enum LunagramChoice: Int32 {
+     case composeAction = 81
+     case composePeer = 82
+     case scamRefresh = 83
++    // Кнопки под аватаркой: буквы, оболочка и возврат к телеграмовскому.
++    case profileTextColor = 90
++    case profileTextReset = 91
++    case profileGlassColor = 92
++    case profileGlassReset = 93
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2568,6 +2620,10 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+         return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: sectionId, action: {
+             arguments.chooseWording(id)
+         })
++    case let .device(index, title, selected):
++        return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: sectionId, action: {
++            arguments.chooseDevice(index)
++        })
+     case let .cornerSlider(value):
+         return LunagramSliderItem(presentationData: presentationData, title: "Закругление", value: value, minValue: 0, maxValue: LunagramAvatarShape.maxCorners, step: 1, valueText: { current in
+             if current <= 0 {
+@@ -2891,9 +2947,12 @@ private func lunagramPlaceEntries(
+         rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
+ 
+     case .deviceMask:
++        // Сразу список, без лишней строки посередине: ради неё сюда и заходят.
+         let masks = LunagramSettings.deviceMaskPresets
+-        let mask = masks[max(0, min(masks.count - 1, media.deviceMask))]
+-        rows.row(.value(LunagramChoice.deviceMask.rawValue, "Маскировка устройства", mask.title, "iphone"))
++        let current = max(0, min(masks.count - 1, media.deviceMask))
++        for (index, mask) in masks.enumerated() {
++            rows.row(.device(index, mask.title, index == current))
++        }
+         rows.info("В списке твоих сеансов Telegram покажет выбранное устройство вместо настоящего, вместе с его значком. Начнёт действовать после перезапуска.")
+ 
+     case .wallpaper:
+@@ -2964,6 +3023,19 @@ private func lunagramPlaceEntries(
+         rows.row(.color(LunagramChoice.deletedIconColor.rawValue, "Цвет корзинки", media.deletedIconColor))
+         rows.info("Корзинка у удалённых сообщений. Цветом времени она сливалась с текстом, поэтому по умолчанию красная.")
+ 
++    case .profileButtons:
++        rows.row(.color(LunagramChoice.profileTextColor.rawValue, "Цвет букв", media.profileTextColor ?? 0xFFFFFF))
++        if media.profileTextColor != nil {
++            rows.row(.action(LunagramChoice.profileTextReset.rawValue, "Вернуть цвет букв", "arrow.uturn.backward"))
++        }
++        rows.info("Буквы на кнопках QR и «Изменить» и строка с номером и @ником. Пока цвет не выбран, Telegram подбирает его сам под обложку.")
++        rows.row(.color(LunagramChoice.profileGlassColor.rawValue, "Цвет оболочки", media.profileGlassColor ?? 0xFFFFFF))
++        rows.row(.slider(120, "Густота оболочки", media.profileGlassStrength, 0, 100, 5))
++        if media.profileGlassColor != nil {
++            rows.row(.action(LunagramChoice.profileGlassReset.rawValue, "Вернуть оболочку", "arrow.uturn.backward"))
++        }
++        rows.info("Оболочка — стеклянная капсула вокруг кнопок. Густота задаёт, насколько плотно она закрывает обложку: на нуле почти прозрачная, на сотне сплошная.\n\nПока цвет не выбран, густота ни на что не влияет: оболочку рисует Telegram по-своему.")
++
+     case .messages:
+         let fonts = LunagramSendFont.allCases
+         let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+index 5b3d58d7..f5d1a35b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+@@ -53,6 +53,9 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+     
+     var performAction: ((PeerInfoHeaderNavigationButtonKey, ContextReferenceContentNode?, ContextGesture?) -> Void)?
+ 
++    /// Lunagram: свой цвет стеклянной оболочки. Пусто — как у Telegram.
++    var lunagramGlassTint: UIColor?
++
+     /// Lunagram: свой цвет кнопок. Пусто — считаем как Telegram.
+     ///
+     /// Держатель цвет кнопок пересчитывает сам и довод `contentsColor` для
+@@ -367,7 +370,12 @@ final class PeerInfoHeaderNavigationButtonContainerNode: SparseNode {
+         
+         let tintColor: GlassBackgroundView.TintColor
+         let tintIsDark: Bool
+-        if self.isOverColoredContents {
++        if let lunagramGlassTint = self.lunagramGlassTint {
++            // Lunagram: свой цвет оболочки. Густота уже вшита в прозрачность
++            // цвета, поэтому здесь его довольно передать как есть.
++            tintColor = .init(kind: .custom(style: .default, color: lunagramGlassTint))
++            tintIsDark = presentationData.theme.overallDarkAppearance
++        } else if self.isOverColoredContents {
+             tintColor = .init(kind: .custom(style: .default, color: self.backgroundContentColor))
+             tintIsDark = presentationData.theme.overallDarkAppearance
+         } else {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index edfd568a..cc46ec1e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1172,6 +1172,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         }
+         
+         self.navigationButtonContainer.lunagramContentsTint = lunagramButtonsTint
++        if self.isSettings || self.isMyProfile {
++            self.navigationButtonContainer.lunagramGlassTint = LunagramSettings.profileGlassTint().flatMap { UIColor(cgColor: $0) }
++        }
+         self.navigationButtonContainer.updateContentsColor(backgroundContentColor: headerButtonBackgroundColor, contentsColor: actualNavigationContentsColor, isOverColoredContents: !navigationContentsCanBeExpanded, transition: navigationTransition)
+         
+         self.titleNode.updateTintColor(color: navigationContentsPrimaryColor, transition: navigationTransition)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index f1b43a18..1cb3ae99 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -1653,7 +1653,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             // работает как работало.
+             if gesture != nil, strongSelf.isSettings || strongSelf.isMyProfile, key == .qrCode || key == .edit {
+                 gesture?.cancel()
+-                LunagramProfileButtonsColor.present(context: strongSelf.context, reset: LunagramProfileButtonsColor.isSet)
++                if let screen = strongSelf.context.sharedContext.makeLunagramPlaceController(context: strongSelf.context, place: LunagramPlace.profileButtons.rawValue) {
++                    strongSelf.controller?.push(screen)
++                }
+                 return
+             }
+             switch key {
+@@ -2193,17 +2195,14 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                 // Lunagram: отсюда же выбирается цвет кнопок и подписи — по той
+                 // самой строке, которую и зажимают.
+                 if strongSelf.isSettings || strongSelf.isMyProfile {
+-                    actions.append(ContextMenuAction(content: .text(title: "Цвет кнопок", accessibilityLabel: "Цвет кнопок"), action: { [weak self] in
++                    actions.append(ContextMenuAction(content: .text(title: "Вид кнопок", accessibilityLabel: "Вид кнопок"), action: { [weak self] in
+                         guard let strongSelf = self else {
+                             return
+                         }
+-                        LunagramProfileButtonsColor.present(context: strongSelf.context, reset: false)
++                        if let screen = strongSelf.context.sharedContext.makeLunagramPlaceController(context: strongSelf.context, place: LunagramPlace.profileButtons.rawValue) {
++                            strongSelf.controller?.push(screen)
++                        }
+                     }))
+-                    if LunagramProfileButtonsColor.isSet {
+-                        actions.append(ContextMenuAction(content: .text(title: "Вернуть цвет", accessibilityLabel: "Вернуть цвет"), action: {
+-                            LunagramProfileButtonsColor.reset()
+-                        }))
+-                    }
+                 }
+ 
+                 let contextMenuController = makeContextMenuController(actions: actions)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 090a93b1..c61edda1 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -433,12 +433,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+         items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Имя", icon: lunagramContourIcon("pencil", theme: theme), action: {
+             pushDecor(lunagramProfileNameScreen(context: context))
+         }))
+-        // Матовые поля — прямо здесь: правит оно то самое окно, в котором
+-        // строка и стоит, так что видно сразу.
+-        items[.lunagramDecor]!.append(PeerInfoScreenSwitchItem(id: 208, text: "Матовые поля", value: LunagramSettings.editProfileGlass, icon: lunagramContourIcon("rectangle.on.rectangle", theme: theme), toggled: { value in
+-            LunagramSettings.editProfileGlass = value
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.\n\n«Матовые поля» — про поля выше: имя, фамилию, @ник и «о себе». Родные — сплошная заливка без скруглений; с настройкой они становятся матовыми и скруглёнными, как остальные панели."))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.\n\nПоля выше — имя, фамилия, @ник и «о себе» — матовые и скруглённые: родные там сплошные, и на цветной обложке это выглядело заплаткой."))
+     }
+ 
+     if let cachedData = data.cachedData as? CachedUserData {
