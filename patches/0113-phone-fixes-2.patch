@@ -179,23 +179,19 @@ index 6466d106..88971291 100644
      }
  }
 diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
-index f9fab752..b8950dca 100644
+index f9fab752..0786098c 100644
 --- a/submodules/Lunagram/Sources/LunagramSettings.swift
 +++ b/submodules/Lunagram/Sources/LunagramSettings.swift
-@@ -84,6 +84,12 @@ public final class LunagramSettings {
+@@ -84,6 +84,8 @@ public final class LunagramSettings {
          static let profileNameGlowPercent = "lunagram.profile.nameGlowPercent"
          static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
          static let profileButtonsColor = "lunagram.profile.buttonsColor"
 +        static let profileGlassColor = "lunagram.profile.glassColor"
 +        static let profileGlassStrength = "lunagram.profile.glassStrength"
-+        static let profileGlassColor = "lunagram.profile.glassColor"
-+        static let profileGlassStrength = "lunagram.profile.glassStrength"
-+        static let profileGlassColor = "lunagram.profile.glassColor"
-+        static let profileGlassStrength = "lunagram.profile.glassStrength"
          static let profileBackgroundFile = "lunagram.profile.backgroundFile"
          static let profileBackgroundDim = "lunagram.profile.backgroundDim"
          static let profileBackgroundBlur = "lunagram.profile.backgroundBlur"
-@@ -938,19 +944,11 @@ public final class LunagramSettings {
+@@ -938,19 +940,11 @@ public final class LunagramSettings {
  
      /// Матовые скруглённые поля на экране «Изменить профиль».
      ///
@@ -219,7 +215,7 @@ index f9fab752..b8950dca 100644
      }
  
      /// Отпечаток настроек, которые вшиваются в разметку сообщения.
-@@ -1067,6 +1065,138 @@ public final class LunagramSettings {
+@@ -1067,6 +1061,52 @@ public final class LunagramSettings {
          return color(from: rgb, alpha: 1.0)
      }
  
@@ -267,98 +263,12 @@ index f9fab752..b8950dca 100644
 +        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
 +    }
 +
-+    /// Свой цвет стеклянной оболочки вокруг кнопок профиля.
-+    ///
-+    /// Пусто — оболочку красит Telegram, подбирая под обложку. Своего
-+    /// значения по умолчанию нет намеренно: пока цвет не выбран, всё должно
-+    /// выглядеть ровно так, как выглядело.
-+    public static var profileGlassColor: UInt32? {
-+        get {
-+            guard defaults.object(forKey: Key.profileGlassColor) != nil else {
-+                return nil
-+            }
-+            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileGlassColor))
-+        }
-+        set {
-+            if let newValue = newValue {
-+                defaults.set(Int(newValue), forKey: Key.profileGlassColor)
-+            } else {
-+                defaults.removeObject(forKey: Key.profileGlassColor)
-+            }
-+            changed()
-+        }
-+    }
 +
-+    /// Насколько густая оболочка, 0…100 %. Работает, только когда выбран цвет.
-+    public static var profileGlassStrength: Int {
-+        get {
-+            guard defaults.object(forKey: Key.profileGlassStrength) != nil else {
-+                return 60
-+            }
-+            return max(0, min(100, defaults.integer(forKey: Key.profileGlassStrength)))
-+        }
-+        set {
-+            defaults.set(max(0, min(100, newValue)), forKey: Key.profileGlassStrength)
-+            changed()
-+        }
-+    }
-+
-+    /// Цвет оболочки с учётом густоты, или `nil` — тогда как у Telegram.
-+    public static func profileGlassTint() -> CGColor? {
-+        guard let rgb = profileGlassColor else {
-+            return nil
-+        }
-+        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
-+    }
-+
-+    /// Свой цвет стеклянной оболочки вокруг кнопок профиля.
-+    ///
-+    /// Пусто — оболочку красит Telegram, подбирая под обложку. Своего
-+    /// значения по умолчанию нет намеренно: пока цвет не выбран, всё должно
-+    /// выглядеть ровно так, как выглядело.
-+    public static var profileGlassColor: UInt32? {
-+        get {
-+            guard defaults.object(forKey: Key.profileGlassColor) != nil else {
-+                return nil
-+            }
-+            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileGlassColor))
-+        }
-+        set {
-+            if let newValue = newValue {
-+                defaults.set(Int(newValue), forKey: Key.profileGlassColor)
-+            } else {
-+                defaults.removeObject(forKey: Key.profileGlassColor)
-+            }
-+            changed()
-+        }
-+    }
-+
-+    /// Насколько густая оболочка, 0…100 %. Работает, только когда выбран цвет.
-+    public static var profileGlassStrength: Int {
-+        get {
-+            guard defaults.object(forKey: Key.profileGlassStrength) != nil else {
-+                return 60
-+            }
-+            return max(0, min(100, defaults.integer(forKey: Key.profileGlassStrength)))
-+        }
-+        set {
-+            defaults.set(max(0, min(100, newValue)), forKey: Key.profileGlassStrength)
-+            changed()
-+        }
-+    }
-+
-+    /// Цвет оболочки с учётом густоты, или `nil` — тогда как у Telegram.
-+    public static func profileGlassTint() -> CGColor? {
-+        guard let rgb = profileGlassColor else {
-+            return nil
-+        }
-+        return color(from: rgb, alpha: CGFloat(profileGlassStrength) / 100.0)
-+    }
 +
      /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
      public static func profileNameTint() -> CGColor? {
          if let custom = profileNameCustomColor {
-@@ -1614,13 +1744,38 @@ public final class LunagramSettings {
+@@ -1614,13 +1654,38 @@ public final class LunagramSettings {
      /// Пусто — настоящая версия айфона: для айфона и айпада она и так своя.
      public static let deviceMaskPresets: [(title: String, device: String, system: String)] = [
          ("Настоящее устройство", "", ""),
