@@ -1,0 +1,503 @@
+diff --git a/submodules/SettingsUI/Sources/ArchiveSettingsController.swift b/submodules/SettingsUI/Sources/ArchiveSettingsController.swift
+index 95b32112..70209c48 100644
+--- a/submodules/SettingsUI/Sources/ArchiveSettingsController.swift
++++ b/submodules/SettingsUI/Sources/ArchiveSettingsController.swift
+@@ -198,6 +198,8 @@ public func archiveSettingsController(context: AccountContext) -> ViewController
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     
+     presentUndoImpl = { [weak controller] content in
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/AutodownloadConnectionTypeController.swift b/submodules/SettingsUI/Sources/Data and Storage/AutodownloadConnectionTypeController.swift
+index b3f5cfb6..e9c14f46 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/AutodownloadConnectionTypeController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/AutodownloadConnectionTypeController.swift	
+@@ -391,6 +391,8 @@ func autodownloadMediaConnectionTypeController(context: AccountContext, connecti
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     pushControllerImpl = { [weak controller] c in
+         if let controller = controller {
+             (controller.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/AutodownloadMediaCategoryController.swift b/submodules/SettingsUI/Sources/Data and Storage/AutodownloadMediaCategoryController.swift
+index 44e2124a..fd3fa385 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/AutodownloadMediaCategoryController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/AutodownloadMediaCategoryController.swift	
+@@ -478,6 +478,8 @@ func autodownloadMediaCategoryController(context: AccountContext, connectionType
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.didDisappear = { _ in
+         let _ = (combineLatest(initialValuePromise.get() |> take(1), currentAutodownloadSettings())
+         |> mapToSignal { initialValue, currentValue -> Signal<Void, NoError> in
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/EnergySavingSettingsScreen.swift b/submodules/SettingsUI/Sources/Data and Storage/EnergySavingSettingsScreen.swift
+index fffb2557..af83af14 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/EnergySavingSettingsScreen.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/EnergySavingSettingsScreen.swift	
+@@ -318,6 +318,8 @@ public func energySavingSettingsScreen(context: AccountContext, focusOnItemTag:
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     pushControllerImpl = { [weak controller] c in
+         if let controller = controller {
+             (controller.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/IntentsSettingsController.swift b/submodules/SettingsUI/Sources/Data and Storage/IntentsSettingsController.swift
+index cea27124..999d25a0 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/IntentsSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/IntentsSettingsController.swift	
+@@ -327,6 +327,8 @@ public func intentsSettingsController(context: AccountContext, focusOnItemTag: I
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c in
+         controller?.present(c, in: .window(.root))
+     }
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/ProxyListSettingsController.swift b/submodules/SettingsUI/Sources/Data and Storage/ProxyListSettingsController.swift
+index 1d682146..1e702339 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/ProxyListSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/ProxyListSettingsController.swift	
+@@ -467,6 +467,8 @@ public func proxySettingsController(accountManager: AccountManager<TelegramAccou
+     }
+     
+     let controller = ItemListController(presentationData: ItemListPresentationData(presentationData), updatedPresentationData: updatedPresentationData |> map(ItemListPresentationData.init(_:)), state: signal, tabBarItem: nil)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     pushControllerImpl = { [weak controller] c in
+         (controller?.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/ProxyServerSettingsController.swift b/submodules/SettingsUI/Sources/Data and Storage/ProxyServerSettingsController.swift
+index 985e7d3f..102a3955 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/ProxyServerSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/ProxyServerSettingsController.swift	
+@@ -360,6 +360,8 @@ func proxyServerSettingsController(sharedContext: SharedAccountContext, context:
+     }
+     
+     let controller = ItemListController(presentationData: ItemListPresentationData(presentationData), updatedPresentationData: updatedPresentationData |> map(ItemListPresentationData.init(_:)), state: signal, tabBarItem: nil)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     pushControllerImpl = { [weak controller] c in
+         controller?.push(c)
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/SaveIncomingMediaController.swift b/submodules/SettingsUI/Sources/Data and Storage/SaveIncomingMediaController.swift
+index 1b04940a..63271437 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/SaveIncomingMediaController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/SaveIncomingMediaController.swift	
+@@ -732,6 +732,8 @@ public func saveIncomingMediaController(context: AccountContext, scope: SaveInco
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     
+     switch scope {
+     case .peer, .addPeer:
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/StorageUsageExceptionsScreen.swift b/submodules/SettingsUI/Sources/Data and Storage/StorageUsageExceptionsScreen.swift
+index 1460732c..4162b8e1 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/StorageUsageExceptionsScreen.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/StorageUsageExceptionsScreen.swift	
+@@ -448,6 +448,8 @@ public func storageUsageExceptionsScreen(
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     if isModal {
+         controller.navigationPresentation = .modal
+         controller.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .portrait)
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/VoiceCallDataSavingController.swift b/submodules/SettingsUI/Sources/Data and Storage/VoiceCallDataSavingController.swift
+index 53db4bc1..3542ac3b 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/VoiceCallDataSavingController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/VoiceCallDataSavingController.swift	
+@@ -160,5 +160,7 @@ func voiceCallDataSavingController(context: AccountContext) -> ViewController {
+         }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     return controller
+ }
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/WebBrowserSettingsController.swift b/submodules/SettingsUI/Sources/Data and Storage/WebBrowserSettingsController.swift
+index c5edeaae..b376b517 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/WebBrowserSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/WebBrowserSettingsController.swift	
+@@ -442,6 +442,8 @@ public func webBrowserSettingsController(context: AccountContext) -> ViewControl
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     
+     clearCookiesImpl = { [weak controller] in
+         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+diff --git a/submodules/SettingsUI/Sources/DeleteAccountDataController.swift b/submodules/SettingsUI/Sources/DeleteAccountDataController.swift
+index 03ca2217..f95dbff4 100644
+--- a/submodules/SettingsUI/Sources/DeleteAccountDataController.swift
++++ b/submodules/SettingsUI/Sources/DeleteAccountDataController.swift
+@@ -354,6 +354,8 @@ func deleteAccountDataController(context: AccountContext, mode: DeleteAccountDat
+     }
+ 
+     let controller = ItemListController(context: context, state: signal, tabBarItem: nil)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c in
+         controller?.present(c, in: .window(.root))
+     }
+diff --git a/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift b/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
+index 75adcc0e..e3639bbc 100644
+--- a/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
++++ b/submodules/SettingsUI/Sources/DeleteAccountOptionsController.swift
+@@ -429,6 +429,8 @@ public func deleteAccountOptionsController(context: AccountContext, navigationCo
+     }
+ 
+     let controller = ItemListController(context: context, state: signal, tabBarItem: nil)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     pushControllerImpl = { [weak navigationController] value in
+         navigationController?.pushViewController(value, animated: false)
+diff --git a/submodules/SettingsUI/Sources/Language Selection/TranslatonSettingsController.swift b/submodules/SettingsUI/Sources/Language Selection/TranslatonSettingsController.swift
+index 1c5976d0..985e3cfe 100644
+--- a/submodules/SettingsUI/Sources/Language Selection/TranslatonSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Language Selection/TranslatonSettingsController.swift	
+@@ -212,6 +212,8 @@ public func translationSettingsController(context: AccountContext) -> ViewContro
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.alwaysSynchronous = true
+     return controller
+ }
+diff --git a/submodules/SettingsUI/Sources/LogoutOptionsController.swift b/submodules/SettingsUI/Sources/LogoutOptionsController.swift
+index bc029a99..0439064d 100644
+--- a/submodules/SettingsUI/Sources/LogoutOptionsController.swift
++++ b/submodules/SettingsUI/Sources/LogoutOptionsController.swift
+@@ -287,6 +287,8 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
+     }
+     
+     let controller = ItemListController(context: context, state: signal, tabBarItem: nil)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     pushControllerImpl = { [weak navigationController] value in
+         navigationController?.pushViewController(value, animated: false)
+diff --git a/submodules/SettingsUI/Sources/NotificationsPeerCategoryController.swift b/submodules/SettingsUI/Sources/NotificationsPeerCategoryController.swift
+index 51ffe12b..9eb342fc 100644
+--- a/submodules/SettingsUI/Sources/NotificationsPeerCategoryController.swift
++++ b/submodules/SettingsUI/Sources/NotificationsPeerCategoryController.swift
+@@ -1099,6 +1099,8 @@ public func notificationsPeerCategoryController(context: AccountContext, categor
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c, a in
+         controller?.present(c, in: .window(.root), with: a)
+     }
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/BlockedPeersController.swift b/submodules/SettingsUI/Sources/Privacy and Security/BlockedPeersController.swift
+index 172bd208..aa4f1968 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/BlockedPeersController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/BlockedPeersController.swift	
+@@ -311,6 +311,8 @@ public func blockedPeersController(context: AccountContext, blockedPeersContext:
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     pushControllerImpl = { [weak controller] c in
+         if let controller = controller {
+             (controller.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/CreatePasswordController.swift b/submodules/SettingsUI/Sources/Privacy and Security/CreatePasswordController.swift
+index 520a405c..50996dcb 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/CreatePasswordController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/CreatePasswordController.swift	
+@@ -416,6 +416,8 @@ func createPasswordController(context: AccountContext, createPasswordContext: Cr
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     dismissImpl = { [weak controller] in
+         controller?.view.endEditing(true)
+         controller?.dismiss()
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/DataPrivacySettingsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/DataPrivacySettingsController.swift
+index 3a217663..ed00fd4f 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/DataPrivacySettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/DataPrivacySettingsController.swift	
+@@ -581,6 +581,8 @@ public func dataPrivacyController(context: AccountContext, focusOnItemTag: DataP
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c in
+         controller?.present(c, in: .window(.root))
+     }
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/GlobalAutoremoveScreen.swift b/submodules/SettingsUI/Sources/Privacy and Security/GlobalAutoremoveScreen.swift
+index 66aaae7e..f8e8c40c 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/GlobalAutoremoveScreen.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/GlobalAutoremoveScreen.swift	
+@@ -451,6 +451,8 @@ public func globalAutoremoveScreen(context: AccountContext, initialValue: Int32,
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     getController = { [weak controller] in
+         return controller
+     }
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/IncomingMessagePrivacyScreen.swift b/submodules/SettingsUI/Sources/Privacy and Security/IncomingMessagePrivacyScreen.swift
+index f390f231..e5559c92 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/IncomingMessagePrivacyScreen.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/IncomingMessagePrivacyScreen.swift	
+@@ -447,6 +447,8 @@ public func incomingMessagePrivacyScreen(context: AccountContext, value: GlobalP
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c, p in
+         guard let controller else {
+             return
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PasscodeOptionsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PasscodeOptionsController.swift
+index 8fa2031b..a8deec16 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PasscodeOptionsController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PasscodeOptionsController.swift	
+@@ -411,6 +411,8 @@ func passcodeOptionsController(context: AccountContext, focusOnItemTag: Passcode
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c, p in
+         if let controller = controller {
+             controller.present(c, in: .window(.root), with: p)
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
+index 1a9d302c..62a1fe32 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
+@@ -701,6 +701,12 @@ private func privacyAndSecurityControllerEntries(
+ ) -> [PrivacyAndSecurityEntry] {
+     var entries: [PrivacyAndSecurityEntry] = []
+     
++    // Lunagram: наш блок — первым в списке.
++    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
++    for place in [LunagramPlace.ghost, .privacy, .safety] {
++        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
++    }
++
+     entries.append(.blockedPeers(presentationData.theme, presentationData.strings.Settings_BlockedUsers, blockedPeerCount == nil ? "" : (blockedPeerCount == 0 ? presentationData.strings.PrivacySettings_BlockedPeersEmpty : "\(blockedPeerCount!)")))
+     if activeWebsitesCount != 0 {
+         entries.append(.activeSessions(presentationData.theme, presentationData.strings.PrivacySettings_WebSessions, activeWebsitesCount == 0 ? "" : "\(activeWebsitesCount)"))
+@@ -861,12 +867,6 @@ private func privacyAndSecurityControllerEntries(
+     
+     entries.append(.openLinksIn(presentationData.theme, presentationData.strings.ChatSettings_OpenLinksIn, defaultWebBrowser))
+ 
+-    // Lunagram: то, что про приватность, — рядом с родной приватностью.
+-    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.ghost, .privacy, .safety] {
+-        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+-    }
+-
+     return entries
+ }
+ 
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift
+index 1f526922..8bead566 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/Recent Sessions/RecentSessionsController.swift	
+@@ -1078,6 +1078,8 @@ public func recentSessionsController(context: AccountContext, activeSessionsCont
+     }
+     
+     let controller = RecentSessionsControllerImpl(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.titleControlValueChanged = { [weak mode] index in
+         mode?.set(index == 0 ? .sessions : .websites)
+     }
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsController.swift b/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsController.swift
+index cce4170d..c24c561e 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsController.swift	
+@@ -1901,6 +1901,8 @@ public func selectivePrivacySettingsController(
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.willDisappear = { [weak controller] _ in
+         if let controller = controller, let navigationController = controller.navigationController {
+             let index = navigationController.viewControllers.firstIndex(of: controller)
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsPeersController.swift b/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsPeersController.swift
+index 13a05e43..2abb2b83 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsPeersController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/SelectivePrivacySettingsPeersController.swift	
+@@ -639,6 +639,8 @@ public func selectivePrivacyPeersController(context: AccountContext, title: Stri
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     dismissImpl = { [weak controller] in
+         if let controller = controller, let navigationController = controller.navigationController as? NavigationController {
+             navigationController.filterController(controller, animated: true)
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/TwoStepVerificationUnlockController.swift b/submodules/SettingsUI/Sources/Privacy and Security/TwoStepVerificationUnlockController.swift
+index 3a3f2e80..a3184b27 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/TwoStepVerificationUnlockController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/TwoStepVerificationUnlockController.swift	
+@@ -973,6 +973,8 @@ public func twoStepVerificationUnlockSettingsController(context: AccountContext,
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     replaceControllerImpl = { [weak controller] c, animated in
+         (controller?.navigationController as? NavigationController)?.replaceTopController(c, animated: animated)
+     }
+diff --git a/submodules/SettingsUI/Sources/ReactionNotificationSettingsController.swift b/submodules/SettingsUI/Sources/ReactionNotificationSettingsController.swift
+index 1727e136..76f6f6c8 100644
+--- a/submodules/SettingsUI/Sources/ReactionNotificationSettingsController.swift
++++ b/submodules/SettingsUI/Sources/ReactionNotificationSettingsController.swift
+@@ -437,6 +437,8 @@ public func reactionNotificationSettingsController(
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentInGlobalOverlayImpl = { [weak controller] c in
+         controller?.presentInGlobalOverlay(c, with: nil)
+     }
+diff --git a/submodules/SettingsUI/Sources/Stickers/ArchivedStickerPacksController.swift b/submodules/SettingsUI/Sources/Stickers/ArchivedStickerPacksController.swift
+index d0d017c1..1f9a842b 100644
+--- a/submodules/SettingsUI/Sources/Stickers/ArchivedStickerPacksController.swift
++++ b/submodules/SettingsUI/Sources/Stickers/ArchivedStickerPacksController.swift
+@@ -598,6 +598,8 @@ public func archivedStickerPacksController(context: AccountContext, mode: Archiv
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c, p in
+         if let controller = controller {
+             controller.present(c, in: .window(.root), with: p)
+diff --git a/submodules/SettingsUI/Sources/Stickers/FeaturedStickerPacksController.swift b/submodules/SettingsUI/Sources/Stickers/FeaturedStickerPacksController.swift
+index a1909490..61608a7b 100644
+--- a/submodules/SettingsUI/Sources/Stickers/FeaturedStickerPacksController.swift
++++ b/submodules/SettingsUI/Sources/Stickers/FeaturedStickerPacksController.swift
+@@ -228,6 +228,8 @@ public func featuredStickerPacksController(context: AccountContext) -> ViewContr
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     
+     var alreadyReadIds = Set<EngineItemCollectionId>()
+     
+diff --git a/submodules/SettingsUI/Sources/Stickers/InstalledStickerPacksController.swift b/submodules/SettingsUI/Sources/Stickers/InstalledStickerPacksController.swift
+index b30559b2..7c3a46b7 100644
+--- a/submodules/SettingsUI/Sources/Stickers/InstalledStickerPacksController.swift
++++ b/submodules/SettingsUI/Sources/Stickers/InstalledStickerPacksController.swift
+@@ -1123,6 +1123,8 @@ public func installedStickerPacksController(context: AccountContext, mode: Insta
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     if case .modal = mode {
+         controller.navigationPresentation = .modal
+     }
+diff --git a/submodules/SettingsUI/Sources/Themes/EditThemeController.swift b/submodules/SettingsUI/Sources/Themes/EditThemeController.swift
+index 697a1ca7..a92f7a7d 100644
+--- a/submodules/SettingsUI/Sources/Themes/EditThemeController.swift
++++ b/submodules/SettingsUI/Sources/Themes/EditThemeController.swift
+@@ -734,6 +734,8 @@ public func editThemeController(context: AccountContext, mode: EditThemeControll
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     presentControllerImpl = { [weak controller] c, a in
+         controller?.present(c, in: .window(.root), with: a)
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeAutoNightSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeAutoNightSettingsController.swift
+index 1f206a2b..bcf4a02e 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeAutoNightSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeAutoNightSettingsController.swift
+@@ -601,6 +601,8 @@ public func themeAutoNightSettingsController(context: AccountContext) -> ViewCon
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.alwaysSynchronous = true
+     presentControllerImpl = { [weak controller] c in
+         controller?.present(c, in: .window(.root))
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 145b9e5b..307bb4a8 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -450,6 +450,14 @@ private func themeSettingsControllerEntries(
+ ) -> [ThemeSettingsControllerEntry] {
+     var entries: [ThemeSettingsControllerEntry] = []
+     
++    // Lunagram: наш блок — первым в списке. Порядок на экране задаётся
++    // порядком складывания, а не номерами строк: на этом я и споткнулся,
++    // и из-за этого же список сличался по неверным местам и вылетал.
++    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
++    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .conversation, .wording] {
++        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
++    }
++
+     let strings = presentationData.strings
+     let title = presentationData.autoNightModeTriggered ? strings.Appearance_ColorThemeNight.uppercased() : strings.Appearance_ColorTheme.uppercased()
+     entries.append(.themeListHeader(presentationData.theme, title))
+@@ -528,12 +536,6 @@ private func themeSettingsControllerEntries(
+     }
+     entries.append(.showNextMediaOnTap(presentationData.theme, strings.Appearance_ShowNextMediaOnTap, mediaSettings.showNextMediaOnTap))
+     entries.append(.showNextMediaOnTapInfo(presentationData.theme, strings.Appearance_ShowNextMediaOnTapInfo))
+-
+-    // Lunagram: всё про вид — здесь же, где тема, обои и размер текста.
+-    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .conversation, .wording] {
+-        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+-    }
+     
+     return entries
+ }
+diff --git a/submodules/SettingsUI/Sources/UsernameSetupController.swift b/submodules/SettingsUI/Sources/UsernameSetupController.swift
+index a605c29d..96a215e4 100644
+--- a/submodules/SettingsUI/Sources/UsernameSetupController.swift
++++ b/submodules/SettingsUI/Sources/UsernameSetupController.swift
+@@ -616,6 +616,8 @@ public func usernameSetupController(context: AccountContext, mode: UsernameSetup
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.navigationPresentation = .modal
+     controller.enableInteractiveDismiss = true
+     
+diff --git a/submodules/SettingsUI/Sources/Watch/WatchSettingsController.swift b/submodules/SettingsUI/Sources/Watch/WatchSettingsController.swift
+index f94d01a2..b39745b1 100644
+--- a/submodules/SettingsUI/Sources/Watch/WatchSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Watch/WatchSettingsController.swift
+@@ -137,6 +137,8 @@ public func watchSettingsController(context: AccountContext) -> ViewController {
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     return controller
+ }
+ 
