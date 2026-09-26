@@ -408,7 +408,7 @@ index 0481909f..00000000
 -    }
 -}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index 67cca185..8e376a6f 100644
+index 67cca185..c118f13f 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -47,6 +47,7 @@ private enum LunagramToggle: Int32 {
@@ -482,19 +482,17 @@ index 67cca185..8e376a6f 100644
      shared.push = { [weak controller] c in
          controller?.push(c)
      }
-@@ -3272,7 +3285,10 @@ private func lunagramProfileBackgroundEntries(values: [LunagramToggle: Bool], me
+@@ -3272,7 +3285,8 @@ private func lunagramProfileBackgroundEntries(values: [LunagramToggle: Bool], me
      rows.row(.preview(.profileBackground, lunagramNameToken(current) &* 1_000 &+ media.profileBgDim &* 1_000_000_000 &+ media.profileBgBlur &* 100_000_000_000))
      rows.row(.slider(40, "Затемнение", media.profileBgDim, 0, 100, 5))
      rows.row(.slider(41, "Размытие", media.profileBgBlur, 0, 100, 5))
 -    rows.info("Эта картинка ложится под телефон, о себе и остальной список. Затемнения ей нужно больше, чем шапке: текст тут мельче.")
 +    rows.row(.toggle(.settingsBackground, values[.settingsBackground] ?? LunagramToggle.settingsBackground.value, "Фон и в настройках", "gearshape"))
-+    rows.info("Эта картинка ложится под телефон, о себе и остальной список. Затемнения ей нужно больше, чем шапке: текст тут мельче.
-+
-+«Фон и в настройках» кладёт её же под «Конфиденциальность», «Данные и память», «Уведомления», «Оформление» и наши экраны.")
++    rows.info("Эта картинка ложится под телефон, о себе и остальной список. Затемнения ей нужно больше, чем шапке: текст тут мельче.\n\n«Фон и в настройках» кладёт её же под «Конфиденциальность», «Данные и память», «Уведомления», «Оформление» и наши экраны.")
      return rows.entries
  }
  
-@@ -3292,6 +3308,8 @@ private func lunagramBuiltScreen(context: AccountContext, title: String, build:
+@@ -3292,6 +3306,8 @@ private func lunagramBuiltScreen(context: AccountContext, title: String, build:
          return (controllerState, (listState, arguments))
      }
      let controller = ItemListController(context: context, state: signal)
@@ -503,7 +501,7 @@ index 67cca185..8e376a6f 100644
      shared.push = { [weak controller] c in
          controller?.push(c)
      }
-@@ -3371,6 +3389,8 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+@@ -3371,6 +3387,8 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
      }
  
      let controller = ItemListController(context: context, state: signal)
