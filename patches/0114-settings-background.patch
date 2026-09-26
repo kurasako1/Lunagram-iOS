@@ -1,0 +1,514 @@
+diff --git a/submodules/ItemListUI/Sources/ItemListController.swift b/submodules/ItemListUI/Sources/ItemListController.swift
+index 9b83218c..ee119ab0 100644
+--- a/submodules/ItemListUI/Sources/ItemListController.swift
++++ b/submodules/ItemListUI/Sources/ItemListController.swift
+@@ -166,6 +166,16 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
+             }
+         }
+     }
++
++    // Lunagram: класть ли под этот список картинку фона профиля. Ставят его
++    // экраны настроек — на списках участников и чужих страницах она не нужна.
++    public var lunagramShowsBackground = false {
++        didSet {
++            if self.isNodeLoaded {
++                self.controllerNode.lunagramShowsBackground = self.lunagramShowsBackground
++            }
++        }
++    }
+     
+     public var visibleEntriesUpdated: ((ItemListNodeVisibleEntries) -> Void)? {
+         didSet {
+@@ -584,6 +594,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
+             self?.presentingViewController?.dismiss(animated: true, completion: nil)
+         }
+         displayNode.enableInteractiveDismiss = self.enableInteractiveDismiss
++        displayNode.lunagramShowsBackground = self.lunagramShowsBackground
+         displayNode.alwaysSynchronous = self.alwaysSynchronous
+         displayNode.visibleEntriesUpdated = self.visibleEntriesUpdated
+         displayNode.beganInteractiveDragging = self.beganInteractiveDragging
+diff --git a/submodules/ItemListUI/Sources/ItemListControllerNode.swift b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+index 6b9efaf3..fb5818f1 100644
+--- a/submodules/ItemListUI/Sources/ItemListControllerNode.swift
++++ b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+@@ -8,6 +8,7 @@ import TelegramPresentationData
+ import MergeLists
+ import ComponentFlow
+ import GlassControls
++import Lunagram
+ 
+ public protocol ItemListHeaderItemNode: AnyObject {
+     func updateTheme(theme: PresentationTheme)
+@@ -252,6 +253,45 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     
+     private let listNodeContainer: ASDisplayNode
+     public let listNode: ListView
++
++    // Lunagram: своя картинка под списком. Пока не включена, вида нет вовсе.
++    private var lunagramBackgroundView: LunagramProfileBackgroundView?
++    public var lunagramShowsBackground: Bool = false {
++        didSet {
++            if self.lunagramShowsBackground != oldValue {
++                self.lunagramUpdateBackground()
++            }
++        }
++    }
++
++    /// Появление и исчезновение картинки. Заливку списка при этом снимаем:
++    /// сплошной цвет закрыл бы её целиком.
++    private func lunagramUpdateBackground() {
++        if self.lunagramShowsBackground {
++            if self.lunagramBackgroundView == nil {
++                let view = LunagramProfileBackgroundView(place: .settings)
++                self.lunagramBackgroundView = view
++                self.view.insertSubview(view, at: 0)
++                view.frame = self.bounds
++            }
++            self.backgroundColor = .clear
++            self.listNode.backgroundColor = .clear
++            self.leftOverlayNode.backgroundColor = .clear
++            self.rightOverlayNode.backgroundColor = .clear
++        } else if let view = self.lunagramBackgroundView {
++            self.lunagramBackgroundView = nil
++            view.removeFromSuperview()
++            if let theme = self.theme, let listStyle = self.listStyle {
++                let color = (listStyle == .plain)
++                    ? theme.list.plainBackgroundColor
++                    : theme.list.blocksBackgroundColor
++                self.backgroundColor = color
++                self.listNode.backgroundColor = color
++                self.leftOverlayNode.backgroundColor = color
++                self.rightOverlayNode.backgroundColor = color
++            }
++        }
++    }
+     private let leftOverlayNode: ASDisplayNode
+     private let rightOverlayNode: ASDisplayNode
+     private var emptyStateItem: ItemListControllerEmptyStateItem?
+@@ -651,6 +691,10 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     }
+     
+     open func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition, additionalInsets: UIEdgeInsets) {
++        // Lunagram: картинка держится по размеру экрана, а не по длине списка.
++        if let lunagramBackgroundView = self.lunagramBackgroundView {
++            lunagramBackgroundView.frame = CGRect(origin: CGPoint(), size: layout.size)
++        }
+         var insets = layout.insets(options: [.input])
+         insets.top += navigationBarHeight
+         insets.bottom = max(insets.bottom, additionalInsets.bottom)
+@@ -915,6 +959,10 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                     }
+                 }
+                 
++                // Lunagram: цвет только что переставили — если под списком
++                // наша картинка, заливку снова снимаем.
++                self.lunagramUpdateBackground()
++
+                 self.listNode.forEachItemHeaderNode({ itemHeaderNode in
+                     if let itemHeaderNode = itemHeaderNode as? ItemListHeaderItemNode {
+                         itemHeaderNode.updateTheme(theme: transition.theme)
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBackgroundView.swift b/submodules/Lunagram/Sources/LunagramProfileBackgroundView.swift
+new file mode 100644
+index 00000000..0a63810d
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramProfileBackgroundView.swift
+@@ -0,0 +1,108 @@
++import Foundation
++import UIKit
++
++/// Своя картинка под списком — в профиле и на экранах настроек.
++///
++/// Держится по размеру экрана, а не по длине списка: списки бывают очень
++/// длинные, и растянутая на них картинка превратилась бы в полосу. Так она
++/// остаётся на виду и как будто едет за тобой, пока крутишь.
++///
++/// Лежит в общем куске сборки, а не рядом с профилем, потому что нужна и
++/// экранам настроек: они собраны из другого куска и до профиля не достают.
++public final class LunagramProfileBackgroundView: UIView {
++    /// Где показываемся. В профиле картинка кладётся только под свой профиль
++    /// своего же аккаунта, иначе она легла бы под чужую страницу и под второй
++    /// аккаунт. На экранах настроек такой проверки нет: настройки и так свои.
++    public enum Place {
++        case profile
++        case settings
++    }
++
++    private let place: Place
++    private let imageView = UIImageView()
++    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
++    private let dimView = UIView()
++    private var shownURL: URL?
++    private var settingsObserver: NSObjectProtocol?
++    private var accountId: Int64 = 0
++    private var screenId: Int64 = 0
++
++    public init(place: Place = .profile) {
++        self.place = place
++        super.init(frame: CGRect())
++        self.isUserInteractionEnabled = false
++        self.clipsToBounds = true
++
++        // Кадр считаем сами (см. layoutImage), поэтому картинка просто
++        // заполняет выданную ей рамку.
++        self.imageView.contentMode = .scaleToFill
++        self.addSubview(self.imageView)
++
++        self.blurView.isUserInteractionEnabled = false
++        self.addSubview(self.blurView)
++
++        self.dimView.backgroundColor = .black
++        self.dimView.isUserInteractionEnabled = false
++        self.addSubview(self.dimView)
++
++        self.reload()
++        self.settingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++            self?.reload()
++        })
++    }
++
++    public required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    deinit {
++        if let settingsObserver = self.settingsObserver {
++            NotificationCenter.default.removeObserver(settingsObserver)
++        }
++    }
++
++    /// Чей это экран: свой профиль своего же аккаунта — или чужая страница.
++    public func setOwner(account: Int64, screen: Int64) {
++        self.accountId = account
++        self.screenId = screen
++        self.reload()
++    }
++
++    public override func layoutSubviews() {
++        super.layoutSubviews()
++        let bounds = self.bounds
++        self.layoutImage()
++        self.blurView.frame = bounds
++        self.dimView.frame = bounds
++    }
++
++    /// Картинка — по выбранному кадру: сдвиг и приближение, как у баннера
++    /// и обоев. Без подгонки кадр — середина картинки.
++    private func layoutImage() {
++        let bounds = self.bounds
++        guard let image = self.imageView.image, image.size.width > 0.0 else {
++            self.imageView.frame = bounds
++            return
++        }
++        let placement = LunagramSettings.place(original: image.size, target: bounds.size, crop: LunagramSettings.profileBackgroundCrop)
++        self.imageView.frame = CGRect(origin: placement.origin, size: placement.size)
++    }
++
++    /// Настройки поменялись: перечитываем картинку и силу затемнения.
++    public func reload() {
++        let url = LunagramSettings.profileBackgroundURL
++        if url != self.shownURL {
++            self.shownURL = url
++            self.imageView.image = url.flatMap { UIImage(contentsOfFile: $0.path) }
++        }
++        switch self.place {
++        case .profile:
++            self.isHidden = !LunagramSettings.showsProfileBackground(account: self.accountId, screen: self.screenId)
++        case .settings:
++            self.isHidden = !LunagramSettings.hasProfileBackground || !LunagramSettings.settingsBackground
++        }
++        self.dimView.alpha = CGFloat(LunagramSettings.profileBackgroundDim) / 100.0
++        self.blurView.alpha = CGFloat(LunagramSettings.profileBackgroundBlur) / 100.0
++        self.layoutImage()
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 0786098c..47da67a0 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -93,6 +93,7 @@ public final class LunagramSettings {
+         static let profileBackgroundOffsetY = "lunagram.profile.backgroundOffsetY"
+         static let profileBackgroundZoom = "lunagram.profile.backgroundZoom"
+         static let profileBackgroundOwner = "lunagram.profile.backgroundOwner"
++        static let settingsBackground = "lunagram.profile.settingsBackground"
+         // Фон полоски с песней в своём профиле — как на ПК.
+         static let profileMusicBgFile = "lunagram.profile.musicBgFile"
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+@@ -1187,6 +1188,23 @@ public final class LunagramSettings {
+         return owner == account
+     }
+ 
++    /// Показывать ли ту же картинку под экранами настроек.
++    ///
++    /// Включено сразу: хозяин просил, чтобы фон был «везде», — а картинка всё
++    /// равно не появится, пока её не выбрали.
++    public static var settingsBackground: Bool {
++        get {
++            guard defaults.object(forKey: Key.settingsBackground) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.settingsBackground)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.settingsBackground)
++            changed()
++        }
++    }
++
+     /// Забирает картинку фона себе.
+     public static func importProfileBackground(from source: URL) throws {
+         let folder = try lunagramFolder()
+diff --git a/submodules/SettingsUI/Sources/Data and Storage/DataAndStorageSettingsController.swift b/submodules/SettingsUI/Sources/Data and Storage/DataAndStorageSettingsController.swift
+index 36699867..e929cb6a 100644
+--- a/submodules/SettingsUI/Sources/Data and Storage/DataAndStorageSettingsController.swift	
++++ b/submodules/SettingsUI/Sources/Data and Storage/DataAndStorageSettingsController.swift	
+@@ -962,6 +962,8 @@ public func dataAndStorageController(context: AccountContext, focusOnItemTag: Da
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     pushControllerImpl = { [weak controller] c in
+         if let controller = controller {
+             (controller.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/SettingsUI/Sources/Notifications/NotificationsAndSoundsController.swift b/submodules/SettingsUI/Sources/Notifications/NotificationsAndSoundsController.swift
+index 97034068..f26b72a6 100644
+--- a/submodules/SettingsUI/Sources/Notifications/NotificationsAndSoundsController.swift
++++ b/submodules/SettingsUI/Sources/Notifications/NotificationsAndSoundsController.swift
+@@ -890,6 +890,8 @@ public func notificationsAndSoundsController(context: AccountContext, exceptions
+     }
+     
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     presentControllerImpl = { [weak controller] c, a in
+         controller?.present(c, in: .window(.root), with: a)
+     }
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
+index 6be9f7a5..1a9d302c 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
+@@ -1690,6 +1690,8 @@ public func privacyAndSecurityController(
+     }
+     
+     let controller = PrivacyAndSecurityControllerImpl(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     pushControllerImpl = { [weak controller] c, animated in
+         (controller?.navigationController as? NavigationController)?.pushViewController(c, animated: animated)
+     }
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 96887a23..145b9e5b 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -1201,6 +1201,8 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
+     }
+     
+     let controller = ThemeSettingsControllerImpl(context: context, state: signal)
++    // Lunagram: под настройками — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     controller.alwaysSynchronous = true
+     pushControllerImpl = { [weak controller] c in
+         (controller?.navigationController as? NavigationController)?.pushViewController(c)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift
+deleted file mode 100644
+index 0481909f..00000000
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramProfileBackgroundView.swift
++++ /dev/null
+@@ -1,92 +0,0 @@
+-import Foundation
+-import UIKit
+-import Lunagram
+-
+-/// Своя картинка под списком профиля.
+-///
+-/// Держится по размеру экрана, а не по длине списка: список в профиле очень
+-/// длинный, и растянутая на него картинка превратилась бы в полосу. Так она
+-/// остаётся на виду и как будто едет за тобой, пока крутишь.
+-final class LunagramProfileBackgroundView: UIView {
+-    private let imageView = UIImageView()
+-    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+-    private let dimView = UIView()
+-    private var shownURL: URL?
+-    private var settingsObserver: NSObjectProtocol?
+-    private var accountId: Int64 = 0
+-    private var screenId: Int64 = 0
+-
+-    init() {
+-        super.init(frame: CGRect())
+-        self.isUserInteractionEnabled = false
+-        self.clipsToBounds = true
+-
+-        // Кадр считаем сами (см. layoutImage), поэтому картинка просто
+-        // заполняет выданную ей рамку.
+-        self.imageView.contentMode = .scaleToFill
+-        self.addSubview(self.imageView)
+-
+-        self.blurView.isUserInteractionEnabled = false
+-        self.addSubview(self.blurView)
+-
+-        self.dimView.backgroundColor = .black
+-        self.dimView.isUserInteractionEnabled = false
+-        self.addSubview(self.dimView)
+-
+-        self.reload()
+-        self.settingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
+-            self?.reload()
+-        })
+-    }
+-
+-    required init?(coder: NSCoder) {
+-        fatalError("init(coder:) has not been implemented")
+-    }
+-
+-    deinit {
+-        if let settingsObserver = self.settingsObserver {
+-            NotificationCenter.default.removeObserver(settingsObserver)
+-        }
+-    }
+-
+-    /// Чей это экран: свой профиль своего же аккаунта — или чужая страница.
+-    /// Без этого картинка легла бы под любой профиль и под второй аккаунт.
+-    func setOwner(account: Int64, screen: Int64) {
+-        self.accountId = account
+-        self.screenId = screen
+-        self.reload()
+-    }
+-
+-    override func layoutSubviews() {
+-        super.layoutSubviews()
+-        let bounds = self.bounds
+-        self.layoutImage()
+-        self.blurView.frame = bounds
+-        self.dimView.frame = bounds
+-    }
+-
+-    /// Картинка — по выбранному кадру: сдвиг и приближение, как у баннера
+-    /// и обоев. Без подгонки кадр — середина картинки.
+-    private func layoutImage() {
+-        let bounds = self.bounds
+-        guard let image = self.imageView.image, image.size.width > 0.0 else {
+-            self.imageView.frame = bounds
+-            return
+-        }
+-        let placement = LunagramSettings.place(original: image.size, target: bounds.size, crop: LunagramSettings.profileBackgroundCrop)
+-        self.imageView.frame = CGRect(origin: placement.origin, size: placement.size)
+-    }
+-
+-    /// Настройки поменялись: перечитываем картинку и силу затемнения.
+-    func reload() {
+-        let url = LunagramSettings.profileBackgroundURL
+-        if url != self.shownURL {
+-            self.shownURL = url
+-            self.imageView.image = url.flatMap { UIImage(contentsOfFile: $0.path) }
+-        }
+-        self.isHidden = !LunagramSettings.showsProfileBackground(account: self.accountId, screen: self.screenId)
+-        self.dimView.alpha = CGFloat(LunagramSettings.profileBackgroundDim) / 100.0
+-        self.blurView.alpha = CGFloat(LunagramSettings.profileBackgroundBlur) / 100.0
+-        self.layoutImage()
+-    }
+-}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 67cca185..8e376a6f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -47,6 +47,7 @@ private enum LunagramToggle: Int32 {
+     case showMessageShot
+     case ghostAutoOffline
+     case showMutedDeleted
++    case settingsBackground
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
+@@ -130,6 +131,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.ghostAutoOffline
+         case .showMutedDeleted:
+             return LunagramSettings.showMutedDeleted
++        case .settingsBackground:
++            return LunagramSettings.settingsBackground
+         case .voiceLengthInList:
+             return LunagramSettings.voiceLengthInList
+         case .storiesClickOnly:
+@@ -241,6 +244,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.ghostAutoOffline = value
+         case .showMutedDeleted:
+             LunagramSettings.showMutedDeleted = value
++        case .settingsBackground:
++            LunagramSettings.settingsBackground = value
+         case .voiceLengthInList:
+             LunagramSettings.voiceLengthInList = value
+         case .storiesClickOnly:
+@@ -352,6 +357,8 @@ private enum LunagramToggle: Int32 {
+             return "Автоматический «офлайн»"
+         case .showMutedDeleted:
+             return "Показывать заглушённое"
++        case .settingsBackground:
++            return "Фон и в настройках"
+         case .voiceLengthInList:
+             return "Длина голосовых"
+         case .storiesClickOnly:
+@@ -457,7 +464,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -574,6 +581,8 @@ extension LunagramToggle {
+             return "eye"
+         case .showMutedDeleted:
+             return "square.grid.2x2"
++        case .settingsBackground:
++            return "gearshape"
+         case .voiceLengthInList:
+             return "speaker.wave.1"
+         case .storiesClickOnly:
+@@ -3081,6 +3090,8 @@ public func lunagramPlaceController(context: AccountContext, place: LunagramPlac
+         return (controllerState, (listState, arguments))
+     }
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под нашими экранами — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     shared.push = { [weak controller] c in
+         controller?.push(c)
+     }
+@@ -3179,6 +3190,8 @@ private func lunagramSectionsScreen(context: AccountContext, title: String, sect
+         return (controllerState, (listState, arguments))
+     }
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под нашими экранами — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     shared.push = { [weak controller] c in
+         controller?.push(c)
+     }
+@@ -3272,7 +3285,10 @@ private func lunagramProfileBackgroundEntries(values: [LunagramToggle: Bool], me
+     rows.row(.preview(.profileBackground, lunagramNameToken(current) &* 1_000 &+ media.profileBgDim &* 1_000_000_000 &+ media.profileBgBlur &* 100_000_000_000))
+     rows.row(.slider(40, "Затемнение", media.profileBgDim, 0, 100, 5))
+     rows.row(.slider(41, "Размытие", media.profileBgBlur, 0, 100, 5))
+-    rows.info("Эта картинка ложится под телефон, о себе и остальной список. Затемнения ей нужно больше, чем шапке: текст тут мельче.")
++    rows.row(.toggle(.settingsBackground, values[.settingsBackground] ?? LunagramToggle.settingsBackground.value, "Фон и в настройках", "gearshape"))
++    rows.info("Эта картинка ложится под телефон, о себе и остальной список. Затемнения ей нужно больше, чем шапке: текст тут мельче.
++
++«Фон и в настройках» кладёт её же под «Конфиденциальность», «Данные и память», «Уведомления», «Оформление» и наши экраны.")
+     return rows.entries
+ }
+ 
+@@ -3292,6 +3308,8 @@ private func lunagramBuiltScreen(context: AccountContext, title: String, build:
+         return (controllerState, (listState, arguments))
+     }
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под нашими экранами — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     shared.push = { [weak controller] c in
+         controller?.push(c)
+     }
+@@ -3371,6 +3389,8 @@ func lunagramSettingsController(context: AccountContext) -> ViewController {
+     }
+ 
+     let controller = ItemListController(context: context, state: signal)
++    // Lunagram: под нашими экранами — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
+     shared.push = { [weak controller] c in
+         controller?.push(c)
+     }
