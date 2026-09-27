@@ -1,0 +1,76 @@
+diff --git a/submodules/ItemListUI/Sources/ItemListControllerNode.swift b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+index fb5818f1..78e16a32 100644
+--- a/submodules/ItemListUI/Sources/ItemListControllerNode.swift
++++ b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+@@ -995,6 +995,11 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                 }
+             }
+             
++            // Lunagram: и здесь тоже. Стиль ставится ПОСЛЕ темы и заливает
++            // список заново — снимать заливку только в теме было мало, и
++            // картинка оказывалась под сплошным цветом.
++            self.lunagramUpdateBackground()
++
+             var options = ListViewDeleteAndInsertOptions()
+             if transition.firstTime {
+                 options.insert(.Synchronous)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+index ba0faeff..84ec0e57 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditFieldLook.swift
+@@ -30,8 +30,15 @@ enum LunagramEditFieldLook {
+     }
+ 
+     /// Зовётся из раскладки поля, уже после того, как ему поставили рамку.
++    ///
++    /// `mask` — картинка поддельных скруглений. Telegram рисует ею углы:
++    /// заливает их цветом страницы и кладёт поверх поля. Со стеклом это не
++    /// работает — углы получаются глухие, в тёмной теме чёрные, а стекло под
++    /// ними не видно вовсе. Поэтому картинку прячем и скругляем по-настоящему,
++    /// маской слоя. Ровно так же поступлено с блоками профиля.
+     static func update(
+         background: ASDisplayNode,
++        mask: ASImageNode,
+         separator: ASDisplayNode,
+         theme: PresentationTheme,
+         roundTop: Bool,
+@@ -49,10 +56,13 @@ enum LunagramEditFieldLook {
+             existing?.removeFromSuperview()
+             background.backgroundColor = theme.list.itemBlocksBackgroundColor
+             background.cornerRadius = 0.0
++            mask.isHidden = false
+             separator.alpha = 1.0
+             return
+         }
+ 
++        mask.isHidden = true
++
+         // Заливку убираем совсем: цвет поверх стекла съел бы прозрачность.
+         background.backgroundColor = .clear
+         background.clipsToBounds = true
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
+index 6363152b..3a3b1e8d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderMultiLineTextFieldNode.swift
+@@ -170,7 +170,7 @@ final class PeerInfoHeaderMultiLineTextFieldNode: ASDisplayNode, PeerInfoHeaderT
+         self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
+ 
+         // Lunagram: матовая скруглённая подложка вместо сплошной заливки.
+-        LunagramEditFieldLook.update(background: self.backgroundNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
++        LunagramEditFieldLook.update(background: self.backgroundNode, mask: self.maskNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
+         
+         return height
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
+index 12d13196..8b8c7540 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderSingleLineTextFieldNode.swift
+@@ -147,7 +147,7 @@ final class PeerInfoHeaderSingleLineTextFieldNode: ASDisplayNode, PeerInfoHeader
+         self.maskNode.frame = CGRect(origin: CGPoint(x: safeInset, y: 0.0), size: CGSize(width: width - safeInset - safeInset, height: height))
+ 
+         // Lunagram: матовая скруглённая подложка вместо сплошной заливки.
+-        LunagramEditFieldLook.update(background: self.backgroundNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
++        LunagramEditFieldLook.update(background: self.backgroundNode, mask: self.maskNode, separator: self.topSeparator, theme: presentationData.theme, roundTop: !hasPrevious, roundBottom: !hasNext)
+         
+         self.textNode.isUserInteractionEnabled = isEnabled
+         self.textNode.alpha = isEnabled ? 1.0 : 0.6
