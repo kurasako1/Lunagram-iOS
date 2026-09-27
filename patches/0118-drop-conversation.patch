@@ -1,0 +1,1655 @@
+diff --git a/submodules/Lunagram/Sources/LunagramInputIcons.swift b/submodules/Lunagram/Sources/LunagramInputIcons.swift
+deleted file mode 100644
+index 157b7202..00000000
+--- a/submodules/Lunagram/Sources/LunagramInputIcons.swift
++++ /dev/null
+@@ -1,189 +0,0 @@
+-import CoreGraphics
+-import Foundation
+-import UIKit
+-
+-/// Раскладка кнопок полосы ввода: сдвиг и поворот.
+-///
+-/// Задумка из IconMover (@Darksourse399), взята только она. Плагин двигает
+-/// что угодно по всему экрану; здесь — только три кнопки полосы ввода.
+-/// Так решил хозяин, и так оно безопаснее: полоса ввода — самое частое
+-/// место в приложении, и вольная правка чего угодно поверх неё кончилась бы
+-/// недосягаемой кнопкой отправки.
+-///
+-/// Главное свойство: пока ничего не сдвинуто, превращение получается
+-/// тождественным — то есть полоса ввода рисуется ровно так же, как без нас.
+-/// Выключатель гасит всё сразу, не дожидаясь сброса каждой кнопки.
+-public enum LunagramInputIcons {
+-    /// Какие кнопки двигаем. Значки внутри поля ввода (смайлик и прочие)
+-    /// сюда не берём: они стоят впритык к тексту, и сдвинутые лезли бы на
+-    /// буквы.
+-    public enum Slot: String, CaseIterable {
+-        /// Скрепка слева.
+-        case attach
+-        /// Кнопка меню бота — она же слева, вместо скрепки.
+-        case menu
+-        /// Микрофон и отправка справа.
+-        case send
+-
+-        public var title: String {
+-            switch self {
+-            case .attach:
+-                return "Скрепка"
+-            case .menu:
+-                return "Меню"
+-            case .send:
+-                return "Микрофон и отправка"
+-            }
+-        }
+-    }
+-
+-    /// Насколько кнопку разрешено уводить от её места, точки экрана.
+-    public static let range: Int = 60
+-    /// Насколько разрешено поворачивать, градусы.
+-    public static let angleRange: Int = 180
+-
+-    public struct Placement: Equatable {
+-        public var offsetX: Int = 0
+-        public var offsetY: Int = 0
+-        public var angle: Int = 0
+-
+-        public var isDefault: Bool {
+-            return self.offsetX == 0 && self.offsetY == 0 && self.angle == 0
+-        }
+-
+-        public init(offsetX: Int = 0, offsetY: Int = 0, angle: Int = 0) {
+-            self.offsetX = offsetX
+-            self.offsetY = offsetY
+-            self.angle = angle
+-        }
+-    }
+-
+-    private static let enabledKey = "lunagram.inputIcons.enabled"
+-    private static let mapKey = "lunagram.inputIcons.map"
+-
+-    private static var defaults: UserDefaults {
+-        return UserDefaults.standard
+-    }
+-
+-    /// Двигаем ли кнопки вообще.
+-    public static var enabled: Bool {
+-        get {
+-            guard defaults.object(forKey: enabledKey) != nil else {
+-                return false
+-            }
+-            return defaults.bool(forKey: enabledKey)
+-        }
+-        set {
+-            defaults.set(newValue, forKey: enabledKey)
+-            cache = nil
+-            LunagramSettings.changed()
+-        }
+-    }
+-
+-    // MARK: Хранение
+-
+-    // Всё складываем одной строкой: «скрепка:10,-4,15;отправка:0,8,0».
+-    // Заводить под каждую кнопку по три ключа — плодить девять настроек
+-    // ради одной задумки.
+-    private static var cacheSource: String?
+-    private static var cache: [Slot: Placement]?
+-
+-    private static var map: [Slot: Placement] {
+-        let source = defaults.string(forKey: mapKey) ?? ""
+-        if let cache, cacheSource == source {
+-            return cache
+-        }
+-        var result: [Slot: Placement] = [:]
+-        for part in source.split(separator: ";") {
+-            let pair = part.split(separator: ":")
+-            guard pair.count == 2, let slot = Slot(rawValue: String(pair[0])) else {
+-                continue
+-            }
+-            let numbers = pair[1].split(separator: ",").map { Int($0) ?? 0 }
+-            guard numbers.count == 3 else {
+-                continue
+-            }
+-            result[slot] = Placement(offsetX: numbers[0], offsetY: numbers[1], angle: numbers[2])
+-        }
+-        cacheSource = source
+-        cache = result
+-        return result
+-    }
+-
+-    private static func store(_ map: [Slot: Placement]) {
+-        // Порядок постоянный: иначе строка в настройках переписывалась бы
+-        // при каждом сохранении, даже когда ничего не поменялось.
+-        let text = Slot.allCases.compactMap { slot -> String? in
+-            guard let placement = map[slot], !placement.isDefault else {
+-                return nil
+-            }
+-            return "\(slot.rawValue):\(placement.offsetX),\(placement.offsetY),\(placement.angle)"
+-        }.joined(separator: ";")
+-        defaults.set(text, forKey: mapKey)
+-        cacheSource = nil
+-        cache = nil
+-        LunagramSettings.changed()
+-    }
+-
+-    public static func placement(_ slot: Slot) -> Placement {
+-        return map[slot] ?? Placement()
+-    }
+-
+-    public static func setPlacement(_ placement: Placement, for slot: Slot) {
+-        var updated = map
+-        let clamped = Placement(
+-            offsetX: max(-range, min(range, placement.offsetX)),
+-            offsetY: max(-range, min(range, placement.offsetY)),
+-            angle: max(-angleRange, min(angleRange, placement.angle))
+-        )
+-        if clamped.isDefault {
+-            updated.removeValue(forKey: slot)
+-        } else {
+-            updated[slot] = clamped
+-        }
+-        store(updated)
+-    }
+-
+-    /// Вернуть всё на место.
+-    public static func reset() {
+-        store([:])
+-    }
+-
+-    public static var hasAnyPlacement: Bool {
+-        return !map.isEmpty
+-    }
+-
+-    // MARK: Применение
+-
+-    /// Превращение для кнопки. Пока ничего не сдвинуто — тождественное, и
+-    /// полоса ввода рисуется ровно как без нас.
+-    public static func transform(for slot: Slot) -> CGAffineTransform {
+-        guard self.enabled else {
+-            return .identity
+-        }
+-        let placement = self.placement(slot)
+-        guard !placement.isDefault else {
+-            return .identity
+-        }
+-        var result = CGAffineTransform(translationX: CGFloat(placement.offsetX), y: CGFloat(placement.offsetY))
+-        if placement.angle != 0 {
+-            result = result.rotated(by: CGFloat(placement.angle) * .pi / 180.0)
+-        }
+-        return result
+-    }
+-
+-    /// Поставить превращение слою, если оно поменялось.
+-    ///
+-    /// Сравниваем перед записью: полоса ввода перекладывается на каждый
+-    /// набранный знак, а запись в слой каждый раз сбрасывала бы его
+-    /// собственные переходы.
+-    public static func apply(_ slot: Slot, to layer: CALayer?) {
+-        guard let layer else {
+-            return
+-        }
+-        let transform = CATransform3DMakeAffineTransform(self.transform(for: slot))
+-        if !CATransform3DEqualToTransform(layer.transform, transform) {
+-            layer.transform = transform
+-        }
+-    }
+-}
+diff --git a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+index 4b543bc0..ce98bf93 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+@@ -106,8 +106,6 @@ public extension LunagramPlace {
+             return (0xFF8FB0, 0xFF4D80)
+         case .particles:
+             return (0xFFD95A, 0xFFB01A)
+-        case .conversation:
+-            return (0x6CCCF8, 0x1E9FE0)
+         case .wording:
+             return (0xC79BFC, 0xA855F7)
+         case .chatStickers:
+diff --git a/submodules/Lunagram/Sources/LunagramPlaces.swift b/submodules/Lunagram/Sources/LunagramPlaces.swift
+index 88971291..0dd7b484 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaces.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaces.swift
+@@ -30,7 +30,6 @@ public enum LunagramPlace: Int32, CaseIterable {
+     /// Частицы в переписке.
+     case particles = 8
+     /// Как выглядит сама переписка: буквы, упоминания, панели, полоса ввода.
+-    case conversation = 9
+     /// Свои надписи вместо телеграмовских — в «Языке».
+     case wording = 10
+     /// Эмодзи и стикеры чата — в «Стикерах».
+@@ -60,8 +59,6 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "Аватарки"
+         case .particles:
+             return "Частицы"
+-        case .conversation:
+-            return "Переписка"
+         case .wording:
+             return "Надписи"
+         case .chatStickers:
+@@ -95,8 +92,6 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "person.crop.circle"
+         case .particles:
+             return "sparkles"
+-        case .conversation:
+-            return "text.bubble"
+         case .wording:
+             return "textformat"
+         case .chatStickers:
+diff --git a/submodules/Lunagram/Sources/LunagramRipple.swift b/submodules/Lunagram/Sources/LunagramRipple.swift
+deleted file mode 100644
+index a3c53258..00000000
+--- a/submodules/Lunagram/Sources/LunagramRipple.swift
++++ /dev/null
+@@ -1,163 +0,0 @@
+-import Foundation
+-import UIKit
+-// Без него `state` у распознавателя только читается, а нам его менять.
+-import UIKit.UIGestureRecognizerSubclass
+-
+-/// Круг, расходящийся из-под пальца при нажатии.
+-///
+-/// Задумка из Ripple Touch (@mihailkotovski) — взята только она сама.
+-///
+-/// Главное условие: нажатия должны работать ровно так же, как работали. В
+-/// iOS отслеживание касаний обычно отнимает их у того, кто под пальцем, —
+-/// кнопка перестаёт нажиматься или срабатывает с задержкой. Поэтому здесь
+-/// не обычный распознаватель жеста, а свой, который сразу объявляет себя
+-/// несостоявшимся: он видит касание и тут же уходит с дороги. Вдобавок ему
+-/// запрещено и отменять касания, и задерживать их.
+-///
+-/// Сам круг живёт в отдельном слое поверх всего окна, и этот слой не ловит
+-/// нажатия вовсе. Так что худшее, что может случиться при поломке, —
+-/// пропавший или кривой кружок, но не сломанный Telegram.
+-public final class LunagramRipple {
+-    public static let shared = LunagramRipple()
+-
+-    private weak var window: UIWindow?
+-    private var overlay: UIView?
+-    private var watcher: LunagramTouchWatcher?
+-
+-    private init() {
+-    }
+-
+-    /// Поставить наблюдение на окно приложения. Зовут один раз при запуске.
+-    public static func install(in window: UIWindow) {
+-        shared.attach(to: window)
+-    }
+-
+-    private func attach(to window: UIWindow) {
+-        guard self.window !== window else {
+-            return
+-        }
+-        self.window = window
+-
+-        let overlay = UIView(frame: window.bounds)
+-        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+-        overlay.isUserInteractionEnabled = false
+-        // Поверх всего, что кладёт Telegram: иначе круг покажется под
+-        // экраном переписки и его никто не увидит.
+-        overlay.layer.zPosition = 10000.0
+-        window.addSubview(overlay)
+-        self.overlay = overlay
+-
+-        let watcher = LunagramTouchWatcher()
+-        watcher.onTouch = { [weak self] point in
+-            self?.spark(at: point)
+-        }
+-        window.addGestureRecognizer(watcher)
+-        self.watcher = watcher
+-    }
+-
+-    private func spark(at point: CGPoint) {
+-        guard LunagramSettings.rippleEnabled else {
+-            return
+-        }
+-        guard let window = self.window, let overlay = self.overlay else {
+-            return
+-        }
+-        // Telegram мог положить свои виды поверх нашего — вернём наш наверх.
+-        if overlay.superview !== window {
+-            window.addSubview(overlay)
+-        } else if window.subviews.last !== overlay {
+-            window.bringSubviewToFront(overlay)
+-        }
+-
+-        let radius = LunagramRipple.radius()
+-        let circle = CAShapeLayer()
+-        circle.path = UIBezierPath(ovalIn: CGRect(x: -radius, y: -radius, width: radius * 2.0, height: radius * 2.0)).cgPath
+-        circle.fillColor = LunagramRipple.color(for: window).cgColor
+-        circle.position = point
+-        circle.opacity = 0.0
+-        overlay.layer.addSublayer(circle)
+-
+-        let strength = Float(LunagramSettings.rippleStrength) / 100.0
+-        let duration = 0.45
+-
+-        let scale = CABasicAnimation(keyPath: "transform.scale")
+-        scale.fromValue = 0.05
+-        scale.toValue = 1.0
+-        scale.duration = duration
+-        scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
+-
+-        let fade = CAKeyframeAnimation(keyPath: "opacity")
+-        fade.values = [0.0, strength, 0.0]
+-        fade.keyTimes = [0.0, 0.25, 1.0]
+-        fade.duration = duration
+-
+-        let group = CAAnimationGroup()
+-        group.animations = [scale, fade]
+-        group.duration = duration
+-        group.isRemovedOnCompletion = true
+-
+-        CATransaction.begin()
+-        CATransaction.setCompletionBlock { [weak circle] in
+-            circle?.removeFromSuperlayer()
+-        }
+-        circle.add(group, forKey: "lunagramRipple")
+-        CATransaction.commit()
+-    }
+-
+-    /// Насколько большой круг. Крутилка идёт процентами, а людям понятнее
+-    /// «маленький — большой», поэтому переводим в точки экрана сами.
+-    private static func radius() -> CGFloat {
+-        let percent = CGFloat(max(0, min(100, LunagramSettings.rippleSize)))
+-        return 30.0 + percent * 1.1
+-    }
+-
+-    /// Цвет круга подбираем сами: на тёмном экране белый, на светлом чёрный.
+-    /// Один цвет на оба случая был бы не виден на одном из них.
+-    private static func color(for window: UIWindow) -> UIColor {
+-        let isDark: Bool
+-        if #available(iOS 13.0, *) {
+-            isDark = window.traitCollection.userInterfaceStyle == .dark
+-        } else {
+-            isDark = false
+-        }
+-        return isDark ? UIColor.white : UIColor.black
+-    }
+-}
+-
+-/// Распознаватель, который ничего не распознаёт.
+-///
+-/// Нужен только ради одного: узнать, где палец коснулся экрана. Сразу
+-/// объявляет себя несостоявшимся, чтобы не мешать настоящим нажатиям.
+-public final class LunagramTouchWatcher: UIGestureRecognizer {
+-    public var onTouch: ((CGPoint) -> Void)?
+-
+-    public override init(target: Any?, action: Selector?) {
+-        super.init(target: target, action: action)
+-        self.cancelsTouchesInView = false
+-        self.delaysTouchesBegan = false
+-        self.delaysTouchesEnded = false
+-    }
+-
+-    convenience init() {
+-        self.init(target: nil, action: nil)
+-    }
+-
+-    public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+-        if let touch = touches.first, let view = self.view {
+-            self.onTouch?(touch.location(in: view))
+-        }
+-        self.state = .failed
+-    }
+-
+-    public override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+-        self.state = .failed
+-    }
+-
+-    public override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+-        self.state = .failed
+-    }
+-
+-    public override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+-        self.state = .failed
+-    }
+-}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 47da67a0..cecef360 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -116,24 +116,9 @@ public final class LunagramSettings {
+         static let ghostLocks = "lunagram.ghost.locks"
+         static let markReadAfterAction = "lunagram.ghost.markReadAfterAction"
+         static let settingIcons = "lunagram.settingIcons.enabled"
+-        static let typingLetters = "lunagram.typing.typingLetters"
+-        static let typingSlide = "lunagram.typing.typingSlide"
+-        static let typingScale = "lunagram.typing.typingScale"
+-        static let typingRotate = "lunagram.typing.typingRotate"
+-        static let typingBlur = "lunagram.typing.typingBlur"
+-        static let typingDuration = "lunagram.typing.duration"
+-        static let typingDistance = "lunagram.typing.distance"
+-        static let typingBlurRadius = "lunagram.typing.blurRadius"
+-        static let typingThanos = "lunagram.typing.typingThanos"
+-        static let typingCursor = "lunagram.typing.typingCursor"
+         static let pinnedSearchBar = "lunagram.search.pinnedBar"
+-        static let rippleEnabled = "lunagram.ripple.enabled"
+-        static let rippleSize = "lunagram.ripple.size"
+-        static let rippleStrength = "lunagram.ripple.strength"
+         static let chatStickers = "lunagram.chatStickers.enabled"
+         static let chatStickersDepth = "lunagram.chatStickers.depth"
+-        static let glassSquare = "lunagram.glass.square"
+-        static let glassCorner = "lunagram.glass.corner"
+         static let settingIconsMap = "lunagram.settingIcons.map"
+         static let fakeGifts = "lunagram.gifts.fake"
+         static let ownProfileBackup = "lunagram.copy.backup"
+@@ -743,66 +728,6 @@ public final class LunagramSettings {
+         set { setClamped(newValue, Key.sendFontStyle, 0, LunagramSendFont.allCases.count - 1) }
+     }
+ 
+-    /// Переводит текст исходящего сообщения в выбранный стиль.
+-    // MARK: Буквы прилетают
+-
+-    /// Выключатели появления букв в поле ввода. Значения по умолчанию — как
+-    /// у плагина, откуда оно перенесено.
+-    /// Буквы прилетают.
+-    public static var typingLetters: Bool {
+-        get { return flag(Key.typingLetters, default: false) }
+-        set { setFlag(newValue, Key.typingLetters) }
+-    }
+-    /// Прилетают сверху.
+-    public static var typingSlide: Bool {
+-        get { return flag(Key.typingSlide, default: true) }
+-        set { setFlag(newValue, Key.typingSlide) }
+-    }
+-    /// Подрастают.
+-    public static var typingScale: Bool {
+-        get { return flag(Key.typingScale, default: true) }
+-        set { setFlag(newValue, Key.typingScale) }
+-    }
+-    /// С поворотом.
+-    public static var typingRotate: Bool {
+-        get { return flag(Key.typingRotate, default: false) }
+-        set { setFlag(newValue, Key.typingRotate) }
+-    }
+-    /// Из размытия.
+-    public static var typingBlur: Bool {
+-        get { return flag(Key.typingBlur, default: true) }
+-        set { setFlag(newValue, Key.typingBlur) }
+-    }
+-    /// Распад при удалении.
+-    public static var typingThanos: Bool {
+-        get { return flag(Key.typingThanos, default: false) }
+-        set { setFlag(newValue, Key.typingThanos) }
+-    }
+-
+-    /// След за курсором.
+-    public static var typingCursor: Bool {
+-        get { return flag(Key.typingCursor, default: false) }
+-        set { setFlag(newValue, Key.typingCursor) }
+-    }
+-
+-    /// Сколько длится полёт буквы, миллисекунды.
+-    public static var typingDuration: Int {
+-        get { return clamped(Key.typingDuration, 50, 1_000, 260) }
+-        set { setClamped(newValue, Key.typingDuration, 50, 1_000) }
+-    }
+-
+-    /// Откуда летит: высота над своим местом, точки экрана.
+-    public static var typingDistance: Int {
+-        get { return clamped(Key.typingDistance, 0, 60, 14) }
+-        set { setClamped(newValue, Key.typingDistance, 0, 60) }
+-    }
+-
+-    /// Насколько размыта буква в начале полёта.
+-    public static var typingBlurRadius: Int {
+-        get { return clamped(Key.typingBlurRadius, 1, 20, 6) }
+-        set { setClamped(newValue, Key.typingBlurRadius, 1, 20) }
+-    }
+-
+     // MARK: Эмодзи и стикеры чата
+ 
+     /// Строка «Эмодзи и стикеры чата» в профиле собеседника.
+@@ -817,32 +742,6 @@ public final class LunagramSettings {
+         set { setClamped(newValue, Key.chatStickersDepth, 500, 10_000) }
+     }
+ 
+-    // MARK: Квадратнее стекло
+-
+-    /// «Квадратнее матовые панели» — резать ли скругление у стекла.
+-    public static var glassSquare: Bool {
+-        get { return defaults.bool(forKey: Key.glassSquare) }
+-        set {
+-            defaults.set(newValue, forKey: Key.glassSquare)
+-            changed()
+-        }
+-    }
+-
+-    /// Какую долю телеграмовского скругления оставлять, 0…100 %.
+-    public static var glassCorner: Int {
+-        get { return clamped(Key.glassCorner, 0, 100, 50) }
+-        set { setClamped(newValue, Key.glassCorner, 0, 100) }
+-    }
+-
+-    /// Множитель для скругления стекла. Выключено — единица, и ни одна
+-    /// панель не меняется.
+-    public static var glassCornerFactor: CGFloat {
+-        guard glassSquare else {
+-            return 1.0
+-        }
+-        return CGFloat(glassCorner) / 100.0
+-    }
+-
+     /// Мультипоиск: считать ли «|» разделителем. Сама настройка лежит в
+     /// LunagramSearchSettings — её читает сетевая часть Telegram.
+     public static var multiSearch: Bool {
+@@ -861,27 +760,6 @@ public final class LunagramSettings {
+         set { setFlag(newValue, Key.pinnedSearchBar) }
+     }
+ 
+-    // MARK: - Круг при нажатии
+-
+-    /// Показывать расходящийся круг под пальцем.
+-    public static var rippleEnabled: Bool {
+-        get { return flag(Key.rippleEnabled, default: false) }
+-        set { setFlag(newValue, Key.rippleEnabled) }
+-    }
+-
+-    /// Размер круга, проценты. В точки экрана переводит сам рисовальщик:
+-    /// человеку понятнее «маленький — большой», чем число точек.
+-    public static var rippleSize: Int {
+-        get { return percent(Key.rippleSize, default: 45) }
+-        set { setPercent(newValue, Key.rippleSize) }
+-    }
+-
+-    /// Насколько круг заметен, проценты.
+-    public static var rippleStrength: Int {
+-        get { return percent(Key.rippleStrength, default: 30) }
+-        set { setPercent(newValue, Key.rippleStrength) }
+-    }
+-
+     /// Проценты со своим значением у нетронутой настройки: UserDefaults о
+     /// незаданном ключе говорит «ноль», а ноль здесь — осмысленная величина.
+     private static func percent(_ key: String, default defaultValue: Int) -> Int {
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 307bb4a8..12ddf556 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -454,7 +454,7 @@ private func themeSettingsControllerEntries(
+     // порядком складывания, а не номерами строк: на этом я и споткнулся,
+     // и из-за этого же список сличался по неверным местам и вылетал.
+     entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .conversation, .wording] {
++    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .wording] {
+         entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
+index 51ee810c..79e7c329 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatInputTextNode.swift
+@@ -1079,9 +1079,6 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+     public var onUpdateLayout: (() -> Void)?
+         
+     private let displayInternal: ChatInputTextInternal
+-
+-    /// Lunagram: полёт набранной буквы. Подробности — в LunagramTypingAnimation.
+-    private let lunagramTyping = LunagramTypingAnimation()
+     private let measureInternal: ChatInputTextInternal
+     
+     private var validLayoutSize: CGSize?
+@@ -1245,9 +1242,6 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+ 
+     @objc public func textViewDidChange(_ textView: UITextView) {
+         self.selectionChangedForEditedText = true
+-
+-        // Lunagram: «Буквы прилетают» — набранная буква влетает на своё место.
+-        self.lunagramTyping.textChanged(self)
+                 
+         self.updateTextContainerInset()
+         
+@@ -1262,10 +1256,7 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+         }
+         
+         self.selectionChangedForEditedText = false
+-        
+-        // Lunagram: след за курсором.
+-        self.lunagramTyping.selectionChanged(self)
+-        
++                
+         DispatchQueue.main.async { [weak self] in
+             guard let self else {
+                 return
+@@ -1280,12 +1271,6 @@ public final class ChatInputTextView: ChatInputTextViewImpl, UITextViewDelegate,
+     }
+     
+     @objc public func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+-        // Lunagram: распад буквы при удалении. Снимок делаем здесь, пока
+-        // буква ещё на месте: после удаления рисовать было бы нечего.
+-        if text.isEmpty {
+-            self.lunagramTyping.willDelete(self, range: range)
+-        }
+-
+         guard let customDelegate = self.customDelegate else {
+             return true
+         }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
+deleted file mode 100644
+index 62558272..00000000
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/LunagramTypingAnimation.swift
++++ /dev/null
+@@ -1,292 +0,0 @@
+-import Foundation
+-import UIKit
+-import CoreImage
+-import TextFormat
+-import Lunagram
+-
+-// Lunagram: «Буквы прилетают» — перенос плагина Text Animation.
+-//
+-// Набранная буква не возникает на месте, а влетает на него: сверху, из
+-// размытия, чуть увеличенной и повёрнутой. Пока она летит, настоящая буква
+-// невидима — иначе их было бы две.
+-//
+-// Прячем её не в тексте, а в отрисовке: движок текста просто не рисует
+-// спрятанный кусок. Самого текста это не касается — отправка, разметка,
+-// свои эмодзи, спойлеры и цитаты ничего не замечают.
+-//
+-// На маке для такого есть готовые «временные приметы», на айфоне их нет:
+-// это стоило сборки №101. Поэтому прятать умеет сам движок поля ввода —
+-// у него завёлся спрятанный кусок.
+-//
+-// Свои эмодзи не трогаем: их рисует не движок текста, а отдельные слои
+-// поверх, и спрятать их нечем.
+-//
+-// Тут же ещё два подарка того же плагина: распад буквы при удалении и след
+-// за курсором. Распад — не настоящие частицы, а нарезка снимка буквы на
+-// клетки, которые разлетаются и тают: выглядит так же, а стоит дёшево.
+-// След — отдельная полоска, догоняющая курсор; сам курсор системный, его мы
+-// не трогаем, поэтому выделение и ручки остаются как были.
+-
+-final class LunagramTypingAnimation {
+-    private var lastText: String = ""
+-    private var lastCaret: CGRect?
+-    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+-
+-    func textChanged(_ textView: UITextView) {
+-        let text = textView.text ?? ""
+-        let previous = self.lastText
+-        self.lastText = text
+-
+-        guard LunagramSettings.typingLetters, text.utf16.count > previous.utf16.count else {
+-            return
+-        }
+-
+-        // Ищем вставленный кусок: общее начало и общий хвост отбрасываем.
+-        let old = Array(previous.utf16)
+-        let new = Array(text.utf16)
+-        var prefix = 0
+-        while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] {
+-            prefix += 1
+-        }
+-        var suffix = 0
+-        while suffix < old.count - prefix, suffix < new.count - prefix, old[old.count - 1 - suffix] == new[new.count - 1 - suffix] {
+-            suffix += 1
+-        }
+-        let length = new.count - prefix - suffix
+-        // Вставили сразу много — значит, это вставка из буфера, а не набор.
+-        guard length > 0, length <= 4 else {
+-            return
+-        }
+-        self.animate(textView, NSRange(location: prefix, length: length))
+-    }
+-
+-    private func animate(_ textView: UITextView, _ range: NSRange) {
+-        guard let attributed = textView.attributedText, range.location + range.length <= attributed.length else {
+-            return
+-        }
+-        var hasCustomEmoji = false
+-        attributed.enumerateAttribute(ChatTextInputAttributes.customEmoji, in: range, options: [], using: { value, _, stop in
+-            if value != nil {
+-                hasCustomEmoji = true
+-                stop.pointee = true
+-            }
+-        })
+-        if hasCustomEmoji {
+-            return
+-        }
+-
+-        guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+-              let end = textView.position(from: start, offset: range.length),
+-              let textRange = textView.textRange(from: start, to: end) else {
+-            return
+-        }
+-        var rect = textView.firstRect(for: textRange)
+-        guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width > 0.5, rect.height > 0.5, rect.width < 240.0 else {
+-            return
+-        }
+-        rect = rect.insetBy(dx: -2.0, dy: -2.0)
+-
+-        guard let layoutManager = textView.layoutManager as? ChatInputLegacyLayoutManager else {
+-            return
+-        }
+-        let image = UIGraphicsImageRenderer(bounds: rect).image { context in
+-            context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
+-            textView.layer.render(in: context.cgContext)
+-        }
+-
+-        layoutManager.lunagramHiddenRange = range
+-        layoutManager.invalidateDisplay(forCharacterRange: range)
+-
+-        let sharp = UIImageView(image: image)
+-        sharp.frame = rect
+-        sharp.isUserInteractionEnabled = false
+-        textView.addSubview(sharp)
+-
+-        var blurred: UIImageView?
+-        if LunagramSettings.typingBlur, let blurImage = LunagramTypingAnimation.blurred(image, radius: CGFloat(LunagramSettings.typingBlurRadius)) {
+-            let view = UIImageView(image: blurImage)
+-            view.frame = rect
+-            view.isUserInteractionEnabled = false
+-            textView.addSubview(view)
+-            blurred = view
+-        }
+-
+-        var transform = CGAffineTransform.identity
+-        if LunagramSettings.typingSlide {
+-            transform = transform.translatedBy(x: 0.0, y: -CGFloat(LunagramSettings.typingDistance))
+-        }
+-        if LunagramSettings.typingScale {
+-            transform = transform.scaledBy(x: 0.55, y: 0.55)
+-        }
+-        if LunagramSettings.typingRotate {
+-            transform = transform.rotated(by: -0.22)
+-        }
+-
+-        let views = [blurred, sharp].compactMap { $0 }
+-        for view in views {
+-            view.transform = transform
+-        }
+-        // Размытая видна сразу и тает, чёткая проступает ей на смену. Без
+-        // размытия чёткая просто проявляется на лету.
+-        sharp.alpha = 0.0
+-        blurred?.alpha = 1.0
+-
+-        let duration = max(0.05, Double(LunagramSettings.typingDuration) / 1000.0)
+-        UIView.animate(withDuration: duration, delay: 0.0, options: [.curveEaseOut], animations: {
+-            for view in views {
+-                view.transform = .identity
+-            }
+-            sharp.alpha = 1.0
+-            blurred?.alpha = 0.0
+-        }, completion: { [weak textView] _ in
+-            for view in views {
+-                view.removeFromSuperview()
+-            }
+-            // Снимаем прятки. Кусок мог уже уехать — пока буква летела,
+-            // текст успели поправить, — поэтому обновляем весь текст.
+-            layoutManager.lunagramHiddenRange = nil
+-            guard let textView = textView else {
+-                return
+-            }
+-            let length = textView.textStorage.length
+-            if length > 0 {
+-                layoutManager.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: length))
+-            }
+-        })
+-    }
+-
+-
+-    // MARK: Распад при удалении
+-
+-    /// Снимок буквы, которую вот-вот сотрут. Берём до удаления: после него
+-    /// рисовать уже нечего.
+-    func willDelete(_ textView: UITextView, range: NSRange) {
+-        guard LunagramSettings.typingThanos, range.length > 0, range.length <= 4 else {
+-            return
+-        }
+-        guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
+-              let end = textView.position(from: start, offset: range.length),
+-              let textRange = textView.textRange(from: start, to: end) else {
+-            return
+-        }
+-        var rect = textView.firstRect(for: textRange)
+-        guard rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width > 0.5, rect.height > 0.5, rect.width < 240.0 else {
+-            return
+-        }
+-        rect = rect.insetBy(dx: -1.0, dy: -1.0)
+-        let image = UIGraphicsImageRenderer(bounds: rect).image { context in
+-            context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
+-            textView.layer.render(in: context.cgContext)
+-        }
+-        self.scatter(image, at: rect, in: textView)
+-    }
+-
+-    /// Рассыпаем снимок на клетки и разгоняем их в стороны. Так выглядит
+-    /// распад: настоящих частиц не нужно, хватает нарезки на квадратики.
+-    private func scatter(_ image: UIImage, at rect: CGRect, in textView: UITextView) {
+-        guard let cgImage = image.cgImage else {
+-            return
+-        }
+-        let columns = 6
+-        let rows = 8
+-        let scale = image.scale
+-        let tileWidth = CGFloat(cgImage.width) / CGFloat(columns)
+-        let tileHeight = CGFloat(cgImage.height) / CGFloat(rows)
+-        let pieceWidth = rect.width / CGFloat(columns)
+-        let pieceHeight = rect.height / CGFloat(rows)
+-        let duration = max(0.15, Double(LunagramSettings.typingDuration) / 1000.0 * 2.0)
+-
+-        for column in 0 ..< columns {
+-            for row in 0 ..< rows {
+-                let crop = CGRect(
+-                    x: CGFloat(column) * tileWidth,
+-                    y: CGFloat(row) * tileHeight,
+-                    width: tileWidth,
+-                    height: tileHeight
+-                )
+-                guard let piece = cgImage.cropping(to: crop) else {
+-                    continue
+-                }
+-                let view = UIImageView(image: UIImage(cgImage: piece, scale: scale, orientation: .up))
+-                view.frame = CGRect(
+-                    x: rect.minX + CGFloat(column) * pieceWidth,
+-                    y: rect.minY + CGFloat(row) * pieceHeight,
+-                    width: pieceWidth,
+-                    height: pieceHeight
+-                )
+-                view.isUserInteractionEnabled = false
+-                textView.addSubview(view)
+-
+-                // Чем правее клетка, тем дальше её уносит: как будто сдувает.
+-                let shift = CGFloat(column + 1) / CGFloat(columns)
+-                let toX = CGFloat.random(in: 6.0 ... 26.0) * shift
+-                let toY = CGFloat.random(in: -14.0 ... 6.0)
+-                let delay = Double(column) / Double(columns) * duration * 0.4
+-                UIView.animate(withDuration: duration, delay: delay, options: [.curveEaseOut], animations: {
+-                    view.transform = CGAffineTransform(translationX: toX, y: toY).scaledBy(x: 0.3, y: 0.3)
+-                    view.alpha = 0.0
+-                }, completion: { _ in
+-                    view.removeFromSuperview()
+-                })
+-            }
+-        }
+-    }
+-
+-    // MARK: Плавный курсор
+-
+-    /// След за курсором: при перескоке между местами тянется полоска,
+-    /// которая догоняет и тает. Сам курсор системный — его мы не трогаем,
+-    /// поэтому выделение и ручки остаются как были.
+-    func selectionChanged(_ textView: UITextView) {
+-        guard LunagramSettings.typingCursor, let selection = textView.selectedTextRange, selection.isEmpty else {
+-            self.lastCaret = nil
+-            return
+-        }
+-        let caret = textView.caretRect(for: selection.start)
+-        guard caret.origin.x.isFinite, caret.origin.y.isFinite, caret.height > 0.5 else {
+-            self.lastCaret = nil
+-            return
+-        }
+-        defer { self.lastCaret = caret }
+-        guard let previous = self.lastCaret, previous != caret else {
+-            return
+-        }
+-        // Крошечные шажки не размазываем: при обычном наборе это мельтешило бы.
+-        let distance = hypot(caret.midX - previous.midX, caret.midY - previous.midY)
+-        guard distance > 2.0, distance < 400.0 else {
+-            return
+-        }
+-
+-        let trail = UIView(frame: previous)
+-        trail.backgroundColor = textView.tintColor.withAlphaComponent(0.55)
+-        trail.layer.cornerRadius = min(2.0, previous.width / 2.0)
+-        trail.isUserInteractionEnabled = false
+-        textView.addSubview(trail)
+-
+-        UIView.animate(withDuration: 0.16, delay: 0.0, options: [.curveEaseOut], animations: {
+-            trail.frame = caret
+-            trail.alpha = 0.0
+-        }, completion: { _ in
+-            trail.removeFromSuperview()
+-        })
+-    }
+-
+-    private static func blurred(_ image: UIImage, radius: CGFloat) -> UIImage? {
+-        guard radius > 0.0, let cgImage = image.cgImage else {
+-            return nil
+-        }
+-        let input = CIImage(cgImage: cgImage)
+-        guard let filter = CIFilter(name: "CIGaussianBlur") else {
+-            return nil
+-        }
+-        filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
+-        filter.setValue(radius, forKey: kCIInputRadiusKey)
+-        guard let output = filter.outputImage?.cropped(to: input.extent) else {
+-            return nil
+-        }
+-        guard let result = LunagramTypingAnimation.ciContext.createCGImage(output, from: input.extent) else {
+-            return nil
+-        }
+-        return UIImage(cgImage: result, scale: image.scale, orientation: .up)
+-    }
+-}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index d0e2afb4..95f711ac 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -2619,9 +2619,6 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         
+         let menuButtonFrame = CGRect(x: leftInset + 8.0, y: menuButtonOriginY, width: menuButtonExpanded ? menuButtonWidth : menuCollapsedButtonWidth, height: menuButtonHeight)
+         transition.updateFrameAsPositionAndBounds(node: self.menuButton, frame: menuButtonFrame)
+-        // Lunagram: сдвиг и поворот кнопки. Пока ничего не сдвинуто,
+-        // превращение тождественное — полоса рисуется ровно как обычно.
+-        LunagramInputIcons.apply(.menu, to: self.menuButton.layer)
+         transition.updateFrame(view: self.menuButtonBackgroundView, frame: CGRect(origin: CGPoint(), size: menuButtonFrame.size))
+         self.menuButtonBackgroundView.update(size: menuButtonFrame.size, cornerRadius: menuButtonFrame.height * 0.5, isDark: interfaceState.theme.overallDarkAppearance, tintColor: defaultGlassTintWithInnerColor, transition: ComponentTransition(transition))
+         transition.updateFrame(node: self.menuButtonClippingNode, frame: CGRect(origin: CGPoint(x: 19.0, y: 0.0), size: CGSize(width: menuButtonWidth - 19.0, height: menuButtonFrame.height)))
+@@ -3440,7 +3437,6 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             mediaActionButtonsFrame.origin.x = width + 8.0
+         }
+         transition.updateFrame(node: self.mediaActionButtons, frame: mediaActionButtonsFrame)
+-        LunagramInputIcons.apply(.send, to: self.mediaActionButtons.layer)
+         if let (rect, containerSize) = self.absoluteRect {
+             self.mediaActionButtons.updateAbsoluteRect(CGRect(x: rect.origin.x + mediaActionButtonsFrame.origin.x, y: rect.origin.y + mediaActionButtonsFrame.origin.y, width: mediaActionButtonsFrame.width, height: mediaActionButtonsFrame.height), within: containerSize, transition: transition)
+         }
+@@ -3573,8 +3569,6 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         // + tap target + disabled overlay + icon are pinned to the BOTTOM 40x40 slot of the capsule.
+         transition.updateFrame(layer: self.attachmentButton.layer, frame: CGRect(origin: CGPoint(x: 0.0, y: attachmentButtonFrame.height - 40.0), size: CGSize(width: 40.0, height: 40.0)))
+         transition.updateFrame(node: self.attachmentButtonDisabledNode, frame: CGRect(origin: CGPoint(x: attachmentButtonFrame.minX, y: attachmentButtonFrame.maxY - 40.0), size: CGSize(width: 40.0, height: 40.0)))
+-        LunagramInputIcons.apply(.attach, to: self.attachmentButtonBackground.layer)
+-        LunagramInputIcons.apply(.attach, to: self.attachmentButtonDisabledNode.layer)
+ 
+         if let _ = self.attachmentButtonIcon.image {
+             transition.updateFrame(view: self.attachmentButtonIcon, frame: CGRect(origin: CGPoint(x: 0.0, y: attachmentButtonFrame.height - 40.0), size: CGSize(width: 40, height: 40)))
+diff --git a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+index 13941db7..2d9601ee 100644
+--- a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
++++ b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+@@ -596,17 +596,12 @@ public class GlassBackgroundView: UIView {
+     }
+     
+     public func update(size: CGSize, cornerRadius: CGFloat, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
+-        // Lunagram: «Квадратнее матовые панели» — скругление у стекла режется
+-        // до выбранной доли. Выключено — множитель единица, и всё как было.
+-        let shape: Shape = .roundedRect(cornerRadius: cornerRadius * LunagramSettings.glassCornerFactor)
++        let shape: Shape = .roundedRect(cornerRadius: cornerRadius)
+         self.update(size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible, transition: transition)
+     }
+ 
+     public func update(size: CGSize, cornerRadii: CornerRadii, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
+-        // То же самое для панелей, у которых углы скруглены по-разному.
+-        let factor = LunagramSettings.glassCornerFactor
+-        let radii = factor == 1.0 ? cornerRadii : CornerRadii(topLeft: cornerRadii.topLeft * factor, topRight: cornerRadii.topRight * factor, bottomLeft: cornerRadii.bottomLeft * factor, bottomRight: cornerRadii.bottomRight * factor)
+-        let shape: Shape = .customRoundedRect(cornerRadii: radii)
++        let shape: Shape = .customRoundedRect(cornerRadii: cornerRadii)
+         self.update(size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible, transition: transition)
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift
+deleted file mode 100644
+index 19cb5ac7..00000000
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramInputIconsController.swift
++++ /dev/null
+@@ -1,332 +0,0 @@
+-import AccountContext
+-import AsyncDisplayKit
+-import Display
+-import Foundation
+-import Lunagram
+-import TelegramPresentationData
+-import UIKit
+-
+-// Lunagram: где какой кнопке стоять на полосе ввода.
+-//
+-// Двигать кнопки прямо в переписке я не стал. Полоса ввода — самое частое
+-// место в приложении, и режим правки поверх неё дрался бы за каждое
+-// касание с набором текста, прокруткой и долгим нажатием на отправку.
+-// Поэтому тут свой образец полосы: таскаешь по нему, а настоящая полоса
+-// потом просто берёт готовые числа.
+-
+-/// Образец полосы ввода, по которому таскают кнопки.
+-private final class LunagramInputIconsPreview: UIView {
+-    private let fieldView = UIView()
+-    private var chips: [LunagramInputIcons.Slot: UIView] = [:]
+-    private var dragging: LunagramInputIcons.Slot?
+-    private var dragStart = CGPoint()
+-    private var dragOrigin = LunagramInputIcons.Placement()
+-
+-    var selected: LunagramInputIcons.Slot = .attach {
+-        didSet {
+-            self.updateChips()
+-        }
+-    }
+-    var selectionChanged: (() -> Void)?
+-    var placementChanged: (() -> Void)?
+-
+-    private var theme: PresentationTheme
+-
+-    init(theme: PresentationTheme) {
+-        self.theme = theme
+-        super.init(frame: CGRect())
+-
+-        self.fieldView.layer.cornerRadius = 18.0
+-        self.addSubview(self.fieldView)
+-
+-        for slot in LunagramInputIcons.Slot.allCases {
+-            let chip = UIView()
+-            chip.layer.cornerRadius = 20.0
+-            chip.isUserInteractionEnabled = false
+-
+-            let label = UILabel()
+-            label.textAlignment = .center
+-            label.font = UIFont.systemFont(ofSize: 18.0)
+-            label.text = LunagramInputIconsPreview.glyph(for: slot)
+-            label.tag = 1
+-            chip.addSubview(label)
+-
+-            self.addSubview(chip)
+-            self.chips[slot] = chip
+-        }
+-
+-        self.applyTheme()
+-
+-        let pan = UIPanGestureRecognizer(target: self, action: #selector(self.onPan))
+-        self.addGestureRecognizer(pan)
+-        let tap = UITapGestureRecognizer(target: self, action: #selector(self.onTap))
+-        self.addGestureRecognizer(tap)
+-    }
+-
+-    required init?(coder: NSCoder) {
+-        preconditionFailure()
+-    }
+-
+-    /// Значки рисуем буквами: тянуть сюда настоящие картинки Telegram ради
+-    /// образца не стоит, а узнаются они и так.
+-    private static func glyph(for slot: LunagramInputIcons.Slot) -> String {
+-        switch slot {
+-        case .attach:
+-            return "📎"
+-        case .menu:
+-            return "☰"
+-        case .send:
+-            return "🎤"
+-        }
+-    }
+-
+-    func updateTheme(_ theme: PresentationTheme) {
+-        self.theme = theme
+-        self.applyTheme()
+-    }
+-
+-    private func applyTheme() {
+-        self.backgroundColor = self.theme.list.itemBlocksBackgroundColor
+-        self.fieldView.backgroundColor = self.theme.chat.inputPanel.inputBackgroundColor
+-        self.updateChips()
+-    }
+-
+-    private func updateChips() {
+-        for (slot, chip) in self.chips {
+-            let isSelected = (slot == self.selected)
+-            chip.backgroundColor = isSelected
+-                ? self.theme.list.itemAccentColor.withAlphaComponent(0.22)
+-                : self.theme.chat.inputPanel.inputBackgroundColor
+-            chip.layer.borderWidth = isSelected ? 2.0 : 0.0
+-            chip.layer.borderColor = self.theme.list.itemAccentColor.cgColor
+-            if let label = chip.viewWithTag(1) as? UILabel {
+-                label.textColor = self.theme.chat.inputPanel.inputTextColor
+-            }
+-        }
+-        self.setNeedsLayout()
+-    }
+-
+-    /// Куда кнопка встала бы без наших сдвигов.
+-    private func basePosition(for slot: LunagramInputIcons.Slot, in size: CGSize) -> CGPoint {
+-        let centerY = size.height / 2.0
+-        switch slot {
+-        case .attach:
+-            return CGPoint(x: 40.0, y: centerY)
+-        case .menu:
+-            return CGPoint(x: 40.0, y: centerY - 46.0)
+-        case .send:
+-            return CGPoint(x: size.width - 40.0, y: centerY)
+-        }
+-    }
+-
+-    override func layoutSubviews() {
+-        super.layoutSubviews()
+-        let size = self.bounds.size
+-        self.fieldView.frame = CGRect(x: 68.0, y: size.height / 2.0 - 18.0, width: max(40.0, size.width - 68.0 - 68.0), height: 36.0)
+-
+-        for slot in LunagramInputIcons.Slot.allCases {
+-            guard let chip = self.chips[slot] else {
+-                continue
+-            }
+-            let base = self.basePosition(for: slot, in: size)
+-            let placement = LunagramInputIcons.placement(slot)
+-            chip.bounds = CGRect(origin: CGPoint(), size: CGSize(width: 40.0, height: 40.0))
+-            chip.center = CGPoint(x: base.x + CGFloat(placement.offsetX), y: base.y + CGFloat(placement.offsetY))
+-            chip.transform = placement.angle == 0
+-                ? .identity
+-                : CGAffineTransform(rotationAngle: CGFloat(placement.angle) * .pi / 180.0)
+-            if let label = chip.viewWithTag(1) {
+-                label.frame = chip.bounds
+-            }
+-        }
+-    }
+-
+-    private func slot(at point: CGPoint) -> LunagramInputIcons.Slot? {
+-        // Сверху вниз по списку: если кнопки наехали друг на друга, берём
+-        // ту, что нарисована последней.
+-        for slot in LunagramInputIcons.Slot.allCases.reversed() {
+-            if let chip = self.chips[slot], chip.frame.insetBy(dx: -6.0, dy: -6.0).contains(point) {
+-                return slot
+-            }
+-        }
+-        return nil
+-    }
+-
+-    @objc private func onTap(_ recognizer: UITapGestureRecognizer) {
+-        guard let slot = self.slot(at: recognizer.location(in: self)) else {
+-            return
+-        }
+-        self.selected = slot
+-        self.selectionChanged?()
+-    }
+-
+-    @objc private func onPan(_ recognizer: UIPanGestureRecognizer) {
+-        let point = recognizer.location(in: self)
+-        switch recognizer.state {
+-        case .began:
+-            guard let slot = self.slot(at: point) else {
+-                return
+-            }
+-            self.dragging = slot
+-            self.dragStart = point
+-            self.dragOrigin = LunagramInputIcons.placement(slot)
+-            self.selected = slot
+-            self.selectionChanged?()
+-        case .changed:
+-            guard let slot = self.dragging else {
+-                return
+-            }
+-            let delta = CGPoint(x: point.x - self.dragStart.x, y: point.y - self.dragStart.y)
+-            var placement = self.dragOrigin
+-            placement.offsetX = self.dragOrigin.offsetX + Int(delta.x)
+-            placement.offsetY = self.dragOrigin.offsetY + Int(delta.y)
+-            LunagramInputIcons.setPlacement(placement, for: slot)
+-            self.setNeedsLayout()
+-            self.placementChanged?()
+-        default:
+-            self.dragging = nil
+-        }
+-    }
+-}
+-
+-private final class LunagramInputIconsNode: ASDisplayNode {
+-    private var presentationData: PresentationData
+-    private let scrollView = UIScrollView()
+-    private let preview: LunagramInputIconsPreview
+-    private let hintLabel = UILabel()
+-    private let angleLabel = UILabel()
+-    private let angleSlider = UISlider()
+-    private let resetButton = UIButton(type: .system)
+-
+-    init(presentationData: PresentationData) {
+-        self.presentationData = presentationData
+-        self.preview = LunagramInputIconsPreview(theme: presentationData.theme)
+-
+-        super.init()
+-
+-        self.setViewBlock({
+-            return UIView()
+-        })
+-    }
+-
+-    override func didLoad() {
+-        super.didLoad()
+-        let theme = self.presentationData.theme
+-        self.view.backgroundColor = theme.list.blocksBackgroundColor
+-
+-        self.view.addSubview(self.scrollView)
+-        self.scrollView.alwaysBounceVertical = true
+-        self.scrollView.addSubview(self.preview)
+-
+-        self.hintLabel.numberOfLines = 0
+-        self.hintLabel.font = UIFont.systemFont(ofSize: 14.0)
+-        self.hintLabel.textColor = theme.list.freeTextColor
+-        self.hintLabel.text = "Перетащи кнопку пальцем по образцу. Нажми на неё, чтобы выбрать, и крути поворот ползунком.\n\nНастоящая полоса ввода возьмёт эти же числа. Пока ничего не сдвинуто, она рисуется ровно как обычно."
+-        self.scrollView.addSubview(self.hintLabel)
+-
+-        self.angleLabel.font = UIFont.systemFont(ofSize: 15.0)
+-        self.angleLabel.textColor = theme.list.itemPrimaryTextColor
+-        self.scrollView.addSubview(self.angleLabel)
+-
+-        self.angleSlider.minimumValue = Float(-LunagramInputIcons.angleRange)
+-        self.angleSlider.maximumValue = Float(LunagramInputIcons.angleRange)
+-        self.angleSlider.addTarget(self, action: #selector(self.angleChanged), for: .valueChanged)
+-        self.scrollView.addSubview(self.angleSlider)
+-
+-        self.resetButton.setTitle("Вернуть всё на место", for: .normal)
+-        self.resetButton.setTitleColor(theme.list.itemDestructiveColor, for: .normal)
+-        self.resetButton.addTarget(self, action: #selector(self.resetPressed), for: .touchUpInside)
+-        self.scrollView.addSubview(self.resetButton)
+-
+-        self.preview.selectionChanged = { [weak self] in
+-            self?.syncControls()
+-        }
+-        self.preview.placementChanged = { [weak self] in
+-            self?.syncControls()
+-        }
+-        self.syncControls()
+-    }
+-
+-    private func syncControls() {
+-        let slot = self.preview.selected
+-        let placement = LunagramInputIcons.placement(slot)
+-        self.angleLabel.text = "\(slot.title): поворот \(placement.angle)°"
+-        self.angleSlider.value = Float(placement.angle)
+-    }
+-
+-    @objc private func angleChanged() {
+-        let slot = self.preview.selected
+-        var placement = LunagramInputIcons.placement(slot)
+-        placement.angle = Int(self.angleSlider.value.rounded())
+-        LunagramInputIcons.setPlacement(placement, for: slot)
+-        self.preview.setNeedsLayout()
+-        self.syncControls()
+-    }
+-
+-    @objc private func resetPressed() {
+-        LunagramInputIcons.reset()
+-        self.preview.setNeedsLayout()
+-        self.syncControls()
+-    }
+-
+-    func updateLayout(layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
+-        let sideInset = 16.0 + layout.safeInsets.left
+-        let width = layout.size.width - sideInset * 2.0
+-
+-        self.scrollView.frame = CGRect(origin: CGPoint(), size: layout.size)
+-        self.scrollView.contentInset = UIEdgeInsets(top: navigationHeight, left: 0.0, bottom: layout.intrinsicInsets.bottom, right: 0.0)
+-
+-        var y: CGFloat = 12.0
+-        self.preview.frame = CGRect(x: sideInset, y: y, width: width, height: 160.0)
+-        self.preview.layer.cornerRadius = 12.0
+-        self.preview.clipsToBounds = true
+-        y += 160.0 + 18.0
+-
+-        self.angleLabel.frame = CGRect(x: sideInset, y: y, width: width, height: 20.0)
+-        y += 24.0
+-        self.angleSlider.frame = CGRect(x: sideInset, y: y, width: width, height: 30.0)
+-        y += 40.0
+-
+-        self.resetButton.frame = CGRect(x: sideInset, y: y, width: width, height: 44.0)
+-        y += 52.0
+-
+-        let hintSize = self.hintLabel.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+-        self.hintLabel.frame = CGRect(x: sideInset, y: y, width: width, height: hintSize.height)
+-        y += hintSize.height + 24.0
+-
+-        self.scrollView.contentSize = CGSize(width: layout.size.width, height: y)
+-    }
+-}
+-
+-private final class LunagramInputIconsControllerImpl: ViewController {
+-    private var presentationData: PresentationData
+-
+-    private var iconsNode: LunagramInputIconsNode {
+-        return self.displayNode as! LunagramInputIconsNode
+-    }
+-
+-    init(context: AccountContext) {
+-        self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
+-        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
+-        self.title = "Раскладка кнопок"
+-    }
+-
+-    required init(coder: NSCoder) {
+-        preconditionFailure()
+-    }
+-
+-    override func loadDisplayNode() {
+-        self.displayNode = LunagramInputIconsNode(presentationData: self.presentationData)
+-        self.displayNodeDidLoad()
+-    }
+-
+-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+-        super.containerLayoutUpdated(layout, transition: transition)
+-        self.iconsNode.updateLayout(layout: layout, navigationHeight: self.navigationLayout(layout: layout).navigationFrame.maxY, transition: transition)
+-    }
+-}
+-
+-/// Открыть экран раскладки кнопок полосы ввода.
+-func lunagramInputIconsController(context: AccountContext) -> ViewController {
+-    return LunagramInputIconsControllerImpl(context: context)
+-}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index c118f13f..0c164fac 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -56,18 +56,8 @@ private enum LunagramToggle: Int32 {
+     case composeAuto
+     case settingIcons
+     case multiSearch
+-    case glassSquare
+     case chatStickers
+-    case typingLetters
+-    case typingSlide
+-    case typingScale
+-    case typingRotate
+-    case typingBlur
+-    case typingThanos
+-    case typingCursor
+-    case ripple
+     case pinnedSearchBar
+-    case inputIcons
+     case mentionAvatars
+     case mentionAvatarsAfter
+     case composeHidden
+@@ -149,30 +139,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.settingIcons
+         case .multiSearch:
+             return LunagramSettings.multiSearch
+-        case .glassSquare:
+-            return LunagramSettings.glassSquare
+         case .chatStickers:
+             return LunagramSettings.chatStickers
+-        case .typingLetters:
+-            return LunagramSettings.typingLetters
+-        case .typingSlide:
+-            return LunagramSettings.typingSlide
+-        case .typingScale:
+-            return LunagramSettings.typingScale
+-        case .typingRotate:
+-            return LunagramSettings.typingRotate
+-        case .typingBlur:
+-            return LunagramSettings.typingBlur
+-        case .typingThanos:
+-            return LunagramSettings.typingThanos
+-        case .typingCursor:
+-            return LunagramSettings.typingCursor
+-        case .ripple:
+-            return LunagramSettings.rippleEnabled
+         case .pinnedSearchBar:
+             return LunagramSettings.pinnedSearchBar
+-        case .inputIcons:
+-            return LunagramInputIcons.enabled
+         case .mentionAvatars:
+             return LunagramMentionAvatars.enabled
+         case .mentionAvatarsAfter:
+@@ -262,30 +232,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.settingIcons = value
+         case .multiSearch:
+             LunagramSettings.multiSearch = value
+-        case .glassSquare:
+-            LunagramSettings.glassSquare = value
+         case .chatStickers:
+             LunagramSettings.chatStickers = value
+-        case .typingLetters:
+-            LunagramSettings.typingLetters = value
+-        case .typingSlide:
+-            LunagramSettings.typingSlide = value
+-        case .typingScale:
+-            LunagramSettings.typingScale = value
+-        case .typingRotate:
+-            LunagramSettings.typingRotate = value
+-        case .typingBlur:
+-            LunagramSettings.typingBlur = value
+-        case .typingThanos:
+-            LunagramSettings.typingThanos = value
+-        case .typingCursor:
+-            LunagramSettings.typingCursor = value
+-        case .ripple:
+-            LunagramSettings.rippleEnabled = value
+         case .pinnedSearchBar:
+             LunagramSettings.pinnedSearchBar = value
+-        case .inputIcons:
+-            LunagramInputIcons.enabled = value
+         case .mentionAvatars:
+             LunagramMentionAvatars.enabled = value
+         case .mentionAvatarsAfter:
+@@ -375,30 +325,10 @@ private enum LunagramToggle: Int32 {
+             return "Свои значки в настройках"
+         case .multiSearch:
+             return "Поиск сразу по нескольким словам"
+-        case .glassSquare:
+-            return "Квадратнее матовые панели"
+         case .chatStickers:
+             return "Эмодзи и стикеры чата"
+-        case .typingLetters:
+-            return "Буквы прилетают"
+-        case .typingSlide:
+-            return "Прилетают сверху"
+-        case .typingScale:
+-            return "Подрастают"
+-        case .typingRotate:
+-            return "С поворотом"
+-        case .typingBlur:
+-            return "Из размытия"
+-        case .typingThanos:
+-            return "Распад при удалении"
+-        case .typingCursor:
+-            return "След за курсором"
+-        case .ripple:
+-            return "Круг при нажатии"
+         case .pinnedSearchBar:
+             return "Строка поиска всегда вверху"
+-        case .inputIcons:
+-            return "Двигать кнопки полосы ввода"
+         case .mentionAvatars:
+             return "Аватарка у @ника"
+         case .mentionAvatarsAfter:
+@@ -464,7 +394,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .glassSquare, .chatStickers, .typingLetters, .typingSlide, .typingScale, .typingRotate, .typingBlur, .typingThanos, .typingCursor, .ripple, .pinnedSearchBar, .inputIcons, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -599,30 +529,10 @@ extension LunagramToggle {
+             return "swatchpalette,paintpalette"
+         case .multiSearch:
+             return "line.3.horizontal.decrease.circle"
+-        case .glassSquare:
+-            return "square.on.square"
+         case .chatStickers:
+             return "face.smiling"
+-        case .typingLetters:
+-            return "character.cursor.ibeam"
+-        case .typingSlide:
+-            return "arrow.down.to.line"
+-        case .typingScale:
+-            return "arrow.up.left.and.arrow.down.right"
+-        case .typingRotate:
+-            return "rotate.right"
+-        case .typingBlur:
+-            return "drop"
+-        case .typingThanos:
+-            return "wind"
+-        case .typingCursor:
+-            return "cursorarrow.motionlines"
+-        case .ripple:
+-            return "circle.circle"
+         case .pinnedSearchBar:
+             return "magnifyingglass"
+-        case .inputIcons:
+-            return "arrow.up.and.down.and.arrow.left.and.right"
+         case .mentionAvatars:
+             return "person.crop.circle"
+         case .mentionAvatarsAfter:
+@@ -1385,13 +1295,7 @@ private struct LunagramMediaState: Equatable {
+     var wordingPack: Int = 0
+     var deletedIconColor: UInt32 = 0xFF3B30
+     var composeDensity: Int = 75
+-    var glassCorner: Int = 50
+     var chatStickersDepth: Int = 2_000
+-    var typingDuration: Int = 260
+-    var typingDistance: Int = 14
+-    var typingBlurRadius: Int = 6
+-    var rippleSize: Int = 45
+-    var rippleStrength: Int = 30
+     var mentionAvatarSize: Int = 50
+     var composeAction: Int = 0
+     var composePeer: Int64 = 0
+@@ -1415,13 +1319,7 @@ private struct LunagramMediaState: Equatable {
+         state.wordingPack = LunagramWording.pack
+         state.deletedIconColor = LunagramSettings.deletedIconColor
+         state.composeDensity = LunagramSettings.composeDensity
+-        state.glassCorner = LunagramSettings.glassCorner
+         state.chatStickersDepth = LunagramSettings.chatStickersDepth
+-        state.typingDuration = LunagramSettings.typingDuration
+-        state.typingDistance = LunagramSettings.typingDistance
+-        state.typingBlurRadius = LunagramSettings.typingBlurRadius
+-        state.rippleSize = LunagramSettings.rippleSize
+-        state.rippleStrength = LunagramSettings.rippleStrength
+         state.profileTextColor = LunagramSettings.profileButtonsColor
+         state.profileGlassColor = LunagramSettings.profileGlassColor
+         state.profileGlassStrength = LunagramSettings.profileGlassStrength
+@@ -2032,22 +1930,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBackgroundDim = value
+         case 41:
+             LunagramSettings.profileBackgroundBlur = value
+-        case 97:
+-            LunagramSettings.typingDuration = value
+-        case 98:
+-            LunagramSettings.typingDistance = value
+-        case 99:
+-            LunagramSettings.typingBlurRadius = value
+         case 96:
+             LunagramSettings.chatStickersDepth = value
+         case 120:
+             LunagramSettings.profileGlassStrength = value
+-        case 95:
+-            LunagramSettings.glassCorner = value
+-        case 93:
+-            LunagramSettings.rippleSize = value
+-        case 94:
+-            LunagramSettings.rippleStrength = value
+         case 92:
+             LunagramMentionAvatars.size = value
+         case 50:
+@@ -2144,8 +2030,6 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramSettings.sendFontStyle = index
+                 refreshMedia()
+             }))
+-        case .inputIcons:
+-            shared.push?(lunagramInputIconsController(context: context))
+         case .composeAction:
+             shared.push?(lunagramChoiceScreen(context: context, title: "Что делает карандаш", options: LunagramComposeButton.Action.allCases.map { $0.title }, selected: LunagramComposeButton.action.rawValue, info: "Карандаш справа вверху списка чатов. «Как обычно» — выбор, кому написать, как в исходном Telegram.\n\nДля «Чей-то профиль» ниже выбирается, чей именно.", select: { index in
+                 LunagramComposeButton.action = LunagramComposeButton.Action(rawValue: index) ?? .compose
+@@ -2446,7 +2330,6 @@ private enum LunagramChoice: Int32 {
+     case composeReset = 51
+     case wordingEditor = 60
+     case deletedIconColor = 70
+-    case inputIcons = 80
+     case composeAction = 81
+     case composePeer = 82
+     case scamRefresh = 83
+@@ -2799,23 +2682,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
+     rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
+     rows.info("В профиле собеседника или канала появится строка «Эмодзи и стикеры чата»: она соберёт наборы, из которых здесь что-то попадалось, и покажет, сколько раз. Нажал на набор — открылось его окно с «Добавить».\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем. Ползунок задаёт, сколько сообщений просматривать: больше — полнее, но дольше.")
+-    rows.row(.toggle(.glassSquare, value(.glassSquare), "Квадратнее матовые панели", "square.on.square"))
+-    rows.row(.slider(95, "Скругление панелей", media.glassCorner, 0, 100, 5))
+-    rows.info("Матовые панели — полоса ввода, меню, всплывающие окошки — скругляются так, как решил Telegram. Ползунок оставляет от этого скругления свою долю: 100 % — как было, 0 % — прямые углы.\n\nОткликается на лету, но панель перерисовывается, когда её показывают заново.")
+-
+-    rows.header("Буквы прилетают")
+-    rows.row(.toggle(.typingLetters, value(.typingLetters), "Буквы прилетают", "character.cursor.ibeam"))
+-    rows.row(.toggle(.typingSlide, value(.typingSlide), "Прилетают сверху", "arrow.down.to.line"))
+-    rows.row(.toggle(.typingScale, value(.typingScale), "Подрастают", "arrow.up.left.and.arrow.down.right"))
+-    rows.row(.toggle(.typingRotate, value(.typingRotate), "С поворотом", "rotate.right"))
+-    rows.row(.toggle(.typingBlur, value(.typingBlur), "Из размытия", "drop"))
+-    rows.row(.toggle(.typingThanos, value(.typingThanos), "Распад при удалении", "wind"))
+-    rows.row(.toggle(.typingCursor, value(.typingCursor), "След за курсором", "cursorarrow.motionlines"))
+-    rows.row(.slider(97, "Сколько длится полёт", media.typingDuration, 50, 1000, 10))
+-    rows.row(.slider(98, "Высота, откуда летит", media.typingDistance, 0, 60, 2))
+-    rows.row(.slider(99, "Сила размытия", media.typingBlurRadius, 1, 20, 1))
+-    rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной. Настоящая буква на это время прячется, иначе их было бы две.\n\nПрячется только в отрисовке: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.\n\nРаспад: стёртая буква рассыпается и разлетается. След за курсором: при перескоке за ним тянется полоска, которая догоняет и тает — сам курсор при этом системный, выделение и ручки не меняются.")
+-
+ 
+     rows.row(.toggle(.scamRegistry, value(.scamRegistry), "Метка из реестра GiD", "exclamationmark.bubble"))
+     rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
+@@ -2837,18 +2703,9 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
+     rows.info("Рядом с @упоминанием в сообщении появится маленькая аватарка. Размер считается от высоты букв, чтобы в мелком тексте она не разрывала строку.\n\nЕсли в упоминании есть номер человека — а он есть, когда тебя тегнули по имени, — аватарка будет сразу. Если в сообщении просто написано «@ник», номера в нём нет: тогда ищем среди тех, кто уже известен телефону, и ничего не спрашиваем у сервера. У совсем незнакомого ника аватарки не будет.")
+ 
+-    rows.row(.toggle(.inputIcons, value(.inputIcons), "Двигать кнопки полосы ввода", "arrow.up.and.down.and.arrow.left.and.right"))
+-    rows.row(.action(LunagramChoice.inputIcons.rawValue, "Раскладка кнопок", "slider.horizontal.3"))
+-    rows.info("Скрепку, кнопку меню и микрофон можно сдвинуть и повернуть. Раскладка задаётся на своём экране по образцу полосы — таскаешь пальцем, а настоящая полоса берёт готовые числа.\n\nВ самой переписке ничего таскать не надо: режим правки поверх полосы дрался бы за каждое касание с набором текста. Пока ничего не сдвинуто, полоса рисуется ровно как обычно.")
+-
+     rows.row(.toggle(.pinnedSearchBar, value(.pinnedSearchBar), "Строка поиска всегда вверху", "magnifyingglass"))
+     rows.info("Обычно при прокрутке списка строка поиска уезжает вверх и остаётся только значок. С этой галочкой она никуда не девается.\n\nЛенту историй это не трогает — она сворачивается сама, так Telegram устроен изначально.")
+ 
+-    rows.row(.toggle(.ripple, value(.ripple), "Круг при нажатии", "circle.circle"))
+-    rows.row(.slider(93, "Размер круга", media.rippleSize, 0, 100, 5))
+-    rows.row(.slider(94, "Насколько заметен", media.rippleStrength, 0, 100, 5))
+-    rows.info("При нажатии по экрану из-под пальца расходится круг и тает — как в Android.\n\nНажатия он себе не забирает: смотрит, где коснулись, и тут же уходит с дороги. Кнопки, прокрутка и долгие нажатия работают как работали. Рисуется поверх всего отдельным слоем, цвет подбирается сам — белый на тёмной теме, чёрный на светлой.")
+-
+     rows.header("Другое")
+     rows.row(.toggle(.disableAds, value(.disableAds), "Отключить рекламу", "nosign"))
+     rows.info("Скрывает спонсорские сообщения в каналах.")
+@@ -2984,42 +2841,6 @@ private func lunagramPlaceEntries(
+         rows.info("В профиле собеседника или канала появится строка со списком наборов, которые в этой переписке встречались, и сколько раз. Нажатие открывает набор.\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем.")
+         rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
+ 
+-    case .conversation:
+-        rows.header("Буквы прилетают")
+-        rows.row(.toggle(.typingLetters, value(.typingLetters), "Буквы прилетают", "character.cursor.ibeam"))
+-        rows.info("Набранная буква не возникает на месте, а влетает на него — сверху, из размытия, чуть увеличенной.\n\nПрячется только отрисовка: в самом тексте ничего не меняется, отправка и разметка этого не замечают. Свои эмодзи не летают — их рисует не движок текста, а отдельные слои поверх.")
+-        rows.row(.toggle(.typingSlide, value(.typingSlide), "Прилетают сверху", "arrow.down.to.line"))
+-        rows.row(.toggle(.typingScale, value(.typingScale), "Подрастают", "arrow.up.left.and.arrow.down.right"))
+-        rows.row(.toggle(.typingRotate, value(.typingRotate), "С поворотом", "rotate.right"))
+-        rows.row(.toggle(.typingBlur, value(.typingBlur), "Из размытия", "drop"))
+-        rows.row(.toggle(.typingThanos, value(.typingThanos), "Распад при удалении", "wind"))
+-        rows.info("Стёртая буква рассыпается и разлетается.")
+-        rows.row(.toggle(.typingCursor, value(.typingCursor), "След за курсором", "cursorarrow.motionlines"))
+-        rows.info("При перескоке за курсором тянется полоска, которая догоняет его и тает. Сам курсор остаётся системным: выделение и ручки не меняются.")
+-        rows.row(.slider(97, "Сколько длится полёт", media.typingDuration, 50, 1000, 10))
+-        rows.row(.slider(98, "Высота, откуда летит", media.typingDistance, 0, 60, 2))
+-        rows.row(.slider(99, "Сила размытия", media.typingBlurRadius, 1, 20, 1))
+-
+-        rows.header("Упоминания")
+-        rows.row(.toggle(.mentionAvatars, value(.mentionAvatars), "Аватарка у @ника", "person.crop.circle"))
+-        rows.info("Рядом с упоминанием в сообщении появится маленькая аватарка. Размер считается от высоты букв, чтобы в мелком тексте она не разрывала строку.\n\nЕсли человека тегнули по имени, аватарка будет сразу. Если написано просто «@ник», ищем среди тех, кто уже известен телефону, и у сервера не спрашиваем — у незнакомого ника аватарки не будет.")
+-        rows.row(.toggle(.mentionAvatarsAfter, value(.mentionAvatarsAfter), "Аватарка после ника", "arrow.right.to.line"))
+-        rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
+-
+-        rows.header("Панели и кнопки")
+-        rows.row(.toggle(.glassSquare, value(.glassSquare), "Квадратнее матовые панели", "square.on.square"))
+-        rows.info("Полоса ввода, меню и всплывающие окошки скругляются так, как решил Telegram. Ползунок оставляет от этого скругления свою долю: сто процентов — как было, ноль — прямые углы.")
+-        rows.row(.slider(95, "Скругление панелей", media.glassCorner, 0, 100, 5))
+-        rows.row(.toggle(.inputIcons, value(.inputIcons), "Двигать кнопки полосы ввода", "arrow.up.and.down.and.arrow.left.and.right"))
+-        rows.info("Скрепку, кнопку меню и микрофон можно сдвинуть и повернуть. Раскладка задаётся на своём экране по образцу полосы: таскаешь пальцем, а настоящая полоса берёт готовые числа.")
+-        rows.row(.action(LunagramChoice.inputIcons.rawValue, "Раскладка кнопок", "slider.horizontal.3"))
+-
+-        rows.header("Нажатия")
+-        rows.row(.toggle(.ripple, value(.ripple), "Круг при нажатии", "circle.circle"))
+-        rows.info("При нажатии по экрану из-под пальца расходится круг и тает.\n\nНажатия он себе не забирает: смотрит, где коснулись, и сразу уходит с дороги. Кнопки, прокрутка и долгие нажатия работают как работали. Цвет подбирается сам — белый на тёмной теме, чёрный на светлой.")
+-        rows.row(.slider(93, "Размер круга", media.rippleSize, 0, 100, 5))
+-        rows.row(.slider(94, "Насколько заметен", media.rippleStrength, 0, 100, 5))
+-
+     case .deleted:
+         rows.row(.toggle(.keepDeleted, value(.keepDeleted), "Сохранять удалённые сообщения", "trash"))
+         rows.info("Удалённое собеседником сообщение остаётся в переписке с корзинкой вместо галочек. Хранится только у тебя на телефоне.\n\nОтветить на такое сообщение можно как на обычное. Сослаться на него нельзя — у сервера его больше нет, — поэтому в начало ответа встаёт цитата: имя автора и начало его текста.")
+@@ -3065,6 +2886,12 @@ private func lunagramPlaceEntries(
+         rows.row(.toggle(.roundFromVideo, value(.roundFromVideo), "Кружок из любого видео", "video.circle"))
+         rows.info("Любое видео из галереи можно отправить кружком: оно обрежется по кругу и ужмётся до нужной длительности.")
+ 
++        rows.header("Упоминания")
++        rows.row(.toggle(.mentionAvatars, value(.mentionAvatars), "Аватарка у @ника", "person.crop.circle"))
++        rows.info("Рядом с упоминанием в сообщении появится маленькая аватарка. Размер считается от высоты букв, чтобы в мелком тексте она не разрывала строку.\n\nЕсли человека тегнули по имени, аватарка будет сразу. Если написано просто «@ник», ищем среди тех, кто уже известен телефону, и у сервера не спрашиваем — у незнакомого ника аватарки не будет.")
++        rows.row(.toggle(.mentionAvatarsAfter, value(.mentionAvatarsAfter), "Аватарка после ника", "arrow.right.to.line"))
++        rows.row(.slider(92, "Размер аватарки", media.mentionAvatarSize, 0, 100, 5))
++
+         rows.header("Наборы в переписке")
+         rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
+         rows.info("В профиле собеседника или канала появится строка со списком наборов, которые в этой переписке встречались, и сколько раз. Нажатие открывает набор.\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем: ползунок задаёт, сколько сообщений просматривать.")
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index bf607de1..f06bbef8 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -421,10 +421,6 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }
+         self.window = window
+         self.nativeWindow = window
+-
+-        // Lunagram: круг при нажатии. Ставим наблюдение один раз на окно —
+-        // рисует оно поверх всего и нажатия себе не забирает.
+-        LunagramRipple.install(in: window)
+         
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
+         
