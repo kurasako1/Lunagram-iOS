@@ -1,0 +1,121 @@
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+index ea749ef9..1cf5ef21 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/ChatMessageDateAndStatusNode.swift
+@@ -1109,6 +1109,11 @@ public class ChatMessageDateAndStatusNode: ASDisplayNode {
+                             if currentImpressionIcon.image !== impressionImage {
+                                 currentImpressionIcon.image = impressionImage
+                             }
++                            // Lunagram: корзинку надо будет перекрасить, когда
++                            // хозяин сменит цвет, — запоминаем её значок.
++                            if lunagramDeleted {
++                                LunagramDeletedIconRegistry.shared.register(currentImpressionIcon, baseFontSize: arguments.presentationData.fontSize.baseDisplaySize)
++                            }
+                             if currentImpressionIcon.supernode == nil {
+                                 strongSelf.impressionIcon = currentImpressionIcon
+                                 strongSelf.addSubnode(currentImpressionIcon)
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+index b67ee98c..fa51773b 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import UIKit
++import AsyncDisplayKit
+ import Display
+ import Lunagram
+ 
+@@ -18,6 +19,93 @@ import Lunagram
+ private let lunagramDeletedIconLock = NSLock()
+ private var lunagramDeletedIconCache: [String: UIImage] = [:]
+ 
++/// Наша ли это картинка: сверяем по тем самым, что рисовали сами.
++///
++/// Тот же узел список мог отдать под родной значок просмотров — тогда
++/// перекрашивать его нельзя. Старые картинки из памятки не выкидываем, поэтому
++/// узел со вчерашним цветом всё равно узнаётся.
++func lunagramIsDeletedIcon(_ image: UIImage?) -> Bool {
++    guard let image = image else {
++        return false
++    }
++    lunagramDeletedIconLock.lock()
++    defer {
++        lunagramDeletedIconLock.unlock()
++    }
++    return lunagramDeletedIconCache.values.contains(where: { $0 === image })
++}
++
++/// Уже нарисованные корзинки — чтобы перекрасить их на месте.
++///
++/// Цвет вшивается в сообщение, когда его раскладывают. Перекладку всей
++/// переписки по смене настройки я пробовал, и до сообщений она не доходила.
++/// Ждать её и не надо: от цвета размер значка не меняется, значит хватит
++/// подменить картинку в самом значке.
++///
++/// Узлы держим слабо: список их переиспользует и выбрасывает, и держать их
++/// крепко значило бы не дать им умереть.
++final class LunagramDeletedIconRegistry {
++    static let shared = LunagramDeletedIconRegistry()
++
++    private final class Entry {
++        weak var node: ASImageNode?
++        var baseFontSize: CGFloat
++
++        init(node: ASImageNode, baseFontSize: CGFloat) {
++            self.node = node
++            self.baseFontSize = baseFontSize
++        }
++    }
++
++    private var entries: [Entry] = []
++    private var observer: NSObjectProtocol?
++
++    private init() {
++        self.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
++            self?.repaint()
++        })
++    }
++
++    /// Зовётся из раскладки значка, на главном потоке. Один и тот же узел
++    /// приходит при каждой раскладке — записи не плодим.
++    func register(_ node: ASImageNode, baseFontSize: CGFloat) {
++        var alive: [Entry] = []
++        var known = false
++        for entry in self.entries {
++            guard let existing = entry.node else {
++                continue
++            }
++            if existing === node {
++                entry.baseFontSize = baseFontSize
++                known = true
++            }
++            alive.append(entry)
++        }
++        if !known {
++            alive.append(Entry(node: node, baseFontSize: baseFontSize))
++        }
++        self.entries = alive
++    }
++
++    private func repaint() {
++        var alive: [Entry] = []
++        for entry in self.entries {
++            guard let node = entry.node else {
++                continue
++            }
++            alive.append(entry)
++            guard lunagramIsDeletedIcon(node.image) else {
++                continue
++            }
++            if let image = lunagramDeletedIcon(baseFontSize: entry.baseFontSize), node.image !== image {
++                node.image = image
++            }
++        }
++        self.entries = alive
++    }
++}
++
++
+ func lunagramDeletedIcon(baseFontSize: CGFloat) -> UIImage? {
+     let color = UIColor(rgb: LunagramSettings.deletedIconColor)
+     // Шрифт времени — 11/17 от основного; корзинка чуть мельче букв.
