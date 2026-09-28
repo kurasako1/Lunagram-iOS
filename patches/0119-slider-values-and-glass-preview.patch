@@ -1,0 +1,219 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 08c96e37..de1856b7 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -26,6 +26,8 @@ enum LunagramPreviewKind {
+     case music
+     // Строка с аватаркой — видно закругление, как образец на ПК.
+     case avatar
++    // Оболочка кнопок профиля — капсулы поверх обложки.
++    case profileGlass
+ }
+ 
+ /// Живой образец сверху экрана настроек — «так это будет выглядеть», как на
+@@ -96,6 +98,12 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+     private var particlesLayer: CALayer?
+     /// Образец с выбором кадра пальцем — для баннера, обоев и фона профиля.
+     private var cropView: LunagramCropPreviewView?
++    /// Образец оболочки кнопок профиля: обложка и две капсулы поверх.
++    private var glassStrip: UIView?
++    private var glassCover: UIImageView?
++    private var glassCapsules: [UIView] = []
++    private var glassBlurs: [UIVisualEffectView] = []
++    private var glassLabels: [UILabel] = []
+     /// Образец полоски с песней: фон, обложка-заглушка, название, исполнитель.
+     private var musicStrip: UIView?
+     private var musicBackground: LunagramMusicBackgroundView?
+@@ -194,6 +202,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 subtitleText = "Так будет выглядеть полоска с песней"
+             case .avatar:
+                 subtitleText = "Better late than never"
++            case .profileGlass:
++                subtitleText = "Так будет выглядеть оболочка"
+             }
+ 
+             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleText, font: titleFont, textColor: titleColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset * 2.0, height: .greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+@@ -218,6 +228,8 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 previewHeight = 76.0
+             case .avatar:
+                 previewHeight = 72.0
++            case .profileGlass:
++                previewHeight = 120.0
+             }
+             let contentSize = CGSize(width: params.width, height: previewHeight)
+             let insets = itemListNeighborsGroupedInsets(neighbors, params)
+@@ -293,7 +305,7 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 return .single((nil, nil))
+             }
+             return combineLatest(
+-                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 46.0, height: 46.0), round: false, drawLetters: true),
++                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 160.0, height: 160.0), round: false, drawLetters: true),
+                 peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 32.0, height: 32.0), round: false, drawLetters: false)
+             )
+         }
+@@ -308,6 +320,10 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             if let flat = flat {
+                 self.cardView?.setAvatar(flat, key: "lunagram-own")
+             }
++            if let own = own {
++                self.glassCover?.image = own
++                self.glassCover?.backgroundColor = .clear
++            }
+         }))
+     }
+ 
+@@ -330,6 +346,7 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+         self.subtitleNode.isHidden = false
+         self.cropView?.isHidden = true
+         self.musicStrip?.isHidden = true
++        self.glassStrip?.isHidden = true
+ 
+         switch item.kind {
+         case .dialogCard:
+@@ -365,6 +382,15 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             self.titleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) - titleSize.height - 2.0, width: titleSize.width, height: titleSize.height)
+             self.subtitleNode.frame = CGRect(x: textX, y: floor(rowSize.height / 2.0) + 2.0, width: subtitleSize.width, height: subtitleSize.height)
+ 
++        case .profileGlass:
++            self.lunagramLoadOwnAvatar(context: item.context)
++            self.cardView?.isHidden = true
++            self.avatarView.isHidden = true
++            self.frameHost.isHidden = true
++            self.titleNode.isHidden = true
++            self.updateGlass(rowSize: rowSize, theme: theme)
++            self.subtitleNode.frame = CGRect(x: floor((rowSize.width - subtitleSize.width) / 2.0), y: rowSize.height - subtitleSize.height - 10.0, width: subtitleSize.width, height: subtitleSize.height)
++
+         case .avatarFrame:
+             self.cardView?.isHidden = true
+             self.avatarView.isHidden = false
+@@ -480,13 +506,86 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+         }
+ 
+         switch item.kind {
+-        case .wallpaper, .particles, .banner, .profileBackground, .music:
++        case .wallpaper, .particles, .banner, .profileBackground, .music, .profileGlass:
+             break
+         default:
+             self.titleNode.isHidden = false
+         }
+     }
+ 
++/// Образец оболочки кнопок профиля.
++    ///
++    /// В профиле кнопки «QR» и «Изменить» лежат стеклянными капсулами поверх
++    /// обложки. Здесь то же самое: обложка — своя аватарка, капсулы — выбранным
++    /// цветом и выбранной густотой. Обложка тут не украшение: над однотонным
++    /// фоном густота не видна ни на нуле, ни на сотне.
++    ///
++    /// Пока цвет не выбран, рисуем как Telegram — матовым стеклом, и густота
++    /// ни на что не влияет. Так же ведёт себя и настоящий профиль.
++    private func updateGlass(rowSize: CGSize, theme: PresentationTheme) {
++        let strip: UIView
++        if let current = self.glassStrip {
++            strip = current
++        } else {
++            strip = UIView()
++            strip.clipsToBounds = true
++            strip.layer.cornerRadius = 12.0
++            self.glassStrip = strip
++            self.previewContainer.addSubview(strip)
++
++            let cover = UIImageView()
++            cover.contentMode = .scaleAspectFill
++            cover.clipsToBounds = true
++            strip.addSubview(cover)
++            self.glassCover = cover
++
++            for title in ["QR", "Изменить"] {
++                let capsule = UIView()
++                capsule.clipsToBounds = true
++                strip.addSubview(capsule)
++
++                let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
++                blur.isUserInteractionEnabled = false
++                capsule.addSubview(blur)
++
++                let label = UILabel()
++                label.text = title
++                label.textAlignment = .center
++                label.font = .systemFont(ofSize: 15.0, weight: .semibold)
++                capsule.addSubview(label)
++
++                self.glassCapsules.append(capsule)
++                self.glassBlurs.append(blur)
++                self.glassLabels.append(label)
++            }
++        }
++        strip.isHidden = false
++        strip.frame = CGRect(x: 12.0, y: 8.0, width: rowSize.width - 24.0, height: max(1.0, rowSize.height - 34.0))
++
++        self.glassCover?.frame = strip.bounds
++        self.glassCover?.image = self.lunagramOwnAvatar
++        self.glassCover?.backgroundColor = self.lunagramOwnAvatar == nil ? theme.list.itemAccentColor : .clear
++
++        let tint = LunagramSettings.profileGlassTint().flatMap { UIColor(cgColor: $0) }
++        let textColor = LunagramSettings.profileButtonsColor.flatMap { UIColor(rgb: $0) } ?? .white
++        let capsuleHeight: CGFloat = 40.0
++        let gap: CGFloat = 10.0
++        let capsuleWidth = max(1.0, floor((strip.bounds.width - gap * 3.0) / 2.0))
++        let top = floor((strip.bounds.height - capsuleHeight) / 2.0)
++        for index in 0 ..< self.glassCapsules.count {
++            let capsule = self.glassCapsules[index]
++            capsule.frame = CGRect(x: gap + CGFloat(index) * (capsuleWidth + gap), y: top, width: capsuleWidth, height: capsuleHeight)
++            capsule.layer.cornerRadius = capsuleHeight / 2.0
++            capsule.backgroundColor = tint
++            let blur = self.glassBlurs[index]
++            blur.frame = capsule.bounds
++            blur.isHidden = tint != nil
++            let label = self.glassLabels[index]
++            label.frame = capsule.bounds
++            label.textColor = textColor
++        }
++    }
++
+     /// Образец полоски с песней — как на ПК: слева квадратик с нотой (песни в
+     /// образце нет), справа название и исполнитель, под ними свой фон.
+     private func updateMusic(rowSize: CGSize, theme: PresentationTheme) {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 752c5108..cd86c9e6 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -2495,7 +2495,9 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+     case let .preview(kind, token):
+         return LunagramPreviewItem(context: arguments.context, presentationData: presentationData, kind: kind, token: token, sectionId: sectionId)
+     case let .slider(id, title, value, minValue, maxValue, step):
+-        return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { _ in "" }, sectionId: sectionId, updated: { newValue in
++        return LunagramSliderItem(presentationData: presentationData, title: title, value: value, minValue: minValue, maxValue: maxValue, step: step, valueText: { current in
++            lunagramSliderLabel(current, minValue, maxValue)
++        }, sectionId: sectionId, updated: { newValue in
+             arguments.setSlider(id, newValue)
+         })
+     case let .tiles(tiles, aspect, kind):
+@@ -2536,6 +2538,19 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+     }
+ }
+ 
++/// Что показать справа у ползунка.
++///
++/// От нуля до ста — проценты: такими у нас заданы почти все настройки вида.
++/// Остальное — число как есть: миллисекунды, точки экрана, счёт сообщений.
++/// Отдельной таблицы нет намеренно — иначе каждый новый ползунок пришлось бы
++/// в неё вписывать, и рано или поздно я бы забыл.
++private func lunagramSliderLabel(_ value: Int, _ minValue: Int, _ maxValue: Int) -> String {
++    if minValue == 0 && maxValue == 100 {
++        return "\(value) %"
++    }
++    return "\(value)"
++}
++
+ /// Ступени для строк со значением, как на ПК: число для настроек и подпись.
+ private let lunagramParticlesCountSteps: [(Int, String)] = [(12, "30"), (24, "60"), (40, "100"), (60, "150"), (80, "200"), (100, "300")]
+ private let lunagramParticlesOpacitySteps: [(Int, String)] = [(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")]
+@@ -2854,6 +2869,7 @@ private func lunagramPlaceEntries(
+         rows.info("Корзинка у удалённых сообщений. Цветом времени она сливалась с текстом, поэтому по умолчанию красная.")
+ 
+     case .profileButtons:
++        rows.row(.preview(.profileGlass, Int(media.profileTextColor ?? 0xFFFFFF) &* 1_000_000 &+ Int(media.profileGlassColor ?? 0xFFFFFF) &* 1_000 &+ media.profileGlassStrength))
+         rows.row(.color(LunagramChoice.profileTextColor.rawValue, "Цвет букв", media.profileTextColor ?? 0xFFFFFF))
+         if media.profileTextColor != nil {
+             rows.row(.action(LunagramChoice.profileTextReset.rawValue, "Вернуть цвет букв", "arrow.uturn.backward"))
