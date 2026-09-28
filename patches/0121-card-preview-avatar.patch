@@ -1,0 +1,15 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index de1856b7..0d660ed2 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -306,7 +306,9 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             }
+             return combineLatest(
+                 peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 160.0, height: 160.0), round: false, drawLetters: true),
+-                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 32.0, height: 32.0), round: false, drawLetters: false)
++                // Крупнее и с буквами: тридцать два без букв давали пустоту,
++                // когда фото нет, — а размытие пустоты неотличимо от заливки.
++                peerAvatarCompleteImage(account: context.account, peer: peer, size: CGSize(width: 96.0, height: 96.0), round: false, drawLetters: true)
+             )
+         }
+         |> deliverOnMainQueue).startStrict(next: { [weak self] own, flat in
