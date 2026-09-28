@@ -1,0 +1,513 @@
+diff --git a/build-system/GenerateStrings/GenerateStrings.py b/build-system/GenerateStrings/GenerateStrings.py
+index 5ef16e01..a3862778 100644
+--- a/build-system/GenerateStrings/GenerateStrings.py
++++ b/build-system/GenerateStrings/GenerateStrings.py
+@@ -317,6 +317,10 @@ void LunagramSetWordingDict(NSDictionary<NSString *, NSString *> * _Nullable dic
+ /// чтобы показать, как было.
+ NSString * _Nullable LunagramOriginalString(_PresentationStrings * _Nonnull strings, NSString * _Nonnull key);
+ 
++/// Ключи всех надписей. Нужны редактору: без них правились бы только те, что я
++/// отобрал руками, а подмена умеет любую.
++NSArray<NSString *> * _Nonnull LunagramAllStringKeys(_PresentationStrings * _Nonnull strings);
++
+ #ifdef __cplusplus
+ }
+ #endif
+@@ -492,6 +496,14 @@ NSString * _Nullable LunagramOriginalString(_PresentationStrings * _Nonnull stri
+     return result;
+ }
+ 
++NSArray<NSString *> * _Nonnull LunagramAllStringKeys(_PresentationStrings * _Nonnull strings) {
++    NSMutableSet<NSString *> *keys = [[NSMutableSet alloc] initWithArray:strings.primaryComponent.dict.allKeys];
++    if (strings.secondaryComponent != nil) {
++        [keys addObjectsFromArray:strings.secondaryComponent.dict.allKeys];
++    }
++    return [keys allObjects];
++}
++
+ static NSString * _Nonnull getSingle(_PresentationStrings * _Nullable strings, NSString * _Nonnull key,
+     bool * _Nullable isFound) {
+     // Lunagram: своя надпись перебивает телеграмовскую.
+diff --git a/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift b/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift
+index a3ffca0c..acf5c4f0 100644
+--- a/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift
++++ b/submodules/TelegramPresentationData/Sources/LunagramWordingBridge.swift
+@@ -29,3 +29,9 @@ private func lunagramApplyWording() {
+ public func lunagramOriginalString(_ strings: PresentationStrings, key: String) -> String? {
+     return LunagramOriginalString(strings, key)
+ }
++
++/// Ключи всех надписей Telegram. Их около тринадцати тысяч, поэтому редактор
++/// разбирает их один раз и запоминает.
++public func lunagramAllStringKeys(_ strings: PresentationStrings) -> [String] {
++    return LunagramAllStringKeys(strings)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAllWording.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAllWording.swift
+new file mode 100644
+index 00000000..b6fd7075
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAllWording.swift
+@@ -0,0 +1,240 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// Lunagram: все надписи Telegram, а не отобранная горсть.
++//
++// Отобранных у нас 71 — с понятными названиями, которые я им дал. Всего надписей
++// 12 913, и подмена работает по ключу для любой из них: ограничивал их только
++// мой список.
++//
++// Качать ничего не надо, в отличие от плагина, откуда взята задумка: весь
++// словарь надписей уже лежит в памяти клиента.
++//
++// Разбиваем по началу ключа — «Chat», «Conversation», «Settings». Получается
++// 697 разделов, самый крупный на 736 строк; каждый такой список телефон тянет
++// без труда, а вот 12 913 строк одним экраном — уже нет.
++
++/// Ключи всех надписей, разложенные по разделам. Считается один раз: разбор
++/// тринадцати тысяч ключей на каждое открытие экрана ни к чему.
++private final class LunagramWordingIndex {
++    static let shared = LunagramWordingIndex()
++
++    private var groups: [(name: String, keys: [String])]?
++    private var allKeys: [String]?
++    private let lock = NSLock()
++
++    /// Раздел — то, что стоит до первой точки. У ключа без точки раздел — он сам.
++    private static func group(of key: String) -> String {
++        if let dot = key.firstIndex(of: ".") {
++            return String(key[key.startIndex ..< dot])
++        }
++        return key
++    }
++
++    func build(strings: PresentationStrings) {
++        self.lock.lock()
++        defer {
++            self.lock.unlock()
++        }
++        if self.groups != nil {
++            return
++        }
++        let keys = lunagramAllStringKeys(strings)
++        self.allKeys = keys.sorted()
++        var byName: [String: [String]] = [:]
++        for key in keys {
++            byName[LunagramWordingIndex.group(of: key), default: []].append(key)
++        }
++        self.groups = byName.keys.sorted(by: { $0.lowercased() < $1.lowercased() }).map { name in
++            return (name: name, keys: byName[name]!.sorted())
++        }
++    }
++
++    func allGroups(strings: PresentationStrings) -> [(name: String, keys: [String])] {
++        self.build(strings: strings)
++        self.lock.lock()
++        defer {
++            self.lock.unlock()
++        }
++        return self.groups ?? []
++    }
++
++    func keys(inGroup name: String, strings: PresentationStrings) -> [String] {
++        return self.allGroups(strings: strings).first(where: { $0.name == name })?.keys ?? []
++    }
++
++    func everyKey(strings: PresentationStrings) -> [String] {
++        self.build(strings: strings)
++        self.lock.lock()
++        defer {
++            self.lock.unlock()
++        }
++        return self.allKeys ?? []
++    }
++}
++
++/// Ключи всех надписей одним списком — для поиска.
++func lunagramEveryWordingKey(_ strings: PresentationStrings) -> [String] {
++    return LunagramWordingIndex.shared.everyKey(strings: strings)
++}
++
++/// Что сейчас написано по этому ключу: своё, если правил, иначе телеграмовское.
++///
++/// Свои слова передаём словарём, а не спрашиваем по одному: за ними каждый раз
++/// перечитывается и разбирается всё хранилище наборов, а ключей тут тринадцать
++/// тысяч. Один раз на список — и хватит.
++func lunagramWordingCurrentText(_ strings: PresentationStrings, key: String, own: [String: String]) -> String {
++    if let mine = own[key] {
++        return mine
++    }
++    return lunagramOriginalString(strings, key: key) ?? ""
++}
++
++private enum LunagramGroupEntry: ItemListNodeEntry {
++    case group(Int32, String, Int)
++    case line(Int32, String, String, Bool)
++    case info(String)
++
++    var section: ItemListSectionId {
++        return 0
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .group(index, _, _):
++            return index
++        case let .line(index, _, _, _):
++            return index
++        case .info:
++            return 1_000_000
++        }
++    }
++
++    static func ==(lhs: LunagramGroupEntry, rhs: LunagramGroupEntry) -> Bool {
++        switch lhs {
++        case let .group(index, name, count):
++            if case let .group(rhsIndex, rhsName, rhsCount) = rhs, index == rhsIndex, name == rhsName, count == rhsCount {
++                return true
++            }
++            return false
++        case let .line(index, key, value, isOwn):
++            if case let .line(rhsIndex, rhsKey, rhsValue, rhsIsOwn) = rhs, index == rhsIndex, key == rhsKey, value == rhsValue, isOwn == rhsIsOwn {
++                return true
++            }
++            return false
++        case let .info(text):
++            if case let .info(rhsText) = rhs, text == rhsText {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramGroupEntry, rhs: LunagramGroupEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramGroupArguments
++        switch self {
++        case let .group(_, name, count):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: name, label: "\(count)", sectionId: self.section, style: .blocks, action: {
++                arguments.openGroup(name)
++            })
++        case let .line(_, key, value, isOwn):
++            // Название строки — сам ключ: своего имени у этих надписей нет,
++            // а ключ хотя бы говорит, из какого они места.
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: key, label: value, labelStyle: isOwn ? .coloredText(presentationData.theme.list.itemAccentColor) : .text, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {
++                arguments.edit(key)
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++private final class LunagramGroupArguments {
++    let openGroup: (String) -> Void
++    let edit: (String) -> Void
++
++    init(openGroup: @escaping (String) -> Void, edit: @escaping (String) -> Void) {
++        self.openGroup = openGroup
++        self.edit = edit
++    }
++}
++
++/// Экран «Все надписи» — список разделов.
++func lunagramAllWordingController(context: AccountContext, editKey: @escaping (String) -> Void) -> ViewController {
++    let versionPromise = ValuePromise<Int>(0, ignoreRepeated: false)
++    var version = 0
++    var pushImpl: ((ViewController) -> Void)?
++
++    let arguments = LunagramGroupArguments(openGroup: { name in
++        pushImpl?(lunagramWordingGroupController(context: context, group: name, editKey: editKey))
++    }, edit: { key in
++        editKey(key)
++        version += 1
++        versionPromise.set(version)
++    })
++
++    let signal = combineLatest(context.sharedContext.presentationData, versionPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramGroupEntry] = []
++        var index: Int32 = 0
++        for group in LunagramWordingIndex.shared.allGroups(strings: presentationData.strings) {
++            entries.append(.group(index, group.name, group.keys.count))
++            index += 1
++        }
++        entries.append(.info("Разделы названы так, как их назвали в самом Telegram: это начало ключа надписи. Число справа — сколько в разделе строк.\n\nЧто не найдётся здесь — ищи поиском на прошлом экране: он смотрит сразу по всем."))
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Все надписи"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    controller.lunagramShowsBackground = true
++    pushImpl = { [weak controller] c in
++        controller?.push(c)
++    }
++    return controller
++}
++
++/// Экран одного раздела.
++private func lunagramWordingGroupController(context: AccountContext, group: String, editKey: @escaping (String) -> Void) -> ViewController {
++    let versionPromise = ValuePromise<Int>(0, ignoreRepeated: false)
++    var version = 0
++
++    let arguments = LunagramGroupArguments(openGroup: { _ in
++    }, edit: { key in
++        editKey(key)
++        version += 1
++        versionPromise.set(version)
++    })
++
++    let signal = combineLatest(context.sharedContext.presentationData, versionPromise.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramGroupEntry] = []
++        var index: Int32 = 0
++        let own = LunagramWording.overrides
++        for key in LunagramWordingIndex.shared.keys(inGroup: group, strings: presentationData.strings) {
++            entries.append(.line(index, key, lunagramWordingCurrentText(presentationData.strings, key: key, own: own), own[key] != nil))
++            index += 1
++        }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(group), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    controller.lunagramShowsBackground = true
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
+index 3317909e..f97b94a9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
+@@ -17,13 +17,14 @@ import Lunagram
+ 
+ private enum LunagramWordingEditorEntry: ItemListNodeEntry {
+     case search(String)
++    case allStrings
+     case reset
+     case line(Int32, String, String, String, Bool)
+     case info(String)
+ 
+     var section: ItemListSectionId {
+         switch self {
+-        case .search, .reset:
++        case .search, .allStrings, .reset:
+             return 0
+         case .line, .info:
+             return 1
+@@ -34,8 +35,10 @@ private enum LunagramWordingEditorEntry: ItemListNodeEntry {
+         switch self {
+         case .search:
+             return 0
+-        case .reset:
++        case .allStrings:
+             return 1
++        case .reset:
++            return 2
+         case let .line(index, _, _, _, _):
+             return 100 + index
+         case .info:
+@@ -50,6 +53,11 @@ private enum LunagramWordingEditorEntry: ItemListNodeEntry {
+                 return true
+             }
+             return false
++        case .allStrings:
++            if case .allStrings = rhs {
++                return true
++            }
++            return false
+         case .reset:
+             if case .reset = rhs {
+                 return true
+@@ -79,6 +87,10 @@ private enum LunagramWordingEditorEntry: ItemListNodeEntry {
+             return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: ""), text: text, placeholder: "Найти надпись", type: .regular(capitalization: false, autocorrection: false), clearType: .always, sectionId: self.section, textUpdated: { value in
+                 arguments.search(value)
+             }, action: {})
++        case .allStrings:
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "Все надписи", label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.openAll()
++            })
+         case .reset:
+             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: "Сбросить мои правки", kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                 arguments.reset()
+@@ -96,11 +108,13 @@ private enum LunagramWordingEditorEntry: ItemListNodeEntry {
+ private final class LunagramWordingEditorArguments {
+     let search: (String) -> Void
+     let edit: (String) -> Void
++    let openAll: () -> Void
+     let reset: () -> Void
+ 
+-    init(search: @escaping (String) -> Void, edit: @escaping (String) -> Void, reset: @escaping () -> Void) {
++    init(search: @escaping (String) -> Void, edit: @escaping (String) -> Void, openAll: @escaping () -> Void, reset: @escaping () -> Void) {
+         self.search = search
+         self.edit = edit
++        self.openAll = openAll
+         self.reset = reset
+     }
+ }
+@@ -111,6 +125,7 @@ func lunagramWordingEditor(context: AccountContext) -> ViewController {
+     let versionPromise = ValuePromise<Int>(0, ignoreRepeated: false)
+     var version = 0
+     var presentAlertImpl: ((UIViewController) -> Void)?
++    var pushImpl: ((ViewController) -> Void)?
+ 
+     let refresh: () -> Void = {
+         version += 1
+@@ -120,7 +135,24 @@ func lunagramWordingEditor(context: AccountContext) -> ViewController {
+     let arguments = LunagramWordingEditorArguments(search: { text in
+         queryPromise.set(text)
+     }, edit: { key in
+-        presentAlertImpl?(lunagramWordingEditAlert(key: key, completed: refresh))
++        let strings = context.sharedContext.currentPresentationData.with({ $0 }).strings
++        let original = lunagramOriginalString(strings, key: key) ?? ""
++        presentAlertImpl?(lunagramWordingEditAlert(key: key, original: original, completed: refresh, refused: { needed in
++            // Показать окошко прямо здесь нельзя: прежнее ещё закрывается.
++            Queue.mainQueue().after(0.1, {
++                presentAlertImpl?(lunagramWordingRefusedAlert(needed: needed))
++            })
++        }))
++    }, openAll: {
++        pushImpl?(lunagramAllWordingController(context: context, editKey: { key in
++            let strings = context.sharedContext.currentPresentationData.with({ $0 }).strings
++            let original = lunagramOriginalString(strings, key: key) ?? ""
++            presentAlertImpl?(lunagramWordingEditAlert(key: key, original: original, completed: refresh, refused: { needed in
++                Queue.mainQueue().after(0.1, {
++                    presentAlertImpl?(lunagramWordingRefusedAlert(needed: needed))
++                })
++            }))
++        }))
+     }, reset: {
+         LunagramWording.clearOverrides()
+         refresh()
+@@ -130,24 +162,42 @@ func lunagramWordingEditor(context: AccountContext) -> ViewController {
+     |> deliverOnMainQueue
+     |> map { presentationData, query, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+         var entries: [LunagramWordingEditorEntry] = [.search(query)]
++        entries.append(.allStrings)
+         if !LunagramWording.overrides.isEmpty {
+             entries.append(.reset)
+         }
+         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
++        // Свои слова берём один раз: за каждым обращением перечитывается и
++        // разбирается всё хранилище наборов, а ключей тут тринадцать тысяч.
++        let ownWords = LunagramWording.overrides
+         var index: Int32 = 0
+-        for entry in LunagramWording.entries {
+-            let current = LunagramWording.currentText(for: entry.key) ?? (lunagramOriginalString(presentationData.strings, key: entry.key) ?? "")
+-            if !needle.isEmpty {
+-                let haystack = "\(entry.title) \(current)".lowercased()
++        if needle.isEmpty {
++            // Пусто — показываем отобранные: у них понятные названия.
++            for entry in LunagramWording.entries {
++                let current = lunagramWordingCurrentText(presentationData.strings, key: entry.key, own: ownWords)
++                entries.append(.line(index, entry.key, entry.title, current, ownWords[entry.key] != nil))
++                index += 1
++            }
++        } else {
++            // Ищем по всем надписям Telegram, а не по отобранным. Названия
++            // есть только у отобранных, у остальных вместо названия — ключ.
++            let named = Dictionary(LunagramWording.entries.map({ ($0.key, $0.title) }), uniquingKeysWith: { first, _ in first })
++            for key in lunagramEveryWordingKey(presentationData.strings) {
++                let current = lunagramWordingCurrentText(presentationData.strings, key: key, own: ownWords)
++                let title = named[key] ?? key
++                let haystack = "\(title) \(key) \(current)".lowercased()
+                 if !haystack.contains(needle) {
+                     continue
+                 }
++                entries.append(.line(index, key, title, current, ownWords[key] != nil))
++                index += 1
++                if index >= 100 {
++                    break
++                }
+             }
+-            entries.append(.line(index, entry.key, entry.title, current, LunagramWording.overrides[entry.key] != nil))
+-            index += 1
+         }
+-        if entries.count <= 2 {
+-            entries.append(.info("Ничего не нашлось. Ищи по названию места («печатает», «Избранное») или по самому тексту."))
++        if index == 0 {
++            entries.append(.info("Ничего не нашлось. Ищи по названию места («печатает», «Избранное»), по самому тексту или по ключу надписи."))
+         } else {
+             entries.append(.info("Нажми строку и впиши своё. Чего не тронул — остаётся как в самом Telegram. Пустая строка возвращает надпись обратно.\n\nЧасть надписей меняется сразу, остальные — после перезапуска Lunagram."))
+         }
+@@ -157,22 +207,48 @@ func lunagramWordingEditor(context: AccountContext) -> ViewController {
+     }
+ 
+     let controller = ItemListController(context: context, state: signal)
++    controller.lunagramShowsBackground = true
+     presentAlertImpl = { [weak controller] alert in
+         controller?.present(alert, animated: true, completion: nil)
+     }
++    pushImpl = { [weak controller] c in
++        controller?.push(c)
++    }
+     return controller
+ }
+ 
++/// Вставки вроде %@, %1$@ и %d Telegram подставляет сам: имя, число, название.
++/// Потеряешь такую — в надписи окажется пустота, поэтому правку не принимаем.
++private func lunagramWordingPlaceholders(_ text: String) -> [String] {
++    guard let pattern = try? NSRegularExpression(pattern: "%\\d+\\$@|%[@d]|%%", options: []) else {
++        return []
++    }
++    var result: [String] = []
++    let range = NSRange(text.startIndex ..< text.endIndex, in: text)
++    pattern.enumerateMatches(in: text, options: [], range: range, using: { match, _, _ in
++        if let match = match, let found = Range(match.range, in: text) {
++            result.append(String(text[found]))
++        }
++    })
++    return result.sorted()
++}
++
+ /// Окошко правки одной надписи. Родное системное: поле ввода и две кнопки.
+-private func lunagramWordingEditAlert(key: String, completed: @escaping () -> Void) -> UIViewController {
++private func lunagramWordingEditAlert(key: String, original: String, completed: @escaping () -> Void, refused: @escaping (String) -> Void) -> UIViewController {
+     let entry = LunagramWording.entries.first(where: { $0.key == key })
+-    let alert = UIAlertController(title: entry?.title ?? "Надпись", message: "Впиши, что должно быть написано вместо этого.", preferredStyle: .alert)
++    let alert = UIAlertController(title: entry?.title ?? key, message: "Впиши, что должно быть написано вместо этого.", preferredStyle: .alert)
+     alert.addTextField(configurationHandler: { field in
+-        field.text = LunagramWording.currentText(for: key)
++        field.text = LunagramWording.currentText(for: key) ?? original
+         field.clearButtonMode = .whileEditing
+     })
+     alert.addAction(UIAlertAction(title: "Готово", style: .default, handler: { _ in
+-        LunagramWording.setOverride(key: key, text: alert.textFields?.first?.text)
++        let text = alert.textFields?.first?.text ?? ""
++        let needed = lunagramWordingPlaceholders(original)
++        if !text.isEmpty, lunagramWordingPlaceholders(text) != needed {
++            refused(needed.joined(separator: " "))
++            return
++        }
++        LunagramWording.setOverride(key: key, text: text)
+         completed()
+     }))
+     alert.addAction(UIAlertAction(title: "Вернуть как было", style: .destructive, handler: { _ in
+@@ -182,3 +258,14 @@ private func lunagramWordingEditAlert(key: String, completed: @escaping () -> Vo
+     alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: nil))
+     return alert
+ }
++
++/// Окошко «так нельзя»: говорим, какие вставки обязаны остаться.
++private func lunagramWordingRefusedAlert(needed: String) -> UIViewController {
++    let alert = UIAlertController(
++        title: "Правка не принята",
++        message: "В этой надписи Telegram сам подставляет: \(needed). Оставь эти вставки на месте — без них вместо имени или числа будет пустота.",
++        preferredStyle: .alert
++    )
++    alert.addAction(UIAlertAction(title: "Понятно", style: .default, handler: nil))
++    return alert
++}
