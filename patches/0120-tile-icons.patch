@@ -1,0 +1,38 @@
+diff --git a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+index ce98bf93..037a0bf5 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+@@ -111,9 +111,11 @@ public extension LunagramPlace {
+         case .chatStickers:
+             return (0x7BE3C4, 0x2FB99A)
+         case .deleted:
+-            return (0xFF8272, 0xE63B26)
++            return (0xFF7B6B, 0xD8321C)
++        // Голубой, а не синий: синий уже занят «Конфиденциальностью», и две
++        // соседние строки различались бы только оттенком.
+         case .messages:
+-            return (0x74B4FF, 0x2E7BE6)
++            return (0x5FD0F5, 0x1793C9)
+         case .profileButtons:
+             return (0xA8B4C8, 0x6E7C93)
+         }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index c61edda1..92c7deeb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -315,11 +315,12 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+         let pushPlace: (LunagramPlace) -> Void = { place in
+             (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(lunagramPlaceController(context: context, place: place))
+         }
+-        let theme = presentationData.theme
+-        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: LunagramPlace.deleted.title, icon: lunagramContourIcon(LunagramPlace.deleted.iconName, theme: theme), action: {
++        // Плашка, а не контур: родные строки рядом помечены цветными
++        // квадратиками, и серый контур среди них читался как чужой.
++        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: LunagramPlace.deleted.title, icon: LunagramPlace.deleted.tileIcon, action: {
+             pushPlace(.deleted)
+         }))
+-        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 101, label: .text(""), text: LunagramPlace.messages.title, icon: lunagramContourIcon(LunagramPlace.messages.iconName, theme: theme), action: {
++        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 101, label: .text(""), text: LunagramPlace.messages.title, icon: LunagramPlace.messages.tileIcon, action: {
+             pushPlace(.messages)
+         }))
+     }
