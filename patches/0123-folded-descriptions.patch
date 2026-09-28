@@ -1,9 +1,9 @@
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
 new file mode 100644
-index 00000000..1876f884
+index 00000000..f12c3e73
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,203 @@
 +import Foundation
 +import UIKit
 +import Display
@@ -108,20 +108,22 @@ index 00000000..1876f884
 +            UIColor.white.withAlphaComponent(0.25).cgColor
 +        ]
 +
-+        super.init(layerBacked: false, dynamicBounce: false)
++        super.init(layerBacked: false)
 +
 +        self.addSubnode(self.textNode)
 +        self.addSubnode(self.arrowNode)
 +    }
 +
-+    override func didLoad() {
++    override public func didLoad() {
 +        super.didLoad()
 +
-+        let recognizer = UITapGestureRecognizer(target: self, action: #selector(self.tapped))
++        let recognizer = UITapGestureRecognizer(target: self, action: #selector(self.lunagramAboutTapped))
 +        self.view.addGestureRecognizer(recognizer)
 +    }
 +
-+    @objc private func tapped() {
++    // Имя со своей приметой: у ListViewItemNode уже есть свой tapped(), и
++    // одноимённый метод молча перекрыл бы его.
++    @objc private func lunagramAboutTapped() {
 +        self.item?.toggle()
 +    }
 +
@@ -197,11 +199,11 @@ index 00000000..1876f884
 +        }
 +    }
 +
-+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
++    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
 +        self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
 +    }
 +
-+    override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
++    override public func animateRemoved(_ currentTimestamp: Double, duration: Double) {
 +        self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
 +    }
 +}
