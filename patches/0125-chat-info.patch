@@ -1,0 +1,299 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index a2a449e1..1224f31c 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -95,6 +95,7 @@ public final class LunagramSettings {
+         static let profileBackgroundOwner = "lunagram.profile.backgroundOwner"
+         static let settingsBackground = "lunagram.profile.settingsBackground"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
++        static let chatInfoSheet = "lunagram.chat.infoSheet"
+         // Фон полоски с песней в своём профиле — как на ПК.
+         static let profileMusicBgFile = "lunagram.profile.musicBgFile"
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+@@ -837,6 +838,20 @@ public final class LunagramSettings {
+         return "\(deletedIconColor)-\(showMessageSeconds ? 1 : 0)"
+     }
+ 
++    /// Справка «Что известно» о переписке.
++    public static var chatInfoSheet: Bool {
++        get {
++            guard defaults.object(forKey: Key.chatInfoSheet) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.chatInfoSheet)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.chatInfoSheet)
++            changed()
++        }
++    }
++
+     /// Кнопка звонка в шапке личной переписки.
+     ///
+     /// По умолчанию включена: её и просили. Выключишь — звонок останется там,
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatInfo.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatInfo.swift
+new file mode 100644
+index 00000000..c5effc2b
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatInfo.swift
+@@ -0,0 +1,145 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import TelegramStringFormatting
++import AccountContext
++import PresentationDataUtils
++import Lunagram
++
++// Lunagram: «Что известно» — короткая справка о переписке.
++//
++// Задумка из плагина «Инфа о чате» для Android-форка; кода оттуда не брал.
++// Одну его строку не беру намеренно: «общее количество сообщений» он показывает
++// из поля `pts`, а это не число сообщений, а номер обновления. Неверное число
++// хуже отсутствующего.
++//
++// Всё, что здесь показано, телефон уже знает: никаких запросов к серверу ради
++// этой справки не делаем.
++
++/// Показать справку о переписке.
++public func lunagramShowChatInfo(context: AccountContext, peerId: EnginePeer.Id, present: @escaping (ViewController) -> Void) {
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let _ = (context.engine.data.get(
++        TelegramEngine.EngineData.Item.Peer.Peer(id: peerId),
++        TelegramEngine.EngineData.Item.Peer.Presence(id: peerId),
++        TelegramEngine.EngineData.Item.Peer.ParticipantCount(id: peerId)
++    )
++    |> deliverOnMainQueue).startStandalone(next: { peer, presence, participantCount in
++        guard let peer = peer else {
++            present(textAlertController(context: context, title: nil, text: "Об этой переписке ничего не известно.", actions: [
++                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++            ]))
++            return
++        }
++        let text = lunagramChatInfoText(
++            context: context,
++            peer: peer,
++            presence: presence,
++            participantCount: participantCount,
++            presentationData: presentationData
++        )
++        present(textAlertController(context: context, title: "Что известно", text: text, actions: [
++            TextAlertAction(type: .genericAction, title: "Скопировать всё", action: {
++                UIPasteboard.general.string = text
++            }),
++            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++        ]))
++    })
++}
++
++private func lunagramYesNo(_ value: Bool) -> String {
++    return value ? "да" : "нет"
++}
++
++private func lunagramChatInfoText(
++    context: AccountContext,
++    peer: EnginePeer,
++    presence: EnginePeer.Presence?,
++    participantCount: Int?,
++    presentationData: PresentationData
++) -> String {
++    var lines: [String] = []
++
++    let kind: String
++    switch peer {
++    case let .user(user):
++        kind = user.botInfo != nil ? "Бот" : "Личный чат"
++    case .secretChat:
++        kind = "Секретный чат"
++    case .legacyGroup:
++        kind = "Группа"
++    case let .channel(channel):
++        switch channel.info {
++        case .broadcast:
++            kind = "Канал"
++        case .group:
++            kind = "Группа"
++        }
++    }
++    lines.append("Тип: " + kind)
++    lines.append("Номер: \(peer.id.id._internalGetInt64Value())")
++    lines.append("Ник: " + (peer.addressName.flatMap({ "@" + $0 }) ?? "нет"))
++
++    if let presence = presence, case .user = peer {
++        let timestamp = Int32(Date().timeIntervalSince1970)
++        let (status, _) = stringAndActivityForUserPresence(
++            strings: presentationData.strings,
++            dateTimeFormat: presentationData.dateTimeFormat,
++            presence: presence,
++            relativeTo: timestamp
++        )
++        lines.append("Был в сети: " + status)
++    }
++
++    lines.append("")
++    lines.append("Проверен: " + lunagramYesNo(peer.isVerified))
++    lines.append("Скам: " + lunagramYesNo(peer.isScam))
++    lines.append("Фейк: " + lunagramYesNo(peer.isFake))
++    let restriction = peer._asPeer().restrictionText(platform: "ios", contentSettings: context.currentContentSettings.with { $0 })
++    lines.append("Ограничен: " + (restriction.flatMap({ "да — " + $0 }) ?? "нет"))
++
++    switch peer {
++    case let .channel(channel):
++        lines.append("")
++        lines.append("Участников: " + (participantCount.flatMap({ "\($0)" }) ?? "неизвестно"))
++        lines.append("Я создатель: " + lunagramYesNo(channel.flags.contains(.isCreator)))
++        if let rights = channel.adminRights {
++            var granted: [String] = []
++            if rights.rights.contains(.canPostMessages) {
++                granted.append("писать")
++            }
++            if rights.rights.contains(.canDeleteMessages) {
++                granted.append("удалять")
++            }
++            if rights.rights.contains(.canBanUsers) {
++                granted.append("banить")
++            }
++            if rights.rights.contains(.canInviteUsers) {
++                granted.append("звать")
++            }
++            if rights.rights.contains(.canChangeInfo) {
++                granted.append("менять описание")
++            }
++            lines.append("Мои права: " + (granted.isEmpty ? "есть, но пустые" : granted.joined(separator: ", ")))
++        } else if channel.flags.contains(.isCreator) {
++            lines.append("Мои права: все")
++        } else {
++            lines.append("Мои права: обычный участник")
++        }
++    case let .legacyGroup(group):
++        lines.append("")
++        lines.append("Участников: " + (participantCount.flatMap({ "\($0)" }) ?? "\(group.participantCount)"))
++        var isCreator = false
++        if case .creator = group.role {
++            isCreator = true
++        }
++        lines.append("Я создатель: " + lunagramYesNo(isCreator))
++    default:
++        break
++    }
++
++    return lines.joined(separator: "\n")
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index d2a36fd7..0a36674b 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -49,6 +49,7 @@ private enum LunagramToggle: Int32 {
+     case showMutedDeleted
+     case settingsBackground
+     case headerCallButton
++    case chatInfoSheet
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
+@@ -126,6 +127,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.settingsBackground
+         case .headerCallButton:
+             return LunagramSettings.headerCallButton
++        case .chatInfoSheet:
++            return LunagramSettings.chatInfoSheet
+         case .voiceLengthInList:
+             return LunagramSettings.voiceLengthInList
+         case .storiesClickOnly:
+@@ -221,6 +224,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.settingsBackground = value
+         case .headerCallButton:
+             LunagramSettings.headerCallButton = value
++        case .chatInfoSheet:
++            LunagramSettings.chatInfoSheet = value
+         case .voiceLengthInList:
+             LunagramSettings.voiceLengthInList = value
+         case .storiesClickOnly:
+@@ -316,6 +321,8 @@ private enum LunagramToggle: Int32 {
+             return "Фон и в настройках"
+         case .headerCallButton:
+             return "Кнопка звонка в шапке"
++        case .chatInfoSheet:
++            return "Что известно о чате"
+         case .voiceLengthInList:
+             return "Длина голосовых"
+         case .storiesClickOnly:
+@@ -401,7 +408,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .headerCallButton, .chatInfoSheet, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -522,6 +529,8 @@ extension LunagramToggle {
+             return "gearshape"
+         case .headerCallButton:
+             return "phone"
++        case .chatInfoSheet:
++            return "info.circle"
+         case .voiceLengthInList:
+             return "speaker.wave.1"
+         case .storiesClickOnly:
+@@ -3003,6 +3012,8 @@ private func lunagramPlaceEntries(
+         rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
+         rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
+         rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
++        rows.row(.toggle(.chatInfoSheet, value(.chatInfoSheet), "Что известно о чате", "info.circle"))
++        rows.info("Короткая справка о переписке: тип, номер, @ник, был в сети; проверен ли, скам, фейк, ограничен; у групп и каналов — сколько участников, создатель ли ты и твои права. Внизу «Скопировать всё».\n\nОткрывается двумя путями: строкой в профиле собеседника и долгим нажатием на аватарку в шапке переписки. На имя в шапке не вешаю: там у Telegram уже свой поиск, и отнимать его незачем.\n\nВсё показанное телефон уже знает — у сервера ничего не спрашиваем.")
+         rows.row(.toggle(.headerCallButton, value(.headerCallButton), "Кнопка звонка в шапке", "phone"))
+         rows.info("В шапке личной переписки появится кнопка звонка, слева от «…». Нажатие — голосовой звонок, долгое нажатие — видео.\n\nПоявляется только там, где звонок и так возможен: не с ботом, не с самим собой и если собеседник звонки разрешает. «Позвонить» из меню «…» никуда не девается.")
+         rows.row(.toggle(.roundFromVideo, value(.roundFromVideo), "Кружок из любого видео", "video.circle"))
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index a9352437..cc527411 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -982,6 +982,15 @@ func infoItems(
+         }))
+     }
+ 
++    // Lunagram: «Что известно» — короткая справка о переписке.
++    if LunagramSettings.chatInfoSheet, let peerId = data.peer?.id {
++        items[.peerInfoTrailing]!.append(PeerInfoScreenDisclosureItem(id: 9101, label: .none, text: "Что известно", icon: UIImage(bundleImageName: "Chat/Context Menu/Info"), action: {
++            lunagramShowChatInfo(context: context, peerId: peerId, present: { controller in
++                interaction.getController()?.present(controller, in: .window(.root))
++            })
++        }))
++    }
++
+     var result: [(AnyHashable, [PeerInfoScreenItem])] = []
+     for section in InfoSection.allCases {
+         if let sectionItems = items[section], !sectionItems.isEmpty {
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 83849e09..6982c4a9 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -6022,7 +6022,23 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                             f(.dismissWithoutContent)
+                             self?.interfaceInteraction?.beginMessageSearch(.everything, "")
+                         })))
+-                                                
++
++                        // Lunagram: справка о переписке. Вешаем сюда, а не на
++                        // долгое нажатие по имени: там у Telegram свой поиск.
++                        if LunagramSettings.chatInfoSheet {
++                            items.append(.action(ContextMenuActionItem(text: "Что известно", icon: { theme in
++                                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Info"), color: theme.actionSheet.primaryTextColor)
++                            }, action: { _, f in
++                                f(.dismissWithoutContent)
++                                guard let strongSelf = self else {
++                                    return
++                                }
++                                lunagramShowChatInfo(context: strongSelf.context, peerId: peer.id, present: { controller in
++                                    strongSelf.present(controller, in: .window(.root))
++                                })
++                            })))
++                        }
++
+                         return items
+                     }
+                 case let .replyThread(message):
