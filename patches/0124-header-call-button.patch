@@ -35,7 +35,7 @@ index cecef360..a2a449e1 100644
      public static var saveForBots: Bool {
          get { return LunagramSpySettings.saveForBots }
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index 5ae73825..415ad542 100644
+index 5ae73825..d2a36fd7 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -48,6 +48,7 @@ private enum LunagramToggle: Int32 {
@@ -82,7 +82,16 @@ index 5ae73825..415ad542 100644
              return nil
          }
      }
-@@ -2994,6 +3001,8 @@ private func lunagramPlaceEntries(
+@@ -513,6 +520,8 @@ extension LunagramToggle {
+             return "square.grid.2x2"
+         case .settingsBackground:
+             return "gearshape"
++        case .headerCallButton:
++            return "phone"
+         case .voiceLengthInList:
+             return "speaker.wave.1"
+         case .storiesClickOnly:
+@@ -2994,6 +3003,8 @@ private func lunagramPlaceEntries(
          rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
          rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
          rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
