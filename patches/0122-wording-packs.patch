@@ -1,0 +1,330 @@
+diff --git a/submodules/Lunagram/Sources/LunagramWording.swift b/submodules/Lunagram/Sources/LunagramWording.swift
+index 12b9af1b..058d103b 100644
+--- a/submodules/Lunagram/Sources/LunagramWording.swift
++++ b/submodules/Lunagram/Sources/LunagramWording.swift
+@@ -626,6 +626,26 @@ public enum LunagramWording {
+ 
+     private static let packKey = "lunagram.wording.pack"
+     private static let overridesKey = "lunagram.wording.own"
++    private static let ownPacksKey = "lunagram.wording.ownPacks"
++    /// Номера своих наборов начинаются отсюда: мелкие числа заняли готовые.
++    private static let firstOwnId = 1000
++
++    /// Свой набор надписей: название и слова.
++    ///
++    /// Набор самостоятельный, а не поправка к готовому: чего в нём нет, берётся
++    /// из самого Telegram. Так понятнее — «набор» и есть набор, а не слой поверх
++    /// чужого, о котором ещё надо помнить, какой он был.
++    public struct OwnPack: Equatable {
++        public var id: Int
++        public var title: String
++        public var strings: [String: String]
++
++        public init(id: Int, title: String, strings: [String: String]) {
++            self.id = id
++            self.title = title
++            self.strings = strings
++        }
++    }
+ 
+     /// Какой набор выбран: 0 — родные надписи Telegram.
+     public static var pack: Int {
+@@ -636,21 +656,113 @@ public enum LunagramWording {
+         }
+     }
+ 
+-    /// Свои правки поверх набора: ключ надписи — свой текст.
+-    public static var overrides: [String: String] {
+-        get { return (UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: String]) ?? [:] }
++    /// Свои наборы. Лежат списком словарей — как есть, без преобразований:
++    /// UserDefaults понимает числа, строки и словари строк.
++    public static var ownPacks: [OwnPack] {
++        get {
++            migrateIfNeeded()
++            guard let raw = UserDefaults.standard.array(forKey: ownPacksKey) as? [[String: Any]] else {
++                return []
++            }
++            return raw.compactMap { item -> OwnPack? in
++                guard let id = item["id"] as? Int, let title = item["title"] as? String else {
++                    return nil
++                }
++                return OwnPack(id: id, title: title, strings: (item["strings"] as? [String: String]) ?? [:])
++            }
++        }
+         set {
+-            if newValue.isEmpty {
+-                UserDefaults.standard.removeObject(forKey: overridesKey)
+-            } else {
+-                UserDefaults.standard.set(newValue, forKey: overridesKey)
++            let raw = newValue.map { pack -> [String: Any] in
++                return ["id": pack.id, "title": pack.title, "strings": pack.strings]
+             }
++            UserDefaults.standard.set(raw, forKey: ownPacksKey)
+             LunagramSettings.changed()
+         }
+     }
+ 
++    /// Выбранный набор, если выбран именно свой.
++    public static var selectedOwnPack: OwnPack? {
++        let current = pack
++        return ownPacks.first(where: { $0.id == current })
++    }
++
++    /// Новый пустой набор с таким названием. Возвращает его номер.
++    public static func addOwnPack(title: String) -> Int {
++        var all = ownPacks
++        let id = (all.map({ $0.id }).max() ?? (firstOwnId - 1)) + 1
++        all.append(OwnPack(id: id, title: title, strings: [:]))
++        ownPacks = all
++        return id
++    }
++
++    public static func renameOwnPack(id: Int, title: String) {
++        var all = ownPacks
++        guard let index = all.firstIndex(where: { $0.id == id }) else {
++            return
++        }
++        all[index].title = title
++        ownPacks = all
++    }
++
++    public static func removeOwnPack(id: Int) {
++        var all = ownPacks
++        all.removeAll(where: { $0.id == id })
++        ownPacks = all
++        if pack == id {
++            pack = 0
++        }
++    }
++
++    /// Старые правки жили одним безымянным словарём поверх набора. Превращаем
++    /// их в первый свой набор — вместе с тем готовым, поверх которого они
++    /// лежали, иначе хозяин увидел бы не то, что видел вчера.
++    private static func migrateIfNeeded() {
++        guard UserDefaults.standard.object(forKey: ownPacksKey) == nil else {
++            return
++        }
++        let legacy = (UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: String]) ?? [:]
++        guard !legacy.isEmpty else {
++            UserDefaults.standard.set([], forKey: ownPacksKey)
++            return
++        }
++        let current = UserDefaults.standard.integer(forKey: packKey)
++        var strings = packs.first(where: { $0.id == current })?.strings ?? [:]
++        for (key, value) in legacy {
++            strings[key] = value
++        }
++        UserDefaults.standard.set([["id": firstOwnId, "title": "Мои надписи", "strings": strings]], forKey: ownPacksKey)
++        UserDefaults.standard.set(firstOwnId, forKey: packKey)
++        UserDefaults.standard.removeObject(forKey: overridesKey)
++    }
++
++    /// Слова выбранного своего набора — то, что правит редактор надписей.
++    public static var overrides: [String: String] {
++        get { return selectedOwnPack?.strings ?? [:] }
++        set {
++            guard let current = selectedOwnPack else {
++                return
++            }
++            var all = ownPacks
++            guard let index = all.firstIndex(where: { $0.id == current.id }) else {
++                return
++            }
++            all[index].strings = newValue
++            ownPacks = all
++        }
++    }
++
+     /// Правка одной надписи; пустая строка убирает правку.
+     public static func setOverride(key: String, text: String?) {
++        if selectedOwnPack == nil {
++            // Правят, а свой набор не выбран. Делаем его из того, что сейчас
++            // видно, и выбираем: иначе правка ушла бы в никуда.
++            let base = packs.first(where: { $0.id == pack })
++            var all = ownPacks
++            let id = (all.map({ $0.id }).max() ?? (firstOwnId - 1)) + 1
++            all.append(OwnPack(id: id, title: base?.title ?? "Мои надписи", strings: base?.strings ?? [:]))
++            ownPacks = all
++            pack = id
++        }
+         var all = overrides
+         if let text = text, !text.isEmpty {
+             all[key] = text
+@@ -660,27 +772,23 @@ public enum LunagramWording {
+         overrides = all
+     }
+ 
+-    /// Убрать все свои правки, набор остаётся.
++    /// Убрать все свои слова, набор остаётся.
+     public static func clearOverrides() {
+         overrides = [:]
+     }
+ 
+-    /// Что показывать сейчас: набор, а поверх него свои правки.
++    /// Что показывать сейчас: слова выбранного набора.
+     public static func effective() -> [String: String] {
+-        var result: [String: String] = [:]
+-        if let selected = packs.first(where: { $0.id == pack }) {
+-            result = selected.strings
+-        }
+-        for (key, value) in overrides {
+-            result[key] = value
++        if let own = selectedOwnPack {
++            return own.strings
+         }
+-        return result
++        return packs.first(where: { $0.id == pack })?.strings ?? [:]
+     }
+ 
+     /// Какой текст сейчас у надписи по нашим правилам; nil — родной.
+     public static func currentText(for key: String) -> String? {
+-        if let own = overrides[key] {
+-            return own
++        if let own = selectedOwnPack {
++            return own.strings[key]
+         }
+         return packs.first(where: { $0.id == pack })?.strings[key]
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index cd86c9e6..02903d04 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -648,6 +648,37 @@ private enum LunagramTileKind: Int32 {
+     }
+ }
+ 
++/// Окошко «впиши название». Родное системное — такое же, как в редакторе
++/// надписей: поле ввода и две кнопки.
++private func lunagramAskName(context: AccountContext, title: String, value: String, done: @escaping (String) -> Void) {
++    let alert = UIAlertController(title: title, message: "Как назвать набор?", preferredStyle: .alert)
++    alert.addTextField(configurationHandler: { field in
++        field.text = value
++        field.placeholder = "Название"
++        field.clearButtonMode = .whileEditing
++        field.autocapitalizationType = .sentences
++    })
++    alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: nil))
++    alert.addAction(UIAlertAction(title: "Готово", style: .default, handler: { [weak alert] _ in
++        let name = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
++        guard !name.isEmpty else {
++            return
++        }
++        done(name)
++    }))
++    (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(alert, animated: true, completion: nil)
++}
++
++/// Окошко «точно удалить?» — набор со словами вернуть будет нельзя.
++private func lunagramAskDelete(context: AccountContext, title: String, done: @escaping () -> Void) {
++    let alert = UIAlertController(title: title, message: "Удалить набор вместе со словами? Вернуть его будет нельзя.", preferredStyle: .alert)
++    alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: nil))
++    alert.addAction(UIAlertAction(title: "Удалить", style: .destructive, handler: { _ in
++        done()
++    }))
++    (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController?.present(alert, animated: true, completion: nil)
++}
++
+ /// Собирает экран как на ПК: заголовок раздела, строки, под строкой —
+ /// подпись. Подпись закрывает свой блок, и следующая строка идёт уже новым
+ /// блоком — так подпись встаёт ровно под своей строкой, как на ПК.
+@@ -1293,6 +1324,9 @@ private struct LunagramMediaState: Equatable {
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
+     var wordingPack: Int = 0
++    /// Отпечаток своих наборов: номера и названия. Нужен затем же, зачем
++    /// остальное в этом состоянии, — чтобы список заметил перемену.
++    var wordingOwn: String = ""
+     var deletedIconColor: UInt32 = 0xFF3B30
+     var composeDensity: Int = 75
+     var chatStickersDepth: Int = 2_000
+@@ -1317,6 +1351,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
+         state.wordingPack = LunagramWording.pack
++        state.wordingOwn = LunagramWording.ownPacks.map({ "\($0.id):\($0.title):\($0.strings.count)" }).joined(separator: "|")
+         state.deletedIconColor = LunagramSettings.deletedIconColor
+         state.composeDensity = LunagramSettings.composeDensity
+         state.chatStickersDepth = LunagramSettings.chatStickersDepth
+@@ -2198,6 +2233,30 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             refreshMedia()
+         case .wordingEditor:
+             shared.push?(lunagramWordingEditor(context: context))
++        case .wordingNew:
++            lunagramAskName(context: context, title: "Новый набор", value: "", done: { name in
++                // Сразу выбираем и открываем правку: название придумано, дальше
++                // хозяин шёл за словами, а не обратно в список.
++                LunagramWording.pack = LunagramWording.addOwnPack(title: name)
++                refreshMedia()
++                shared.push?(lunagramWordingEditor(context: context))
++            })
++        case .wordingRename:
++            guard let current = LunagramWording.selectedOwnPack else {
++                return
++            }
++            lunagramAskName(context: context, title: "Переименовать", value: current.title, done: { name in
++                LunagramWording.renameOwnPack(id: current.id, title: name)
++                refreshMedia()
++            })
++        case .wordingDelete:
++            guard let current = LunagramWording.selectedOwnPack else {
++                return
++            }
++            lunagramAskDelete(context: context, title: current.title, done: {
++                LunagramWording.removeOwnPack(id: current.id)
++                refreshMedia()
++            })
+         case .deletedIconColor:
+             guard #available(iOS 14.0, *) else {
+                 return
+@@ -2329,6 +2388,9 @@ private enum LunagramChoice: Int32 {
+     case composeColor = 50
+     case composeReset = 51
+     case wordingEditor = 60
++    case wordingNew = 61
++    case wordingRename = 62
++    case wordingDelete = 63
+     case deletedIconColor = 70
+     case composeAction = 81
+     case composePeer = 82
+@@ -2628,8 +2690,23 @@ private func lunagramWordingEntries(media: LunagramMediaState) -> [LunagramSetti
+     for pack in LunagramWording.packs {
+         rows.row(.choice(pack.id, "\(pack.title) — \(pack.sample)", media.wordingPack == pack.id))
+     }
+-    rows.header("Свои слова")
+-    rows.row(.action(LunagramChoice.wordingEditor.rawValue, "Свои надписи", "pencil.and.list.clipboard,square.and.pencil"))
++    rows.header("Свои наборы")
++    let ownPacks = LunagramWording.ownPacks
++    for pack in ownPacks {
++        let count = pack.strings.count
++        let tail = count == 0 ? "пока пусто" : "своих слов \(count)"
++        rows.row(.choice(pack.id, "\(pack.title) — \(tail)", media.wordingPack == pack.id))
++    }
++    rows.row(.action(LunagramChoice.wordingNew.rawValue, "Новый набор", "plus"))
++    rows.info("Сначала придумай название, потом впиши слова. Наборов можно сделать сколько угодно — все сохраняются и остаются в этом списке.")
++
++    if ownPacks.contains(where: { $0.id == media.wordingPack }) {
++        rows.header("Выбранный набор")
++        rows.row(.action(LunagramChoice.wordingEditor.rawValue, "Править надписи", "pencil.and.list.clipboard,square.and.pencil"))
++        rows.row(.action(LunagramChoice.wordingRename.rawValue, "Переименовать", "textformat"))
++        rows.row(.action(LunagramChoice.wordingDelete.rawValue, "Удалить набор", "trash"))
++        rows.info("Готовые наборы удалить нельзя — они не твои. Своё удаляется вместе со словами.")
++    }
+     rows.info("Набор меняет надписи внутри Lunagram: вкладки, меню сообщения, кнопки, «печатает…», «был недавно». Это не язык Telegram: ставить по ссылке ничего не надо и на собеседников это не влияет — они видят свои обычные надписи.\n\nЧасть надписей встанет сразу, остальные — после перезапуска Lunagram.")
+     return rows.entries
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
+index 25fbdd0c..3317909e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramWordingEditor.swift
+@@ -149,9 +149,9 @@ func lunagramWordingEditor(context: AccountContext) -> ViewController {
+         if entries.count <= 2 {
+             entries.append(.info("Ничего не нашлось. Ищи по названию места («печатает», «Избранное») или по самому тексту."))
+         } else {
+-            entries.append(.info("Нажми строку и впиши своё. Правка ложится поверх выбранного набора: что не трогал — остаётся из набора. Пустая строка возвращает надпись как была.\n\nЧасть надписей меняется сразу, остальные — после перезапуска Lunagram."))
++            entries.append(.info("Нажми строку и впиши своё. Чего не тронул — остаётся как в самом Telegram. Пустая строка возвращает надпись обратно.\n\nЧасть надписей меняется сразу, остальные — после перезапуска Lunagram."))
+         }
+-        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Свои надписи"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(LunagramWording.selectedOwnPack?.title ?? "Свои надписи"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
+         return (controllerState, (listState, arguments))
+     }
