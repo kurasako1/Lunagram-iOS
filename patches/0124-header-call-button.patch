@@ -1,0 +1,271 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index cecef360..a2a449e1 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -94,6 +94,7 @@ public final class LunagramSettings {
+         static let profileBackgroundZoom = "lunagram.profile.backgroundZoom"
+         static let profileBackgroundOwner = "lunagram.profile.backgroundOwner"
+         static let settingsBackground = "lunagram.profile.settingsBackground"
++        static let headerCallButton = "lunagram.chat.headerCallButton"
+         // Фон полоски с песней в своём профиле — как на ПК.
+         static let profileMusicBgFile = "lunagram.profile.musicBgFile"
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+@@ -836,6 +837,23 @@ public final class LunagramSettings {
+         return "\(deletedIconColor)-\(showMessageSeconds ? 1 : 0)"
+     }
+ 
++    /// Кнопка звонка в шапке личной переписки.
++    ///
++    /// По умолчанию включена: её и просили. Выключишь — звонок останется там,
++    /// где он у Telegram и был, в меню «…».
++    public static var headerCallButton: Bool {
++        get {
++            guard defaults.object(forKey: Key.headerCallButton) != nil else {
++                return true
++            }
++            return defaults.bool(forKey: Key.headerCallButton)
++        }
++        set {
++            defaults.set(newValue, forKey: Key.headerCallButton)
++            changed()
++        }
++    }
++
+     /// Сохранять удалённое и в переписках с ботами.
+     public static var saveForBots: Bool {
+         get { return LunagramSpySettings.saveForBots }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 5ae73825..415ad542 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -48,6 +48,7 @@ private enum LunagramToggle: Int32 {
+     case ghostAutoOffline
+     case showMutedDeleted
+     case settingsBackground
++    case headerCallButton
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
+@@ -123,6 +124,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.showMutedDeleted
+         case .settingsBackground:
+             return LunagramSettings.settingsBackground
++        case .headerCallButton:
++            return LunagramSettings.headerCallButton
+         case .voiceLengthInList:
+             return LunagramSettings.voiceLengthInList
+         case .storiesClickOnly:
+@@ -216,6 +219,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.showMutedDeleted = value
+         case .settingsBackground:
+             LunagramSettings.settingsBackground = value
++        case .headerCallButton:
++            LunagramSettings.headerCallButton = value
+         case .voiceLengthInList:
+             LunagramSettings.voiceLengthInList = value
+         case .storiesClickOnly:
+@@ -309,6 +314,8 @@ private enum LunagramToggle: Int32 {
+             return "Показывать заглушённое"
+         case .settingsBackground:
+             return "Фон и в настройках"
++        case .headerCallButton:
++            return "Кнопка звонка в шапке"
+         case .voiceLengthInList:
+             return "Длина голосовых"
+         case .storiesClickOnly:
+@@ -394,7 +401,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .headerCallButton, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -2994,6 +3001,8 @@ private func lunagramPlaceEntries(
+         rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
+         rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
+         rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
++        rows.row(.toggle(.headerCallButton, value(.headerCallButton), "Кнопка звонка в шапке", "phone"))
++        rows.info("В шапке личной переписки появится кнопка звонка, слева от «…». Нажатие — голосовой звонок, долгое нажатие — видео.\n\nПоявляется только там, где звонок и так возможен: не с ботом, не с самим собой и если собеседник звонки разрешает. «Позвонить» из меню «…» никуда не девается.")
+         rows.row(.toggle(.roundFromVideo, value(.roundFromVideo), "Кружок из любого видео", "video.circle"))
+         rows.info("Любое видео из галереи можно отправить кружком: оно обрежется по кругу и ужмётся до нужной длительности.")
+ 
+diff --git a/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift b/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
+index 74efe5c0..ae5118b8 100644
+--- a/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
++++ b/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
+@@ -46,6 +46,11 @@ extension ChatControllerImpl {
+         }
+ 
+         var rightBarButtons: [UIBarButtonItem] = []
++        // Lunagram: звонок — первым в списке, то есть левее «…»: кнопки
++        // раскладываются слева направо в порядке этого списка.
++        if let lunagramCallBarItem = self.lunagramCallBarButtonItem(presentationInterfaceState: presentationInterfaceState) {
++            rightBarButtons.append(lunagramCallBarItem)
++        }
+         if let rightNavigationButton = self.rightNavigationButton {
+             rightBarButtons.append(rightNavigationButton.buttonItem)
+         }
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index a54f294b..83849e09 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -304,6 +304,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     var chatInfoNavigationButton: ChatNavigationButton?
+     
+     var moreBarButton: MoreHeaderButton
++    // Lunagram: кнопка звонка в шапке. Держим её, а не создаём заново на
++    // каждое обновление: иначе она мигала бы и теряла долгое нажатие.
++    var lunagramCallButton: LunagramHeaderCallButton?
++    var lunagramCallBarItem: UIBarButtonItem?
+     var moreInfoNavigationButton: ChatNavigationButton?
+     
+     var historyStateDisposable: Disposable?
+diff --git a/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift b/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift
+new file mode 100644
+index 00000000..49f427c2
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift
+@@ -0,0 +1,141 @@
++import Foundation
++import UIKit
++import AsyncDisplayKit
++import Display
++import TelegramCore
++import TelegramPresentationData
++import AccountContext
++import ChatPresentationInterfaceState
++import Lunagram
++
++// Lunagram: кнопка звонка в шапке личной переписки.
++//
++// В Telegram на айфоне звонок спрятан в меню «…» — два нажатия вместо одного.
++// Кладём его в шапку слева от «…», как в официальном клиенте на других
++// платформах.
++//
++// Нажатие — голосовой звонок, долгое — видео. Второй кнопки рядом не ставим:
++// шапка узкая, и имя собеседника пришлось бы подвинуть.
++//
++// Имена с приметой «lunagram» не для красоты: у узлов Telegram уже есть свои
++// `tapped()` и прочие, и одноимённый метод молча перекрыл бы родительский.
++final class LunagramHeaderCallButton: HighlightableButtonNode {
++    private let iconNode: ASImageNode
++    private var appliedColor: UIColor?
++
++    /// Долгое нажатие — видеозвонок.
++    var lunagramLongPressed: (() -> Void)?
++
++    override init(pointerStyle: PointerStyle? = nil) {
++        self.iconNode = ASImageNode()
++        self.iconNode.displaysAsynchronously = false
++        self.iconNode.displayWithoutProcessing = true
++
++        super.init(pointerStyle: pointerStyle)
++
++        self.addSubnode(self.iconNode)
++        self.frame = CGRect(origin: CGPoint(), size: CGSize(width: 44.0, height: 44.0))
++    }
++
++    override func didLoad() {
++        super.didLoad()
++
++        let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.lunagramHandleLongPress(_:)))
++        recognizer.minimumPressDuration = 0.4
++        self.view.addGestureRecognizer(recognizer)
++    }
++
++    @objc private func lunagramHandleLongPress(_ recognizer: UILongPressGestureRecognizer) {
++        guard recognizer.state == .began else {
++            return
++        }
++        self.lunagramLongPressed?()
++    }
++
++    /// Значок берём телеграмовский — тот же, что у «Позвонить» в меню.
++    func lunagramUpdate(color: UIColor) {
++        if self.appliedColor != color || self.iconNode.image == nil {
++            self.appliedColor = color
++            self.iconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Call"), color: color)
++        }
++        if let image = self.iconNode.image {
++            self.iconNode.frame = CGRect(
++                origin: CGPoint(
++                    x: floor((self.bounds.width - image.size.width) / 2.0),
++                    y: floor((self.bounds.height - image.size.height) / 2.0)
++                ),
++                size: image.size
++            )
++        }
++    }
++}
++
++extension ChatControllerImpl {
++    /// Кнопка звонка для шапки — или `nil`, если её сейчас быть не должно.
++    ///
++    /// Условия те же, по которым Telegram показывает «Позвонить» в меню:
++    /// личная переписка не с самим собой, не с ботом, и собеседник звонки
++    /// разрешает. Плюс наши: при выделении сообщений и в поиске шапка занята
++    /// другим, и лезть туда со своей кнопкой нельзя.
++    func lunagramCallBarButtonItem(presentationInterfaceState: ChatPresentationInterfaceState) -> UIBarButtonItem? {
++        guard LunagramSettings.headerCallButton else {
++            return nil
++        }
++        guard case let .peer(peerId) = presentationInterfaceState.chatLocation else {
++            return nil
++        }
++        guard peerId.namespace == Namespaces.Peer.CloudUser, peerId != self.context.account.peerId else {
++            return nil
++        }
++        guard let user = presentationInterfaceState.renderedPeer?.peer as? TelegramUser, user.botInfo == nil else {
++            return nil
++        }
++        guard presentationInterfaceState.callsAvailable else {
++            return nil
++        }
++        if presentationInterfaceState.interfaceState.selectionState != nil {
++            return nil
++        }
++        if presentationInterfaceState.search != nil {
++            return nil
++        }
++        if case .standard(.previewing) = presentationInterfaceState.mode {
++            return nil
++        }
++
++        let button: LunagramHeaderCallButton
++        if let current = self.lunagramCallButton {
++            button = current
++        } else {
++            button = LunagramHeaderCallButton()
++            button.addTarget(self, action: #selector(self.lunagramCallButtonPressed), forControlEvents: .touchUpInside)
++            button.lunagramLongPressed = { [weak self] in
++                self?.lunagramStartCall(isVideo: true)
++            }
++            self.lunagramCallButton = button
++            self.lunagramCallBarItem = UIBarButtonItem(customDisplayNode: button)
++        }
++        button.lunagramUpdate(color: presentationInterfaceState.theme.rootController.navigationBar.buttonColor)
++        return self.lunagramCallBarItem
++    }
++
++    @objc func lunagramCallButtonPressed() {
++        self.lunagramStartCall(isVideo: false)
++    }
++
++    /// Звоним тем же путём, что и пункт меню, — вместе со всеми его проверками
++    /// (недописанное голосовое, закрытые звонки у собеседника).
++    func lunagramStartCall(isVideo: Bool) {
++        guard case let .peer(peerId) = self.chatLocation else {
++            return
++        }
++        if isVideo {
++            // Видео предлагаем, только если собеседник его разрешает. Иначе
++            // долгое нажатие молча начало бы обычный звонок — это обман.
++            guard let cachedData = self.contentData?.state.peerView?.cachedData as? CachedUserData, cachedData.videoCallsAvailable else {
++                return
++            }
++        }
++        self.controllerInteraction?.callPeer(peerId, isVideo)
++    }
++}
