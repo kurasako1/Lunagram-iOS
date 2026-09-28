@@ -1,0 +1,363 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+new file mode 100644
+index 00000000..1876f884
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+@@ -0,0 +1,201 @@
++import Foundation
++import UIKit
++import Display
++import AsyncDisplayKit
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++
++// Lunagram: свёрнутое описание под строкой.
++//
++// Раньше описание лежало под строкой целиком, и экран вытягивался в несколько
++// ростов телефона: у каждой настройки по абзацу, а читают их один раз. Хозяин
++// попросил сворачивать: видна первая строка, к концу буквы тают, справа
++// стрелка. Нажал — раскрылось целиком, стрелка повернулась.
++//
++// Почему своя строка, а не стрелка у самой настройки: описание есть не только у
++// галочек, но и у ползунков, у строк выбора, у цветных кружков и у целых
++// разделов. Отдельная строка одинаково ложится под любую из них, и не надо
++// учить каждый вид строк показывать стрелку по-своему.
++
++final class LunagramAboutItem: ListViewItem, ItemListItem {
++    let presentationData: ItemListPresentationData
++    let text: String
++    let isExpanded: Bool
++    let sectionId: ItemListSectionId
++    let toggle: () -> Void
++    /// Описание живёт вне карточки, как и родная подпись под блоком.
++    let isAlwaysPlain: Bool = true
++    let tag: ItemListItemTag? = nil
++
++    init(presentationData: ItemListPresentationData, text: String, isExpanded: Bool, sectionId: ItemListSectionId, toggle: @escaping () -> Void) {
++        self.presentationData = presentationData
++        self.text = text
++        self.isExpanded = isExpanded
++        self.sectionId = sectionId
++        self.toggle = toggle
++    }
++
++    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
++        async {
++            let node = LunagramAboutItemNode()
++            let (layout, apply) = node.asyncLayout()(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++            node.contentSize = layout.contentSize
++            node.insets = layout.insets
++            Queue.mainQueue().async {
++                completion(node, {
++                    return (nil, { _ in apply() })
++                })
++            }
++        }
++    }
++
++    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
++        Queue.mainQueue().async {
++            guard let nodeValue = node() as? LunagramAboutItemNode else {
++                assertionFailure()
++                return
++            }
++            let makeLayout = nodeValue.asyncLayout()
++            async {
++                let (layout, apply) = makeLayout(self, params, itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem))
++                Queue.mainQueue().async {
++                    completion(layout, { _ in
++                        apply()
++                    })
++                }
++            }
++        }
++    }
++}
++
++final class LunagramAboutItemNode: ListViewItemNode {
++    private let textNode: TextNode
++    private let arrowNode: ASImageNode
++    /// Растворение хвоста: маска поверх текста, а не другой цвет. Цвет пришлось
++    /// бы подбирать под фон, а под списком у нас бывает картинка.
++    private let fadeLayer: CAGradientLayer
++
++    private var item: LunagramAboutItem?
++    /// Своя копия картинки стрелки: раскладка идёт не на главном потоке, и
++    /// спрашивать её у узла оттуда нельзя.
++    private var arrowImage: UIImage?
++
++    init() {
++        self.textNode = TextNode()
++        self.textNode.isUserInteractionEnabled = false
++        self.textNode.contentMode = .topLeft
++        self.textNode.contentsScale = UIScreen.main.scale
++
++        self.arrowNode = ASImageNode()
++        self.arrowNode.isLayerBacked = true
++        self.arrowNode.displaysAsynchronously = false
++        self.arrowNode.displayWithoutProcessing = true
++
++        self.fadeLayer = CAGradientLayer()
++        self.fadeLayer.startPoint = CGPoint(x: 0.0, y: 0.5)
++        self.fadeLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
++        self.fadeLayer.locations = [0.0, 0.82, 1.0] as [NSNumber]
++        self.fadeLayer.colors = [
++            UIColor.white.cgColor,
++            UIColor.white.cgColor,
++            UIColor.white.withAlphaComponent(0.25).cgColor
++        ]
++
++        super.init(layerBacked: false, dynamicBounce: false)
++
++        self.addSubnode(self.textNode)
++        self.addSubnode(self.arrowNode)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++
++        let recognizer = UITapGestureRecognizer(target: self, action: #selector(self.tapped))
++        self.view.addGestureRecognizer(recognizer)
++    }
++
++    @objc private func tapped() {
++        self.item?.toggle()
++    }
++
++    func asyncLayout() -> (_ item: LunagramAboutItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
++        let makeTextLayout = TextNode.asyncLayout(self.textNode)
++        let currentItem = self.item
++        let currentArrow = self.arrowImage
++
++        return { [weak self] item, params, neighbors in
++            let leftInset: CGFloat = 15.0 + params.leftInset
++            let rightInset: CGFloat = 15.0 + params.rightInset
++            let arrowWidth: CGFloat = 16.0
++            let topInset: CGFloat = 7.0
++            let bottomInset: CGFloat = 7.0
++
++            let font = Font.regular(item.presentationData.fontSize.itemListBaseHeaderFontSize)
++            let color = item.presentationData.theme.list.freeTextColor
++
++            // Стрелка нужна только чтобы показать, что описание раскрывается;
++            // цвет у неё тот же, что у текста, — она не кнопка со своим смыслом.
++            var arrowImage = currentArrow
++            if currentItem?.presentationData.theme !== item.presentationData.theme || arrowImage == nil {
++                arrowImage = generateTintedImage(image: UIImage(bundleImageName: "Contact List/SubtitleArrow"), color: color)
++            }
++
++            let textWidth = max(1.0, params.width - leftInset - rightInset - arrowWidth - 4.0)
++            let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(
++                attributedString: NSAttributedString(string: item.text, font: font, textColor: color),
++                backgroundColor: nil,
++                maximumNumberOfLines: item.isExpanded ? 0 : 1,
++                truncationType: .end,
++                constrainedSize: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
++                alignment: .natural,
++                cutout: nil,
++                insets: UIEdgeInsets()
++            ))
++
++            let contentSize = CGSize(width: params.width, height: textLayout.size.height + topInset + bottomInset)
++            let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: itemListNeighborsGroupedInsets(neighbors, params))
++
++            return (layout, {
++                guard let strongSelf = self else {
++                    return
++                }
++                strongSelf.item = item
++                strongSelf.arrowImage = arrowImage
++                strongSelf.arrowNode.image = arrowImage
++
++                let _ = textApply()
++                let textFrame = CGRect(origin: CGPoint(x: leftInset, y: topInset), size: textLayout.size)
++                strongSelf.textNode.frame = textFrame
++
++                // Растворение — только у свёрнутого: у раскрытого прятать нечего.
++                if item.isExpanded {
++                    strongSelf.textNode.layer.mask = nil
++                    strongSelf.fadeLayer.removeFromSuperlayer()
++                } else {
++                    strongSelf.fadeLayer.frame = CGRect(origin: CGPoint(), size: textFrame.size)
++                    strongSelf.textNode.layer.mask = strongSelf.fadeLayer
++                }
++
++                if let arrowImage = arrowImage {
++                    // Свёрнуто — стрелка вправо, раскрыто — вниз. Поворачиваем
++                    // ту же картинку: своей для каждого положения не нужно.
++                    let arrowFrame = CGRect(
++                        origin: CGPoint(x: params.width - rightInset - arrowImage.size.width, y: topInset + floor((font.lineHeight - arrowImage.size.height) / 2.0) + 1.0),
++                        size: arrowImage.size
++                    )
++                    strongSelf.arrowNode.frame = arrowFrame
++                    strongSelf.arrowNode.transform = CATransform3DMakeRotation(item.isExpanded ? CGFloat.pi / 2.0 : 0.0, 0.0, 0.0, 1.0)
++                }
++            })
++        }
++    }
++
++    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
++        self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
++    }
++
++    override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
++        self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 02903d04..5ae73825 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -628,6 +628,26 @@ private enum LunagramRow: Equatable {
+     // То же для маскировки устройства: номер в списке, название, выбрано ли.
+     case device(Int, String, Bool)
+     case info(String)
++    // Свёрнутое описание: текст и раскрыто ли оно.
++    case about(String, Bool)
++}
++
++/// Какие описания сейчас раскрыты.
++///
++/// Ключ — сам текст описания. Не номер строки: строки меняются местами и
++/// появляются по условию, и номер со временем указал бы не на то описание. И не
++/// в настройках: раскрыто описание или нет — это состояние взгляда, ему незачем
++/// переживать перезапуск.
++private enum LunagramExpandedInfos {
++    static var current: Set<String> = []
++
++    static func toggle(_ text: String) {
++        if current.contains(text) {
++            current.remove(text)
++        } else {
++            current.insert(text)
++        }
++    }
+ }
+ 
+ /// Чьи плитки: баннер, рамка или фон под списком профиля.
+@@ -687,10 +707,6 @@ private struct LunagramRowsBuilder {
+     private var block: Int32 = 0
+     private var order: Int32 = 0
+     private var closed = false
+-    /// Какие строки сейчас раскрыты. Пусто — описания показываем как
+-    /// раньше, отдельной подписью под блоком.
+-    var expanded: Set<Int32>?
+-
+     mutating func header(_ text: String) {
+         if !self.entries.isEmpty {
+             self.block += 1
+@@ -707,25 +723,16 @@ private struct LunagramRowsBuilder {
+         self.append(row)
+     }
+ 
+-    /// Подпись под строкой.
++    /// Подпись под строкой — свёрнутая.
++    ///
++    /// Видна первая строка, к концу буквы тают, справа стрелка. Нажал —
++    /// раскрылось целиком. Раньше подпись лежала целиком, и экран вытягивался в
++    /// несколько ростов телефона: у каждой настройки по абзацу, а читают их один
++    /// раз.
+     ///
+-    /// Где умеем — прячем её за стрелку у самой строки: экран иначе
+-    /// вытягивается в несколько ростов, а описания читают один раз. Где не
+-    /// умеем — оставляем подписью под блоком, как было. Блок в обоих
+-    /// случаях закрываем: разбивка на карточки от этого меняться не должна.
++    /// Блок закрываем, как и раньше: разбивка на карточки от этого не меняется.
+     mutating func info(_ text: String) {
+-        if let expanded = self.expanded,
+-           case let .row(block, order, last)? = self.entries.last,
+-           case let .toggle(toggle, value, title, icon) = last {
+-            self.entries[self.entries.count - 1] = .row(
+-                block,
+-                order,
+-                .toggleAbout(toggle, value, title, icon, text, expanded.contains(toggle.rawValue))
+-            )
+-            self.closed = true
+-            return
+-        }
+-        self.row(.info(text))
++        self.row(.about(text, LunagramExpandedInfos.current.contains(text)))
+         self.closed = true
+     }
+ 
+@@ -784,6 +791,8 @@ private final class LunagramSettingsControllerArguments {
+     let ghostExpand: () -> Void
+     let readMaster: (Bool) -> Void
+     let toggleExpand: (LunagramToggle) -> Void
++    // Свёрнутое описание: раскрыть или закрыть. Ключ — сам текст.
++    let toggleInfo: (String) -> Void
+     let openEditor: (LunagramSettingsSection) -> Void
+     // Строка со значением справа: открыть выбор (номера — см. LunagramChoice).
+     let openChoice: (Int32) -> Void
+@@ -795,7 +804,7 @@ private final class LunagramSettingsControllerArguments {
+     // Нужен образцам: по нему берётся своя аватарка.
+     let context: AccountContext
+ 
+-    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, chooseWording: @escaping (Int) -> Void, chooseDevice: @escaping (Int) -> Void, context: AccountContext) {
++    init(toggle: @escaping (LunagramToggle, Bool) -> Void, pick: @escaping (LunagramSettingsSection) -> Void, setDim: @escaping (LunagramSettingsSection, Int) -> Void, setSlider: @escaping (Int32, Int) -> Void, updateText: @escaping (LunagramSettingsSection, String) -> Void, photoAction: @escaping (Int) -> Void, openCategory: @escaping (LunagramSettingsCategory) -> Void, openGroup: @escaping (LunagramSettingsGroup) -> Void, ghostMaster: @escaping (Bool) -> Void, ghostExpand: @escaping () -> Void, readMaster: @escaping (Bool) -> Void, toggleExpand: @escaping (LunagramToggle) -> Void, toggleInfo: @escaping (String) -> Void, openEditor: @escaping (LunagramSettingsSection) -> Void, openChoice: @escaping (Int32) -> Void, tile: @escaping (Int32, String, Bool) -> Void, chooseWording: @escaping (Int) -> Void, chooseDevice: @escaping (Int) -> Void, context: AccountContext) {
+         self.openChoice = openChoice
+         self.tile = tile
+         self.chooseWording = chooseWording
+@@ -813,6 +822,7 @@ private final class LunagramSettingsControllerArguments {
+         self.ghostExpand = ghostExpand
+         self.readMaster = readMaster
+         self.toggleExpand = toggleExpand
++        self.toggleInfo = toggleInfo
+         self.openEditor = openEditor
+     }
+ }
+@@ -1328,6 +1338,8 @@ private struct LunagramMediaState: Equatable {
+     /// остальное в этом состоянии, — чтобы список заметил перемену.
+     var wordingOwn: String = ""
+     var deletedIconColor: UInt32 = 0xFF3B30
++    /// Лежит здесь только затем, чтобы список заметил перемену и пересобрался.
++    var expandedInfos: Set<String> = []
+     var composeDensity: Int = 75
+     var chatStickersDepth: Int = 2_000
+     var mentionAvatarSize: Int = 50
+@@ -1353,6 +1365,7 @@ private struct LunagramMediaState: Equatable {
+         state.wordingPack = LunagramWording.pack
+         state.wordingOwn = LunagramWording.ownPacks.map({ "\($0.id):\($0.title):\($0.strings.count)" }).joined(separator: "|")
+         state.deletedIconColor = LunagramSettings.deletedIconColor
++        state.expandedInfos = LunagramExpandedInfos.current
+         state.composeDensity = LunagramSettings.composeDensity
+         state.chatStickersDepth = LunagramSettings.chatStickersDepth
+         state.profileTextColor = LunagramSettings.profileButtonsColor
+@@ -2029,6 +2042,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.expandedToggles.insert(toggle.rawValue)
+         }
+         shared.expandedTogglesPromise.set(shared.expandedToggles)
++    }, toggleInfo: { text in
++        LunagramExpandedInfos.toggle(text)
++        refreshMedia()
+     }, openEditor: { section in
+         let kind: LunagramCropEditor.Kind
+         switch section {
+@@ -2597,6 +2613,10 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+         })
+     case let .info(text):
+         return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: sectionId)
++    case let .about(text, expanded):
++        return LunagramAboutItem(presentationData: presentationData, text: text, isExpanded: expanded, sectionId: sectionId, toggle: {
++            arguments.toggleInfo(text)
++        })
+     }
+ }
+ 
+@@ -2750,7 +2770,6 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+         return values[toggle] ?? toggle.value
+     }
+     var rows = LunagramRowsBuilder()
+-    rows.expanded = expandedToggles
+ 
+ 
+     rows.header("Режим призрака")
+@@ -2868,7 +2887,6 @@ private func lunagramPlaceEntries(
+         return values[toggle] ?? toggle.value
+     }
+     var rows = LunagramRowsBuilder()
+-    rows.expanded = expandedToggles
+ 
+     switch place {
+     case .ghost:
