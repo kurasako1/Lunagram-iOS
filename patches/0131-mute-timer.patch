@@ -1,0 +1,172 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 55c17ef0..f30ae28c 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -687,12 +687,22 @@ public final class LunagramSettings {
+         return LunagramSpySettings.isMuted(id)
+     }
+ 
+-    /// Включить или снять глушение.
+-    public static func toggleMuted(_ id: Int64) {
+-        LunagramSpySettings.toggleMuted(id)
++    /// Заглушить на срок; пусто — пока не снимут сам.
++    public static func mute(_ id: Int64, seconds: Double?) {
++        LunagramSpySettings.mute(id, seconds: seconds)
+         changed()
+     }
+ 
++    public static func unmute(_ id: Int64) {
++        LunagramSpySettings.unmute(id)
++        changed()
++    }
++
++    /// До какого времени заглушён; ноль — пока не снимут, nil — не заглушён.
++    public static func mutedUntil(_ id: Int64) -> Double? {
++        return LunagramSpySettings.mutedUntil(id)
++    }
++
+     /// Отправлять без звука: 0 — никогда, 1 — только в режиме призрака,
+     /// 2 — всегда. Как на ПК.
+     public static var sendWithoutSound: Int {
+diff --git a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+index cc32de09..006de9cf 100644
+--- a/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
++++ b/submodules/LunagramGhost/Sources/LunagramSpySettings.swift
+@@ -12,6 +12,7 @@ public enum LunagramSpySettings {
+         static let keepEditHistory = "lunagram.spy.keepEditHistory"
+         static let saveForBots = "lunagram.spy.saveForBots"
+         static let mutedPeers = "lunagram.spy.mutedPeers"
++        static let mutedUntil = "lunagram.spy.mutedUntil"
+         static let showMutedDeleted = "lunagram.spy.showMutedDeleted"
+     }
+ 
+@@ -72,25 +73,59 @@ public enum LunagramSpySettings {
+     /// Быстрая проверка «список пуст» — чтобы не разбирать его на каждом
+     /// пришедшем сообщении, если глушить некого.
+     public static var mutedIsEmpty: Bool {
+-        return (defaults.stringArray(forKey: Key.mutedPeers) ?? []).isEmpty
++        return (defaults.dictionary(forKey: Key.mutedUntil) as? [String: Double])?.isEmpty ?? true
+     }
+ 
+     public static func isMuted(_ id: Int64) -> Bool {
+-        return muted().contains(id)
++        guard let until = mutedMap()[String(id)] else {
++            return false
++        }
++        if until <= 0.0 {
++            return true
++        }
++        if until > Date().timeIntervalSince1970 {
++            return true
++        }
++        // Срок вышел — снимаем прямо здесь. Будильника заводить не стоит:
++        // проверка и так зовётся на каждом пришедшем сообщении.
++        unmute(id)
++        return false
+     }
+ 
+-    /// Включить или снять глушение человека или группы.
+-    public static func toggleMuted(_ id: Int64) {
+-        var set = muted()
+-        if set.contains(id) {
+-            set.remove(id)
+-        } else {
+-            set.insert(id)
+-        }
+-        defaults.set(set.map { String($0) }, forKey: Key.mutedPeers)
++    /// До какого времени заглушён; ноль — пока не снимут, nil — не заглушён.
++    public static func mutedUntil(_ id: Int64) -> Double? {
++        return mutedMap()[String(id)]
++    }
++
++    /// Заглушить на срок. `seconds` пустое — пока не снимут сам.
++    public static func mute(_ id: Int64, seconds: Double?) {
++        var map = mutedMap()
++        map[String(id)] = seconds.flatMap({ Date().timeIntervalSince1970 + $0 }) ?? 0.0
++        defaults.set(map, forKey: Key.mutedUntil)
++    }
++
++    public static func unmute(_ id: Int64) {
++        var map = mutedMap()
++        map.removeValue(forKey: String(id))
++        defaults.set(map, forKey: Key.mutedUntil)
+     }
+ 
+-    private static func muted() -> Set<Int64> {
+-        return Set((defaults.stringArray(forKey: Key.mutedPeers) ?? []).compactMap { Int64($0) })
++    /// Номер — и время, до которого глушим. Ноль значит «пока не сниму».
++    ///
++    /// Раньше здесь лежал просто список номеров. Переносим его сюда как «пока
++    /// не сниму»: иначе хозяин открыл бы Lunagram и обнаружил, что всех
++    /// заглушённых расглушило само.
++    private static func mutedMap() -> [String: Double] {
++        if let map = defaults.dictionary(forKey: Key.mutedUntil) as? [String: Double] {
++            return map
++        }
++        let old = defaults.stringArray(forKey: Key.mutedPeers) ?? []
++        var map: [String: Double] = [:]
++        for id in old {
++            map[id] = 0.0
++        }
++        defaults.set(map, forKey: Key.mutedUntil)
++        defaults.removeObject(forKey: Key.mutedPeers)
++        return map
+     }
+ }
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index d0a3bc22..629b8299 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1336,8 +1336,17 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             actions.append(.action(ContextMenuActionItem(text: muted ? "Снять глушение (Lunagram)" : "Заглушить (Lunagram)", icon: { theme in
+                 return generateTintedImage(image: UIImage(bundleImageName: muted ? "Chat/Context Menu/Unmute" : "Chat/Context Menu/Muted"), color: theme.actionSheet.primaryTextColor)
+             }, action: { c, _ in
+-                LunagramSettings.toggleMuted(mutePeerId.toInt64())
+-                c?.dismiss(result: .default, completion: nil)
++                let peerValue = mutePeerId.toInt64()
++                c?.dismiss(result: .default, completion: {
++                    if muted {
++                        LunagramSettings.unmute(peerValue)
++                        return
++                    }
++                    // Спрашиваем срок. Своим окошком, а не вложенным меню:
++                    // вложенные меню у Telegram строятся иначе на каждом виде
++                    // переписки, и один общий список надёжнее.
++                    lunagramAskMuteDuration(context: context, peerId: peerValue)
++                })
+             })))
+         }
+ 
+@@ -4099,3 +4108,32 @@ private final class ChatRateTranscriptionContextItemNode: ASDisplayNode, Context
+         return self
+     }
+ }
++
++/// Окошко «на сколько заглушить».
++///
++/// Сообщения заглушённого помечаются корзинкой только у хозяина: у собеседника
++/// ничего не трогаем и не удаляем. Плагин, откуда взят срок, удаляет их у обоих
++/// — этого хозяин брать не стал.
++private func lunagramAskMuteDuration(context: AccountContext, peerId: Int64) {
++    let sheet = UIAlertController(title: "Заглушить", message: "Его сообщения будут приходить с корзинкой, как удалённые. У собеседника ничего не меняется.", preferredStyle: .actionSheet)
++    let choices: [(String, Double?)] = [
++        ("На 5 минут", 5.0 * 60.0),
++        ("На час", 60.0 * 60.0),
++        ("На день", 24.0 * 60.0 * 60.0),
++        ("Пока не сниму", nil)
++    ]
++    for (title, seconds) in choices {
++        sheet.addAction(UIAlertAction(title: title, style: .default, handler: { _ in
++            LunagramSettings.mute(peerId, seconds: seconds)
++        }))
++    }
++    sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: nil))
++    let controller = (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController
++    // На планшете окошку нужен якорь, иначе оно не покажется вовсе.
++    if let popover = sheet.popoverPresentationController, let view = controller?.view {
++        popover.sourceView = view
++        popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
++        popover.permittedArrowDirections = []
++    }
++    controller?.present(sheet, animated: true, completion: nil)
++}
