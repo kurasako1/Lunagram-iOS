@@ -1,0 +1,499 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b8afa0a9..35f70433 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -106,6 +106,7 @@ public final class LunagramSettings {
+         static let appIcons = "lunagram.appIcons.enabled"
+         static let giftId = "lunagram.gift.showId"
+         static let chatExport = "lunagram.chatExport.enabled"
++        static let copyFields = "lunagram.copy.fields"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -935,6 +936,24 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Что копировать, становясь копией человека, — набор отметок числом.
++    ///
++    /// Минус означает «ещё не выбирали»: тогда берётся всё, как было до
++    /// появления выбора. Ноль — законное значение: человек снял все
++    /// отметки, и это не то же самое, что «не выбирал».
++    public static var copyFields: Int32 {
++        get {
++            guard defaults.object(forKey: Key.copyFields) != nil else {
++                return -1
++            }
++            return Int32(truncatingIfNeeded: defaults.integer(forKey: Key.copyFields))
++        }
++        set {
++            defaults.set(Int(newValue), forKey: Key.copyFields)
++            changed()
++        }
++    }
++
+     /// Показывать номер подарка в его окне.
+     public static var giftId: Bool {
+         get { return flag(Key.giftId, default: false) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift
+new file mode 100644
+index 00000000..88d90409
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift
+@@ -0,0 +1,153 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// Lunagram: что именно копировать, становясь копией человека.
++//
++// Раньше вопрос был один — «сделать копию?» — и копировалось всё разом. Теперь
++// вместо окошка экран: видно, что будет взято, и можно снять лишнее. Выбор
++// запоминается, так что во второй раз ничего отмечать не надо.
++
++private enum LunagramCopyFieldEntry: ItemListNodeEntry {
++    case header(String)
++    case field(Int32, String, Bool)
++    case run(String)
++    case info(String)
++
++    var section: ItemListSectionId {
++        switch self {
++        case .header, .field:
++            return 0
++        case .run, .info:
++            return 1
++        }
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case .header:
++            return 0
++        case let .field(index, _, _):
++            return 1 + index
++        case .run:
++            return 100
++        case .info:
++            return 101
++        }
++    }
++
++    static func ==(lhs: LunagramCopyFieldEntry, rhs: LunagramCopyFieldEntry) -> Bool {
++        switch lhs {
++        case let .header(lhsText):
++            if case let .header(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .field(lhsIndex, lhsTitle, lhsChecked):
++            if case let .field(rhsIndex, rhsTitle, rhsChecked) = rhs, lhsIndex == rhsIndex, lhsTitle == rhsTitle, lhsChecked == rhsChecked {
++                return true
++            }
++            return false
++        case let .run(lhsTitle):
++            if case let .run(rhsTitle) = rhs, lhsTitle == rhsTitle {
++                return true
++            }
++            return false
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramCopyFieldEntry, rhs: LunagramCopyFieldEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramCopyFieldArguments
++        switch self {
++        case let .header(text):
++            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++        case let .field(index, title, checked):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                arguments.toggle(Int(index))
++            })
++        case let .run(title):
++            return ItemListActionItem(presentationData: presentationData, title: title, kind: .destructive, alignment: .center, sectionId: self.section, style: .blocks, action: {
++                arguments.run()
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++private final class LunagramCopyFieldArguments {
++    let toggle: (Int) -> Void
++    let run: () -> Void
++
++    init(toggle: @escaping (Int) -> Void, run: @escaping () -> Void) {
++        self.toggle = toggle
++        self.run = run
++    }
++}
++
++func lunagramCopyFieldsScreen(context: AccountContext, peerName: String, onCopy: @escaping (LunagramCopyFields) -> Void) -> ViewController {
++    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
++    var counter = 0
++    var dismiss: (() -> Void)?
++
++    let arguments = LunagramCopyFieldArguments(toggle: { index in
++        guard index >= 0, index < LunagramCopyFields.items.count else {
++            return
++        }
++        let field = LunagramCopyFields.items[index].field
++        var current = LunagramCopyFields.current
++        if current.contains(field) {
++            current.remove(field)
++        } else {
++            current.insert(field)
++        }
++        LunagramCopyFields.current = current
++        counter += 1
++        changed.set(counter)
++    }, run: {
++        let current = LunagramCopyFields.current
++        guard !current.isEmpty else {
++            return
++        }
++        onCopy(current)
++        dismiss?()
++    })
++
++    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let current = LunagramCopyFields.current
++        var entries: [LunagramCopyFieldEntry] = []
++        entries.append(.header("Что взять у него"))
++        for (index, item) in LunagramCopyFields.items.enumerated() {
++            entries.append(.field(Int32(index), item.title, current.contains(item.field)))
++        }
++        entries.append(.run(current.isEmpty ? "Ничего не отмечено" : "Стать копией"))
++        entries.append(.info("Отмеченное станет твоим, и это увидят все, кто тебя видит. Прежнее своё сохраню — вернёшь тем же ползунком в его профиле.\n\n@ник не копируется: чужой занят, такого в Telegram не бывает. Цвет имени, фон профиля и значок-статус сервер примет только при своём премиуме.\n\nПри возврате чужая аватарка удаляется, а не закрывается твоей сверху: иначе она оставалась бы у тебя в истории фотографий."))
++
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Копия: " + peerName), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    dismiss = { [weak controller] in
++        controller?.dismiss()
++    }
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+index 6ef2117d..4322f7c4 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+@@ -20,6 +20,43 @@ import Lunagram
+ // Премиум-оформление (цвет имени, фон профиля, значок-статус) сервер примет
+ // только при своём премиуме — без него эта часть просто не применится.
+ 
++/// Что именно копировать. Раньше копировалось всё разом, без спроса.
++struct LunagramCopyFields: OptionSet {
++    let rawValue: Int32
++
++    static let avatar = LunagramCopyFields(rawValue: 1 << 0)
++    static let name = LunagramCopyFields(rawValue: 1 << 1)
++    static let about = LunagramCopyFields(rawValue: 1 << 2)
++    static let colors = LunagramCopyFields(rawValue: 1 << 3)
++    static let status = LunagramCopyFields(rawValue: 1 << 4)
++    static let birthday = LunagramCopyFields(rawValue: 1 << 5)
++    static let address = LunagramCopyFields(rawValue: 1 << 6)
++
++    static let all: LunagramCopyFields = [.avatar, .name, .about, .colors, .status, .birthday, .address]
++
++    /// Что отмечено сейчас. Пока не выбирали — всё, как было раньше.
++    static var current: LunagramCopyFields {
++        get {
++            let stored = LunagramSettings.copyFields
++            return stored < 0 ? .all : LunagramCopyFields(rawValue: stored)
++        }
++        set {
++            LunagramSettings.copyFields = newValue.rawValue
++        }
++    }
++
++    /// Порядок строк на экране выбора.
++    static let items: [(field: LunagramCopyFields, title: String)] = [
++        (.avatar, "Аватарка"),
++        (.name, "Имя и фамилия"),
++        (.about, "О себе"),
++        (.colors, "Цвет имени и фон профиля"),
++        (.status, "Значок-статус"),
++        (.birthday, "День рождения"),
++        (.address, "Адрес")
++    ]
++}
++
+ /// Номер готового цвета имени. Коллекционные (купленные) не копируем: их
+ /// сервер к чужому имени и не прицепит.
+ private func lunagramPresetColor(_ color: PeerColor?) -> Int32? {
+@@ -59,6 +96,12 @@ private struct LunagramProfileBackup: Codable {
+     var statusFileId: Int64?
+     var hadAvatar: Bool
+     var avatarFile: String?
++    // Появились позже: у старых запасов их просто нет, и это не беда.
++    var birthday: TelegramBirthday?
++    var address: String?
++    /// Ставили ли мы чужую аватарку. Без этого при возврате не понять, надо
++    /// ли сносить верхнюю фотографию или она и так своя.
++    var didSetAvatar: Bool?
+ }
+ 
+ private func lunagramLoadBackup() -> LunagramProfileBackup? {
+@@ -106,6 +149,35 @@ private func lunagramSetOwnAvatar(context: AccountContext, image: UIImage?) {
+     }).startStandalone()
+ }
+ 
++/// Снести верхнюю фотографию профиля — ту, которую сами и поставили, став
++/// копией.
++///
++/// Это и была ошибка возврата: своё фото ставилось ПОВЕРХ чужого, а чужое
++/// оставалось лежать в истории фотографий. Теперь сперва сносим чужое, а под
++/// ним оказывается своё прежнее — и ставить заново обычно уже нечего.
++///
++/// `done` говорит, осталась ли под снесённой хоть одна фотография.
++private func lunagramDropCopiedAvatar(context: AccountContext, done: @escaping (Bool) -> Void) {
++    let _ = (context.engine.peers.requestPeerPhotos(peerId: context.account.peerId)
++    |> take(1)
++    |> deliverOnMainQueue).startStandalone(next: { photos in
++        // Верхняя — первая в списке, так его отдаёт сервер.
++        guard let newest = photos.first, let reference = newest.reference else {
++            done(false)
++            return
++        }
++        let refresh = context.engine.peers.fetchAndUpdateCachedPeerData(peerId: context.account.peerId)
++        |> map { _ -> Void in
++            return Void()
++        }
++        let _ = (context.engine.accountData.removeAccountPhoto(reference: reference)
++        |> then(refresh)
++        |> deliverOnMainQueue).startStandalone(completed: {
++            done(photos.count > 1)
++        })
++    })
++}
++
+ private func lunagramApplyColors(context: AccountContext, nameColor: Int32?, backgroundEmojiId: Int64?, profileColor: Int32?, profileBackgroundEmojiId: Int64?) {
+     let color = PeerNameColor(rawValue: nameColor ?? 0)
+     let _ = context.engine.accountData.updateNameColorAndEmoji(nameColor: .preset(color: color, backgroundEmojiId: backgroundEmojiId), profileColor: profileColor.flatMap { PeerNameColor(rawValue: $0) }, profileBackgroundEmojiId: profileBackgroundEmojiId).startStandalone()
+@@ -125,16 +197,51 @@ private func lunagramApplyStatus(context: AccountContext, fileId: Int64?) {
+     })
+ }
+ 
++private func lunagramApplyBirthday(context: AccountContext, birthday: TelegramBirthday?) {
++    let _ = context.engine.accountData.updateBirthday(birthday: birthday).startStandalone()
++}
++
++private func lunagramApplyAddress(context: AccountContext, address: String?) {
++    guard let address = address, !address.isEmpty else {
++        let _ = context.engine.accountData.updateAccountBusinessLocation(businessLocation: nil).startStandalone()
++        return
++    }
++    let _ = context.engine.accountData.updateAccountBusinessLocation(businessLocation: TelegramBusinessLocation(address: address, coordinates: nil)).startStandalone()
++}
++
+ /// Стать копией человека. Прежнее своё запоминаем.
+-func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, completion: @escaping () -> Void) {
++///
++/// Сперва просим сервер дослать подробные данные собеседника: «о себе», день
++/// рождения и адрес лежат именно там, и пока их не спросили, они «неизвестны».
++/// На этом и спотыкалось прежнее «иногда что-то не копируется» — копировать
++/// было нечего, потому что не спросили.
++func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, fields: LunagramCopyFields, completion: @escaping () -> Void) {
+     let ownId = context.account.peerId
+-    let _ = (combineLatest(
+-        context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: ownId)),
+-        context.engine.data.get(TelegramEngine.EngineData.Item.Peer.AboutText(id: ownId)),
+-        context.engine.data.get(TelegramEngine.EngineData.Item.Peer.AboutText(id: peer.id))
++    let prepare: Signal<Never, NoError> = combineLatest(
++        context.engine.peers.fetchAndUpdateCachedPeerData(peerId: peer.id),
++        context.engine.peers.fetchAndUpdateCachedPeerData(peerId: ownId)
++    )
++    |> ignoreValues
++    // Разом спрашивать больше шести нельзя — потому и двумя запросами.
++    let mainData = context.engine.data.get(
++        TelegramEngine.EngineData.Item.Peer.Peer(id: ownId),
++        TelegramEngine.EngineData.Item.Peer.AboutText(id: ownId),
++        TelegramEngine.EngineData.Item.Peer.AboutText(id: peer.id),
++        TelegramEngine.EngineData.Item.Peer.Birthday(id: ownId),
++        TelegramEngine.EngineData.Item.Peer.Birthday(id: peer.id)
+     )
++    let addressData = context.engine.data.get(
++        TelegramEngine.EngineData.Item.Peer.BusinessLocation(id: ownId),
++        TelegramEngine.EngineData.Item.Peer.BusinessLocation(id: peer.id)
++    )
++    let data = combineLatest(mainData, addressData)
+     |> take(1)
+-    |> deliverOnMainQueue).startStandalone(next: { ownPeer, ownAbout, targetAbout in
++
++    let _ = ((prepare |> then(data))
++    |> deliverOnMainQueue).startStandalone(next: { values in
++        let (main, addresses) = values
++        let (ownPeer, ownAbout, targetAbout, ownBirthday, targetBirthday) = main
++        let (ownAddress, targetAddress) = addresses
+         guard let ownPeer = ownPeer else {
+             return
+         }
+@@ -151,7 +258,10 @@ func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, completion: @es
+                 profileBackgroundEmojiId: ownPeer.profileBackgroundEmojiId,
+                 statusFileId: lunagramStatusFileId(ownPeer.emojiStatus),
+                 hadAvatar: ownPeer.largeProfileImage != nil,
+-                avatarFile: nil
++                avatarFile: nil,
++                birthday: ownBirthday,
++                address: ownAddress?.address,
++                didSetAvatar: false
+             )
+             if case let .user(user) = ownPeer {
+                 backup.firstName = user.firstName ?? ""
+@@ -182,22 +292,43 @@ func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, completion: @es
+ 
+         LunagramSettings.copiedPeerId = peer.id.toInt64()
+ 
+-        var firstName = peer.compactDisplayTitle
+-        var lastName = ""
+-        if case let .user(user) = peer {
+-            firstName = user.firstName ?? ""
+-            lastName = user.lastName ?? ""
++        if fields.contains(.name) {
++            var firstName = peer.compactDisplayTitle
++            var lastName = ""
++            if case let .user(user) = peer {
++                firstName = user.firstName ?? ""
++                lastName = user.lastName ?? ""
++            }
++            let _ = context.engine.accountData.updateAccountPeerName(firstName: firstName, lastName: lastName).startStandalone()
+         }
+-        let _ = context.engine.accountData.updateAccountPeerName(firstName: firstName, lastName: lastName).startStandalone()
+-        if case let .known(text) = targetAbout {
++        if fields.contains(.about), case let .known(text) = targetAbout {
+             let _ = context.engine.accountData.updateAbout(about: text ?? "").startStandalone()
+         }
+-        lunagramApplyColors(context: context, nameColor: lunagramPresetColor(peer.nameColor), backgroundEmojiId: peer.backgroundEmojiId, profileColor: peer.profileColor?.rawValue, profileBackgroundEmojiId: peer.profileBackgroundEmojiId)
+-        lunagramApplyStatus(context: context, fileId: lunagramStatusFileId(peer.emojiStatus))
+-        let _ = (lunagramAvatarImage(context: context, peer: peer)
+-        |> deliverOnMainQueue).startStandalone(next: { image in
+-            lunagramSetOwnAvatar(context: context, image: image)
+-        })
++        if fields.contains(.colors) {
++            lunagramApplyColors(context: context, nameColor: lunagramPresetColor(peer.nameColor), backgroundEmojiId: peer.backgroundEmojiId, profileColor: peer.profileColor?.rawValue, profileBackgroundEmojiId: peer.profileBackgroundEmojiId)
++        }
++        if fields.contains(.status) {
++            lunagramApplyStatus(context: context, fileId: lunagramStatusFileId(peer.emojiStatus))
++        }
++        if fields.contains(.birthday) {
++            lunagramApplyBirthday(context: context, birthday: targetBirthday)
++        }
++        if fields.contains(.address) {
++            lunagramApplyAddress(context: context, address: targetAddress?.address)
++        }
++        if fields.contains(.avatar) {
++            let _ = (lunagramAvatarImage(context: context, peer: peer)
++            |> deliverOnMainQueue).startStandalone(next: { image in
++                guard let image = image else {
++                    return
++                }
++                lunagramSetOwnAvatar(context: context, image: image)
++                if var saved = lunagramLoadBackup() {
++                    saved.didSetAvatar = true
++                    lunagramSaveBackup(saved)
++                }
++            })
++        }
+         completion()
+     })
+ }
+@@ -213,6 +344,28 @@ func lunagramRestoreOwnProfile(context: AccountContext, completion: @escaping ()
+     let _ = context.engine.accountData.updateAbout(about: backup.about).startStandalone()
+     lunagramApplyColors(context: context, nameColor: backup.nameColor, backgroundEmojiId: backup.backgroundEmojiId, profileColor: backup.profileColor, profileBackgroundEmojiId: backup.profileBackgroundEmojiId)
+     lunagramApplyStatus(context: context, fileId: backup.statusFileId)
++    lunagramApplyBirthday(context: context, birthday: backup.birthday)
++    lunagramApplyAddress(context: context, address: backup.address)
++
++    let finish: () -> Void = {
++        LunagramSettings.copiedPeerId = 0
++        lunagramSaveBackup(nil)
++        LunagramSettings.clearOwnAvatar(backup.avatarFile)
++        completion()
++    }
++
++    if backup.didSetAvatar == true {
++        // Сносим чужую. Если под ней что-то осталось — это своё прежнее, и
++        // ставить его заново не надо: иначе снова выйдет своё поверх чужого.
++        lunagramDropCopiedAvatar(context: context, done: { hasPhotoLeft in
++            if !hasPhotoLeft, let name = backup.avatarFile, let data = LunagramSettings.ownAvatarData(name) {
++                lunagramSetOwnAvatar(context: context, image: UIImage(data: data))
++            }
++            finish()
++        })
++        return
++    }
++
+     if let name = backup.avatarFile, let data = LunagramSettings.ownAvatarData(name) {
+         lunagramSetOwnAvatar(context: context, image: UIImage(data: data))
+     } else if backup.hadAvatar {
+@@ -221,8 +374,5 @@ func lunagramRestoreOwnProfile(context: AccountContext, completion: @escaping ()
+     } else {
+         lunagramSetOwnAvatar(context: context, image: nil)
+     }
+-    LunagramSettings.copiedPeerId = 0
+-    lunagramSaveBackup(nil)
+-    LunagramSettings.clearOwnAvatar(backup.avatarFile)
+-    completion()
++    finish()
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index d46d6bd3..8e3e4455 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -198,18 +198,16 @@ func infoItems(
+             let isCopy = lunagramCopiedPeerId() == user.id.toInt64()
+             items[.peerInfoTrailing]!.append(PeerInfoScreenSwitchItem(id: ItemLunagramCopy, text: "Быть его копией", value: isCopy, toggled: { value in
+                 if value {
+-                    let alert = textAlertController(context: context, title: "Стать его копией?", text: "Твоя аватарка, имя, описание и премиум-оформление станут как у него. Это увидят все, кто тебя видит. Твоё прежнее сохраню — вернёшь этим же ползунком.", actions: [
+-                        TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {
++                    // Вместо окошка «сделать копию?» — экран выбора: видно,
++                    // что именно возьмётся, и лишнее можно снять.
++                    let screen = lunagramCopyFieldsScreen(context: context, peerName: lunagramPeerName(EnginePeer(user)), onCopy: { fields in
++                        lunagramCopyPeer(context: context, peer: EnginePeer(user), fields: fields, completion: {
+                             interaction.requestLayout(true)
+-                        }),
+-                        TextAlertAction(type: .defaultAction, title: "Сделать копию", action: {
+-                            lunagramCopyPeer(context: context, peer: EnginePeer(user), completion: {
+-                                interaction.requestLayout(true)
+-                            })
+                         })
+-                    ], actionLayout: .vertical)
+-                    // Спрашиваем поверх всего: окно профиля само может закрыться.
+-                    ((context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? ViewController)?.present(alert, in: .window(.root))
++                    })
++                    (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(screen)
++                    // Сам ползунок пока ничего не включил: вернём его на место.
++                    interaction.requestLayout(true)
+                 } else {
+                     lunagramRestoreOwnProfile(context: context, completion: {
+                         interaction.requestLayout(true)
+@@ -218,7 +216,7 @@ func infoItems(
+             }))
+             items[.peerInfoTrailing]!.append(PeerInfoScreenCommentItem(id: ItemLunagramCopyInfo, text: isCopy
+                 ? "Сейчас твой профиль — копия его профиля. Выключи, и вернётся твоё: аватарка, имя, описание и оформление."
+-                : "Скопирует себе его аватарку, имя, описание и премиум-оформление. @ник не копируется — чужой занят. Премиум-оформление сервер примет только при своём премиуме."))
++                : "Спросит, что взять: аватарку, имя, «о себе», оформление, значок-статус, день рождения и адрес. @ник не копируется — чужой занят. Премиум-оформление сервер примет только при своём премиуме."))
+         }
+         if let mainUsername = user.addressName {
+             var additionalUsernames: String?
