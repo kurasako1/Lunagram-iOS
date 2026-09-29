@@ -1,0 +1,95 @@
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift
+index 66c50199..145c726d 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift
+@@ -108,13 +108,21 @@ func lunagramRunTypingEffect(on layer: CALayer, hole: CGRect, effect: LunagramTy
+ 
+         switch effect {
+         case .flyUp, .flyDown, .flyLeft, .flyRight:
++            // По каждой оси отдельно: у общего «transform.translation» значение
++            // — пара чисел, и его легко подсунуть не тем видом.
+             let offset = lunagramTypingOffset(effect, size: hole.size)
+-            let move = CABasicAnimation(keyPath: "transform.translation")
+-            move.fromValue = NSValue(cgSize: CGSize(width: offset.x, height: offset.y))
+-            move.toValue = NSValue(cgSize: CGSize())
+-            move.duration = duration
+-            move.timingFunction = CAMediaTimingFunction(name: .easeOut)
+-            ghost.add(move, forKey: "lunagramGhostMove")
++            let moveX = CABasicAnimation(keyPath: "transform.translation.x")
++            moveX.fromValue = offset.x as NSNumber
++            moveX.toValue = 0.0 as NSNumber
++            moveX.duration = duration
++            moveX.timingFunction = CAMediaTimingFunction(name: .easeOut)
++            ghost.add(moveX, forKey: "lunagramGhostMoveX")
++            let moveY = CABasicAnimation(keyPath: "transform.translation.y")
++            moveY.fromValue = offset.y as NSNumber
++            moveY.toValue = 0.0 as NSNumber
++            moveY.duration = duration
++            moveY.timingFunction = CAMediaTimingFunction(name: .easeOut)
++            ghost.add(moveY, forKey: "lunagramGhostMoveY")
+         case .grow:
+             let scale = CABasicAnimation(keyPath: "transform.scale")
+             scale.fromValue = 0.3 as NSNumber
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift
+index 88d90409..f57f8c2d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyFieldsScreen.swift
+@@ -146,8 +146,17 @@ func lunagramCopyFieldsScreen(context: AccountContext, peerName: String, onCopy:
+     }
+ 
+     let controller = ItemListController(context: context, state: signal)
++    // Экран открыт заходом вглубь, а не окошком поверх, — значит и убирать
++    // его надо шагом назад.
+     dismiss = { [weak controller] in
+-        controller?.dismiss()
++        guard let controller = controller else {
++            return
++        }
++        if let navigationController = controller.navigationController as? NavigationController {
++            let _ = navigationController.popViewController(animated: true)
++        } else {
++            controller.dismiss()
++        }
+     }
+     return controller
+ }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+index 4322f7c4..5a602de9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramCopyPeer.swift
+@@ -217,11 +217,11 @@ private func lunagramApplyAddress(context: AccountContext, address: String?) {
+ /// было нечего, потому что не спросили.
+ func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, fields: LunagramCopyFields, completion: @escaping () -> Void) {
+     let ownId = context.account.peerId
+-    let prepare: Signal<Never, NoError> = combineLatest(
++    let prepare = combineLatest(
+         context.engine.peers.fetchAndUpdateCachedPeerData(peerId: peer.id),
+         context.engine.peers.fetchAndUpdateCachedPeerData(peerId: ownId)
+     )
+-    |> ignoreValues
++    |> take(1)
+     // Разом спрашивать больше шести нельзя — потому и двумя запросами.
+     let mainData = context.engine.data.get(
+         TelegramEngine.EngineData.Item.Peer.Peer(id: ownId),
+@@ -234,10 +234,18 @@ func lunagramCopyPeer(context: AccountContext, peer: EnginePeer, fields: Lunagra
+         TelegramEngine.EngineData.Item.Peer.BusinessLocation(id: ownId),
+         TelegramEngine.EngineData.Item.Peer.BusinessLocation(id: peer.id)
+     )
+-    let data = combineLatest(mainData, addressData)
+-    |> take(1)
++    // Сперва досылка, потом чтение. Соединяем их через mapToSignal, а не
++    // через then: then требует, чтобы обе половины отдавали одно и то же, а
++    // у нас слева ответ сервера, справа — данные профиля.
++    // Тип здесь нарочно не выписан: у запросов к данным он длиной в абзац, и
++    // выписанный руками он был бы ещё одним местом, где можно ошибиться.
++    let data = prepare
++    |> mapToSignal { _ in
++        return combineLatest(mainData, addressData)
++        |> take(1)
++    }
+ 
+-    let _ = ((prepare |> then(data))
++    let _ = (data
+     |> deliverOnMainQueue).startStandalone(next: { values in
+         let (main, addresses) = values
+         let (ownPeer, ownAbout, targetAbout, ownBirthday, targetBirthday) = main
