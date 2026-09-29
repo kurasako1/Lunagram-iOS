@@ -1,0 +1,378 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSendFont.swift b/submodules/Lunagram/Sources/LunagramSendFont.swift
+index 845e563f..74130f2d 100644
+--- a/submodules/Lunagram/Sources/LunagramSendFont.swift
++++ b/submodules/Lunagram/Sources/LunagramSendFont.swift
+@@ -1,155 +1,108 @@
+ import Foundation
+ 
+-/// Стиль исходящих сообщений — как на ПК.
++/// Начертание исходящих сообщений.
+ ///
+-/// Буквы подменяются похожими символами Юникода, поэтому стиль видят все и в
+-/// любом клиенте: это не разметка Telegram, а сам текст. Обратная сторона —
+-/// такой текст не находится поиском Telegram.
++/// Раньше буквы подменялись похожими знаками Юникода: стиль видели все, но
++/// текст переставал находиться поиском и не читался вслух. Хозяин выбрал
++/// поменять это на родное оформление Telegram — жирный, курсив и прочее
++/// настоящие, поиск их видит.
++///
++/// Платой стала красота: готическим, рукописным и двойным так не напишешь —
++/// таких начертаний у Telegram нет, они существовали только как подмена букв.
+ public enum LunagramSendFont: Int, CaseIterable {
+     case disabled
+     case bold
+     case italic
+-    case script
+-    case gothic
+-    case monospace
+-    case doubleStruck
+-    case strikethrough
++    case boldItalic
+     case underline
+-    case spaced
+-    case stars
+-    case smallCaps
++    case strikethrough
++    case monospace
+ 
+-    /// Название с честной пометкой, где работает. Стилизованных алфавитов для
+-    /// кириллицы в Юникоде нет вовсе — это не наше ограничение, поэтому
+-    /// пишем прямо в названии, чтобы выбор не был вслепую.
+     public var title: String {
+         switch self {
+         case .disabled:
+-            return "Выключен"
++            return "Обычный"
+         case .bold:
+-            return "𝐁𝐨𝐥𝐝 — только латиница"
++            return "Жирный"
+         case .italic:
+-            return "𝐼𝑡𝑎𝑙𝑖𝑐 — только латиница"
+-        case .script:
+-            return "𝓢𝓬𝓻𝓲𝓹𝓽 — только латиница"
+-        case .gothic:
+-            return "𝕲𝖔𝖙𝖍𝖎𝖈 — только латиница"
+-        case .monospace:
+-            return "𝙼𝚘𝚗𝚘 — только латиница"
+-        case .doubleStruck:
+-            return "𝔻𝕠𝕦𝕓𝕝𝕖 — только латиница"
+-        case .strikethrough:
+-            return "Зачёркнутый — работает с русским"
++            return "Курсив"
++        case .boldItalic:
++            return "Жирный курсив"
+         case .underline:
+-            return "Подчёркнутый — работает с русским"
+-        case .spaced:
+-            return "Р а з р я д к а — работает с русским"
+-        case .stars:
+-            return "✦Звёздочки✦ — работает с русским"
+-        case .smallCaps:
+-            return "ᴍᴀᴧᴇʜьᴋиᴇ — работает с русским, набор неполный"
++            return "Подчёркнутый"
++        case .strikethrough:
++            return "Зачёркнутый"
++        case .monospace:
++            return "Моноширинный"
+         }
+     }
++}
+ 
+-    /// Начала стилизованных алфавитов: латинские заглавные, строчные, цифры.
+-    /// Пусто там, где алфавита нет.
+-    private var bases: (upper: UInt32, lower: UInt32, digits: UInt32)? {
+-        switch self {
+-        case .bold:
+-            return (0x1D400, 0x1D41A, 0x1D7CE)
+-        case .italic:
+-            return (0x1D434, 0x1D44E, 0)
+-        case .script:
+-            return (0x1D4D0, 0x1D4EA, 0)
+-        case .gothic:
+-            return (0x1D56C, 0x1D586, 0)
+-        case .monospace:
+-            return (0x1D670, 0x1D68A, 0x1D7F6)
+-        case .doubleStruck:
+-            return (0x1D538, 0x1D552, 0x1D7D8)
+-        default:
+-            return nil
+-        }
++/// Какими начертаниями уходит написанное: русское и латиница отдельно.
++///
++/// Раздельно — потому что и просят их по-разному: подчеркнуть русскую часть, а
++/// английскую сделать моноширинной. Знаки препинания и пробелы продолжают то
++/// начертание, внутри которого стоят, иначе «Привет, мир» распалось бы на куски.
++public struct LunagramSendRun {
++    /// Границы в знаках NSString — именно так Telegram считает отметки.
++    public let range: Range<Int>
++    public let style: LunagramSendFont
++
++    public init(range: Range<Int>, style: LunagramSendFont) {
++        self.range = range
++        self.style = style
+     }
++}
+ 
+-    /// Знак, который ставится поверх каждой буквы. Такой знак ложится на
+-    /// любую букву, поэтому эти стили годятся и для русского.
+-    private var combining: String? {
+-        switch self {
+-        case .strikethrough:
+-            return "\u{0336}"
+-        case .underline:
+-            return "\u{0332}"
+-        default:
+-            return nil
+-        }
++public func lunagramSendRuns(_ text: String, cyrillic: LunagramSendFont, latin: LunagramSendFont) -> [LunagramSendRun] {
++    if cyrillic == .disabled && latin == .disabled {
++        return []
+     }
++    var result: [LunagramSendRun] = []
++    var offset = 0
++    var runStart = 0
++    var runStyle: LunagramSendFont = .disabled
+ 
+-    /// Переводит текст в выбранный стиль.
+-    public func apply(to text: String) -> String {
+-        guard self != .disabled, !text.isEmpty else {
+-            return text
+-        }
+-        switch self {
+-        case .spaced:
+-            // Пробел между буквами, но не между словами дважды.
+-            return text.map({ String($0) }).joined(separator: " ")
+-        case .stars:
+-            return "✦" + text + "✦"
+-        case .smallCaps:
+-            return String(text.map { LunagramSendFont.smallCapsMap[$0] ?? $0 })
+-        default:
+-            break
++    func flush(_ end: Int) {
++        if runStyle != .disabled, end > runStart {
++            result.append(LunagramSendRun(range: runStart ..< end, style: runStyle))
+         }
+-        if let combining = combining {
+-            var result = ""
+-            for character in text {
+-                result.append(character)
+-                if !character.isWhitespace {
+-                    result.append(combining)
+-                }
+-            }
+-            return result
+-        }
+-        guard let bases = bases else {
+-            return text
+-        }
+-        var result = ""
+-        for character in text {
+-            result.append(LunagramSendFont.mapped(character, bases: bases))
+-        }
+-        return result
+     }
+ 
+-    /// Одна буква в стилизованную. Что не легло — оставляем как есть: лучше
+-    /// обычная буква, чем дырка в слове.
+-    private static func mapped(_ character: Character, bases: (upper: UInt32, lower: UInt32, digits: UInt32)) -> String {
+-        guard let scalar = character.unicodeScalars.first, character.unicodeScalars.count == 1 else {
+-            return String(character)
++    for character in text {
++        let length = String(character).utf16.count
++        let style: LunagramSendFont
++        if character.lunagramIsCyrillic {
++            style = cyrillic
++        } else if character.lunagramIsLatin {
++            style = latin
++        } else {
++            // Пробелы, цифры и знаки продолжают начатое.
++            style = runStyle
+         }
+-        let value = scalar.value
+-        var replacement: UInt32?
+-        if value >= 65, value <= 90 {
+-            replacement = bases.upper + (value - 65)
+-        } else if value >= 97, value <= 122 {
+-            replacement = bases.lower + (value - 97)
+-        } else if value >= 48, value <= 57, bases.digits != 0 {
+-            replacement = bases.digits + (value - 48)
++        if style != runStyle {
++            flush(offset)
++            runStart = offset
++            runStyle = style
+         }
+-        if let replacement = replacement, let converted = Unicode.Scalar(replacement) {
+-            return String(Character(converted))
++        offset += length
++    }
++    flush(offset)
++    return result
++}
++
++private extension Character {
++    var lunagramIsCyrillic: Bool {
++        guard let scalar = self.unicodeScalars.first else {
++            return false
+         }
+-        return String(character)
++        return (scalar.value >= 0x0400 && scalar.value <= 0x052F)
+     }
+ 
+-    /// Маленькие заглавные. Набор в Юникоде неполный — чего нет, оставляем.
+-    private static let smallCapsMap: [Character: Character] = [
+-        "а": "ᴀ", "в": "ʙ", "г": "ᴦ", "е": "ᴇ", "к": "ᴋ", "м": "ᴍ", "н": "ʜ",
+-        "о": "ᴏ", "п": "ᴨ", "р": "ᴘ", "с": "ᴄ", "т": "ᴛ", "у": "ʏ", "х": "x",
+-        "л": "ᴧ",
+-        "a": "ᴀ", "b": "ʙ", "c": "ᴄ", "d": "ᴅ", "e": "ᴇ", "f": "ꜰ", "g": "ɢ",
+-        "h": "ʜ", "i": "ɪ", "j": "ᴊ", "k": "ᴋ", "l": "ʟ", "m": "ᴍ", "n": "ɴ",
+-        "o": "ᴏ", "p": "ᴘ", "q": "Q", "r": "ʀ", "s": "s", "t": "ᴛ", "u": "ᴜ",
+-        "v": "ᴠ", "w": "ᴡ", "x": "x", "y": "ʏ", "z": "ᴢ"
+-    ]
++    var lunagramIsLatin: Bool {
++        guard let scalar = self.unicodeScalars.first else {
++            return false
++        }
++        return (scalar.value >= 0x41 && scalar.value <= 0x5A) || (scalar.value >= 0x61 && scalar.value <= 0x7A)
++    }
+ }
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index f30ae28c..48cd4b9e 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -74,6 +74,7 @@ public final class LunagramSettings {
+         static let sendWithoutSound = "lunagram.ghost.sendWithoutSound"
+         static let suggestGhostForStories = "lunagram.ghost.suggestForStories"
+         static let sendFontStyle = "lunagram.other.sendFontStyle"
++        static let sendFontStyleLatin = "lunagram.other.sendFontStyleLatin"
+         static let streamerMode = "lunagram.other.streamerMode"
+         static let useScheduledSend = "lunagram.ghost.useScheduledSend"
+         static let showMessageSeconds = "lunagram.other.showMessageSeconds"
+@@ -801,11 +802,20 @@ public final class LunagramSettings {
+         changed()
+     }
+ 
+-    public static func styledForSending(_ text: String) -> String {
+-        guard let style = LunagramSendFont(rawValue: sendFontStyle), style != .disabled else {
+-            return text
+-        }
+-        return style.apply(to: text)
++    /// Начертание для латиницы. Русское лежит в sendFontStyle — имя осталось
++    /// прежним, чтобы уже выбранное у хозяина не сбросилось.
++    public static var sendFontStyleLatin: Int {
++        get { return clamped(Key.sendFontStyleLatin, 0, LunagramSendFont.allCases.count - 1, 0) }
++        set { setClamped(newValue, Key.sendFontStyleLatin, 0, LunagramSendFont.allCases.count - 1) }
++    }
++
++    /// Куски текста и их начертания — для отметок Telegram.
++    public static func sendRuns(_ text: String) -> [LunagramSendRun] {
++        return lunagramSendRuns(
++            text,
++            cyrillic: LunagramSendFont(rawValue: sendFontStyle) ?? .disabled,
++            latin: LunagramSendFont(rawValue: sendFontStyleLatin) ?? .disabled
++        )
+     }
+ 
+     /// Прятать спонсорские сообщения в каналах — как на ПК.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 64b6d44c..14da70be 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1339,6 +1339,7 @@ private struct LunagramMediaState: Equatable {
+     var bannerBlur: Int
+     var sendWithoutSound: Int
+     var sendFontStyle: Int
++    var sendFontStyleLatin: Int = 0
+     var hasProfileBackground: Bool
+     var profileBgDim: Int
+     var profileBgBlur: Int
+@@ -1391,6 +1392,7 @@ private struct LunagramMediaState: Equatable {
+         state.avatarCorners = LunagramSettings.avatarCorners
+         state.wordingPack = LunagramWording.pack
+         state.wordingOwn = LunagramWording.ownPacks.map({ "\($0.id):\($0.title):\($0.strings.count)" }).joined(separator: "|")
++        state.sendFontStyleLatin = LunagramSettings.sendFontStyleLatin
+         state.deletedIconColor = LunagramSettings.deletedIconColor
+         state.expandedInfos = LunagramExpandedInfos.current
+         state.composeDensity = LunagramSettings.composeDensity
+@@ -2102,6 +2104,11 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramSettings.sendWithoutSound = index
+                 refreshMedia()
+             }))
++        case .sendFontLatin:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Начертание латиницы", options: LunagramSendFont.allCases.map { $0.title }, selected: LunagramSettings.sendFontStyleLatin, info: "Так будут уходить английские слова. Это родное оформление Telegram: текст остаётся обычным текстом, находится поиском и читается вслух.", select: { index in
++                LunagramSettings.sendFontStyleLatin = index
++                refreshMedia()
++            }))
+         case .sendFont:
+             // Каждый стиль написан собой же — видно, как уйдёт сообщение.
+             shared.push?(lunagramChoiceScreen(context: context, title: "Шрифт отправки", options: LunagramSendFont.allCases.map { $0.title }, selected: LunagramSettings.sendFontStyle, info: "Буквы заменяются похожими символами Юникода, поэтому стиль видят все — в любом клиенте. Такой текст не находится поиском Telegram.\n\nСтилизованных алфавитов для кириллицы в Юникоде нет, поэтому первые стили работают только с латиницей — это видно прямо в названии.", select: { index in
+@@ -2410,6 +2417,7 @@ private func lunagramPushSteps(shared: LunagramSharedState, context: AccountCont
+ private enum LunagramChoice: Int32 {
+     case sendWithoutSound = 1
+     case sendFont = 2
++    case sendFontLatin = 3
+     case ghostLocks = 13
+     case deviceMask = 3
+     case listTextMode = 5
+@@ -3010,7 +3018,9 @@ private func lunagramPlaceEntries(
+     case .messages:
+         let fonts = LunagramSendFont.allCases
+         let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
+-        rows.row(.value(LunagramChoice.sendFont.rawValue, "Шрифт отправки", font.title, "textformat"))
++        let fontLatin = fonts[max(0, min(fonts.count - 1, media.sendFontStyleLatin))]
++        rows.row(.value(LunagramChoice.sendFont.rawValue, "Начертание русского", font.title, "textformat"))
++        rows.row(.value(LunagramChoice.sendFontLatin.rawValue, "Начертание латиницы", fontLatin.title, "textformat"))
+         rows.info("Буквы заменяются похожими знаками Юникода, поэтому стиль видят все и в любом клиенте. Обратная сторона: такой текст не находится поиском Telegram.")
+         rows.row(.toggle(.multiSearch, value(.multiSearch), "Поиск сразу по нескольким словам", "line.3.horizontal.decrease.circle"))
+         rows.info("Раздели слова чертой «|» — «кот | пёс», — и найдётся и то и другое. Работает везде, где есть поиск по сообщениям.\n\nУ такого поиска нет «показать ещё»: Telegram отдаёт метку продолжения на один запрос, а их здесь несколько. Каждое слово отдаёт свою первую сотню.")
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 6982c4a9..4e4765ef 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8959,17 +8959,37 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+         return messages.map { message in
+             var message = message
+ 
+-            // Lunagram: «Шрифт отправки» — буквы подменяются похожими знаками
+-            // Юникода, поэтому стиль виден в любом клиенте. Трогаем только
+-            // обычный текст; пересылки и вложения без подписи не меняем.
++            // Lunagram: «Начертание отправки» — ставим родные отметки Telegram
++            // (жирный, курсив и прочее). Раньше буквы подменялись знаками
++            // Юникода; хозяин выбрал родное — такой текст находится поиском.
+             //
+-            // Текст с отметками (жирное, ссылки, свои эмодзи) не трогаем:
+-            // стилизованная буква бывает длиннее обычной, и отметки уехали бы
+-            // на чужие буквы. Нашлось при работе над ответом на удалённое.
+-            if LunagramSettings.sendFontStyle != 0, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty, !attributes.contains(where: { ($0 as? TextEntitiesMessageAttribute)?.entities.isEmpty == false }) {
+-                let styled = LunagramSettings.styledForSending(text)
+-                if styled != text {
+-                    message = .message(text: styled, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
++            // Текст, размеченный им самим, не трогаем: две разметки поверх
++            // друг друга дали бы кашу.
++            if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, !text.isEmpty, !attributes.contains(where: { ($0 as? TextEntitiesMessageAttribute)?.entities.isEmpty == false }) {
++                var entities: [MessageTextEntity] = []
++                for run in LunagramSettings.sendRuns(text) {
++                    switch run.style {
++                    case .disabled:
++                        break
++                    case .bold:
++                        entities.append(MessageTextEntity(range: run.range, type: .Bold))
++                    case .italic:
++                        entities.append(MessageTextEntity(range: run.range, type: .Italic))
++                    case .boldItalic:
++                        entities.append(MessageTextEntity(range: run.range, type: .Bold))
++                        entities.append(MessageTextEntity(range: run.range, type: .Italic))
++                    case .underline:
++                        entities.append(MessageTextEntity(range: run.range, type: .Underline))
++                    case .strikethrough:
++                        entities.append(MessageTextEntity(range: run.range, type: .Strikethrough))
++                    case .monospace:
++                        entities.append(MessageTextEntity(range: run.range, type: .Code))
++                    }
++                }
++                if !entities.isEmpty {
++                    var updatedAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
++                    updatedAttributes.append(TextEntitiesMessageAttribute(entities: entities))
++                    message = .message(text: text, attributes: updatedAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
+                 }
+             }
+ 
