@@ -1,0 +1,1863 @@
+diff --git a/submodules/AppBundle/PublicHeaders/AppBundle/AppBundle.h b/submodules/AppBundle/PublicHeaders/AppBundle/AppBundle.h
+index d00fe35e..566e3e1a 100644
+--- a/submodules/AppBundle/PublicHeaders/AppBundle/AppBundle.h
++++ b/submodules/AppBundle/PublicHeaders/AppBundle/AppBundle.h
+@@ -3,6 +3,20 @@
+ 
+ NSBundle * _Nonnull getAppBundle(void);
+ 
++/// Lunagram: подмена значков.
++///
++/// Приложение зовёт все свои картинки по имени через
++/// initWithBundleImageName: — это единственная воронка на восемь с лишним
++/// сотен значков. Кто умеет отдать свою картинку, ставит сюда свой
++/// ответчик при запуске.
++///
++/// Ответчику дают имя значка и размер родного: свой обязан быть того же
++/// размера — по значкам считается разметка. Нечего отдать — пусть вернёт
++/// nil, тогда возьмётся родной.
++typedef UIImage * _Nullable (^LunagramIconOverride)(NSString * _Nonnull name, CGSize size);
++
++void LunagramSetIconOverride(LunagramIconOverride _Nullable block);
++
+ @interface UIImage (AppBundle)
+ 
+ - (instancetype _Nullable)initWithBundleImageName:(NSString * _Nonnull)bundleImageName;
+diff --git a/submodules/AppBundle/Sources/AppBundle/AppBundle.m b/submodules/AppBundle/Sources/AppBundle/AppBundle.m
+index e93a19a7..dcc8b60b 100644
+--- a/submodules/AppBundle/Sources/AppBundle/AppBundle.m
++++ b/submodules/AppBundle/Sources/AppBundle/AppBundle.m
+@@ -18,10 +18,23 @@ NSBundle * _Nonnull getAppBundle() {
+     return appBundle;
+ }
+ 
++static LunagramIconOverride _Nullable lunagramIconOverride = nil;
++
++void LunagramSetIconOverride(LunagramIconOverride _Nullable block) {
++    lunagramIconOverride = [block copy];
++}
++
+ @implementation UIImage (AppBundle)
+ 
+ - (instancetype _Nullable)initWithBundleImageName:(NSString * _Nonnull)bundleImageName {
+-    return [UIImage imageNamed:bundleImageName inBundle:getAppBundle() compatibleWithTraitCollection:nil];
++    UIImage *image = [UIImage imageNamed:bundleImageName inBundle:getAppBundle() compatibleWithTraitCollection:nil];
++    if (lunagramIconOverride != nil && image != nil) {
++        UIImage *custom = lunagramIconOverride(bundleImageName, image.size);
++        if (custom != nil) {
++            return custom;
++        }
++    }
++    return image;
+ }
+ 
+ @end
+diff --git a/submodules/Lunagram/Sources/LunagramAppIconNames.swift b/submodules/Lunagram/Sources/LunagramAppIconNames.swift
+new file mode 100644
+index 00000000..7da40342
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramAppIconNames.swift
+@@ -0,0 +1,837 @@
++import Foundation
++
++// Lunagram: перечень значков приложения.
++//
++// Собран из исходников по вызовам UIImage(bundleImageName:) — то есть это
++// ровно те имена, которыми приложение зовёт свои картинки. Перечень
++// подсказывает экрану замены, что вообще можно менять: у каталога значков
++// iOS оглавления нет, и спросить его во время работы не у кого.
++//
++// Имена с подстановкой сюда не попадают: их вид известен только на ходу.
++
++public enum LunagramAppIconNames {
++    public static let all: [String] = [
++        "Ads/Ton",
++        "Ads/TonAbout",
++        "Ads/TonBig",
++        "Ads/TonMedium",
++        "Avatar/AnonymousSenderIcon",
++        "Avatar/ArchiveAvatarIcon",
++        "Avatar/CameraIcon",
++        "Avatar/DeletedIcon",
++        "Avatar/EditAvatarIcon",
++        "Avatar/EditAvatarIconLarge",
++        "Avatar/MyNotesIcon",
++        "Avatar/PhoneIcon",
++        "Avatar/RepliesMessagesIcon",
++        "Avatar/RepostStoryIcon",
++        "Avatar/SavedMessagesIcon",
++        "Call List/CallIcon",
++        "Call List/InfoButton",
++        "Call List/NewCallListIcon",
++        "Call List/OutgoingIcon",
++        "Call List/OutgoingVideoIcon",
++        "Call/Accounts",
++        "Call/Avatar1",
++        "Call/Avatar2",
++        "Call/Avatar3",
++        "Call/Avatar4",
++        "Call/CallAcceptButton",
++        "Call/CallAirpodsButton",
++        "Call/CallAirpodsMaxButton",
++        "Call/CallAirpodsProButton",
++        "Call/CallBluetoothButton",
++        "Call/CallCameraButton",
++        "Call/CallDeclineButton",
++        "Call/CallHeadphonesButton",
++        "Call/CallMessageButton",
++        "Call/CallMuteButton",
++        "Call/CallNavigationAddPerson",
++        "Call/CallShareButton",
++        "Call/CallSpeakerButton",
++        "Call/CallSwitchCameraButton",
++        "Call/CallTitleLogo",
++        "Call/CallToastBattery",
++        "Call/CallToastCamera",
++        "Call/CallToastMicrophone",
++        "Call/Check",
++        "Call/Context Menu/Accounts",
++        "Call/Context Menu/Audio",
++        "Call/Context Menu/ChangeName",
++        "Call/Context Menu/Invited",
++        "Call/Context Menu/Mute",
++        "Call/Context Menu/Noise",
++        "Call/Context Menu/RevokeSpeak",
++        "Call/Context Menu/ShareScreen",
++        "Call/Context Menu/Unmute",
++        "Call/EmojiTooltipLock",
++        "Call/End",
++        "Call/Flip",
++        "Call/LegacyCallMuteButton",
++        "Call/LegacyCallPhoneButton",
++        "Call/LegacyCallSpeakerButton",
++        "Call/Mute",
++        "Call/PanelIcon",
++        "Call/Pause",
++        "Call/Pin",
++        "Call/ScreenSharePhone",
++        "Call/Speaker",
++        "Call/Star",
++        "Call/StarHighlighted",
++        "Call/StatusScreen",
++        "Call/StatusVideo",
++        "Call/StatusVolume",
++        "Call/Video",
++        "Call/VideoUnavailable",
++        "Call/pip",
++        "Camera/CloseIcon",
++        "Camera/DualIcon",
++        "Camera/FlashOffIcon",
++        "Camera/FlipIcon",
++        "Camera/LockIcon",
++        "Camera/LockedIcon",
++        "Camera/Placeholder",
++        "Camera/SelfiePlaceholder",
++        "Camera/VideoMessageFlash",
++        "Camera/VideoMessageFlip",
++        "Camera/ZoomIcon",
++        "Chart/Forwards",
++        "Chart/Reactions",
++        "Chart/arrow_left",
++        "Chart/arrow_right",
++        "Chat List/AddIcon",
++        "Chat List/AddRoundIcon",
++        "Chat List/AddStoryIcon",
++        "Chat List/Archive/IconHide",
++        "Chat List/Archive/Intro1Base",
++        "Chat List/Archive/Intro1Content",
++        "Chat List/Archive/Intro2Base",
++        "Chat List/Archive/Intro2Content",
++        "Chat List/Archive/Intro3Content",
++        "Chat List/ArchiveIconLarge",
++        "Chat List/ArchivedUndoIcon",
++        "Chat List/AudioIcon",
++        "Chat List/CallIncomingIcon",
++        "Chat List/CallOutgoingIcon",
++        "Chat List/CallVideoIncomingIcon",
++        "Chat List/CallVideoOutgoingIcon",
++        "Chat List/ComposeIcon",
++        "Chat List/Filters/Archive",
++        "Chat List/Filters/Bot",
++        "Chat List/Filters/Channel",
++        "Chat List/Filters/Contact",
++        "Chat List/Filters/Group",
++        "Chat List/Filters/Muted",
++        "Chat List/Filters/Read",
++        "Chat List/Filters/User",
++        "Chat List/ForwardedIcon",
++        "Chat List/GameIcon",
++        "Chat List/GeneralTopicIcon",
++        "Chat List/GiftIcon",
++        "Chat List/HiddenIcon",
++        "Chat List/InfoIcon",
++        "Chat List/LiveLocationPanelIcon",
++        "Chat List/MentionBadgeIcon",
++        "Chat List/MiniThumbnailPlay",
++        "Chat List/NavigationMore",
++        "Chat List/NavigationShare",
++        "Chat List/PeerMutedIcon",
++        "Chat List/PeerPinnedIcon",
++        "Chat List/PeerPremiumIcon",
++        "Chat List/PeerVerifiedIconBackground",
++        "Chat List/PeerVerifiedIconForeground",
++        "Chat List/PollBadgeIcon",
++        "Chat List/PollVotesBadgeIcon",
++        "Chat List/ProxyCheckIcon",
++        "Chat List/ProxyOnIcon",
++        "Chat List/ProxyShieldIcon",
++        "Chat List/ReactionsBadgeIcon",
++        "Chat List/Search/Archive",
++        "Chat List/Search/Arrow",
++        "Chat List/Search/Calendar",
++        "Chat List/Search/Channel",
++        "Chat List/Search/Group",
++        "Chat List/Search/User",
++        "Chat List/SearchIcon",
++        "Chat List/SearchInlineButtonIcon",
++        "Chat List/SharedFolderListIcon",
++        "Chat List/StatusLockIcon",
++        "Chat List/StoryReplyIcon",
++        "Chat List/Tabs/Holiday/IconCalls",
++        "Chat List/Tabs/Holiday/IconChats",
++        "Chat List/Tabs/Holiday/IconContacts",
++        "Chat List/Tabs/Holiday/IconSettings",
++        "Chat List/Tabs/IconCalls",
++        "Chat List/Tabs/IconChats",
++        "Chat List/Tabs/IconContacts",
++        "Chat List/Tabs/IconSettings",
++        "Chat List/TodoIcon",
++        "Chat List/TopicArrowIcon",
++        "Chat List/VoiceMessageIcon",
++        "Chat/Attach Menu/Animated",
++        "Chat/Attach Menu/Burst",
++        "Chat/Attach Menu/Cloud",
++        "Chat/Attach Menu/Hidden",
++        "Chat/Attach Menu/Image",
++        "Chat/Attach Menu/LivePhoto",
++        "Chat/Attach Menu/Location",
++        "Chat/Attach Menu/OpenCamera",
++        "Chat/Attach Menu/Panorama",
++        "Chat/Attach Menu/Portrait",
++        "Chat/Attach Menu/Screenshot",
++        "Chat/Attach Menu/Selfie",
++        "Chat/Attach Menu/SloMo",
++        "Chat/Attach Menu/Timelapse",
++        "Chat/Attach Menu/Video",
++        "Chat/Context Menu/Add",
++        "Chat/Context Menu/AddCaption",
++        "Chat/Context Menu/AddCircle",
++        "Chat/Context Menu/AddFolder",
++        "Chat/Context Menu/AddSquare",
++        "Chat/Context Menu/AddSticker",
++        "Chat/Context Menu/AddToFolder",
++        "Chat/Context Menu/AddUser",
++        "Chat/Context Menu/AntiSpam",
++        "Chat/Context Menu/ApplyTheme",
++        "Chat/Context Menu/Archive",
++        "Chat/Context Menu/Arrow",
++        "Chat/Context Menu/Back",
++        "Chat/Context Menu/Ban",
++        "Chat/Context Menu/Boost",
++        "Chat/Context Menu/Bots",
++        "Chat/Context Menu/Browser",
++        "Chat/Context Menu/Calendar",
++        "Chat/Context Menu/Call",
++        "Chat/Context Menu/Camera",
++        "Chat/Context Menu/Channels",
++        "Chat/Context Menu/Chats",
++        "Chat/Context Menu/Check",
++        "Chat/Context Menu/Clear",
++        "Chat/Context Menu/ClearMessages",
++        "Chat/Context Menu/Copy",
++        "Chat/Context Menu/Customize",
++        "Chat/Context Menu/Delete",
++        "Chat/Context Menu/Download",
++        "Chat/Context Menu/DownloadTone",
++        "Chat/Context Menu/Draw",
++        "Chat/Context Menu/Edit",
++        "Chat/Context Menu/Expand",
++        "Chat/Context Menu/FactCheck",
++        "Chat/Context Menu/Fave",
++        "Chat/Context Menu/File",
++        "Chat/Context Menu/Folder",
++        "Chat/Context Menu/FormatBulletList",
++        "Chat/Context Menu/FormatChecklist",
++        "Chat/Context Menu/FormatCode",
++        "Chat/Context Menu/FormatFormula",
++        "Chat/Context Menu/FormatHeading",
++        "Chat/Context Menu/FormatNumberList",
++        "Chat/Context Menu/FormatPullquote",
++        "Chat/Context Menu/FormatQuote",
++        "Chat/Context Menu/FormatText",
++        "Chat/Context Menu/Forward",
++        "Chat/Context Menu/Gift",
++        "Chat/Context Menu/Globe",
++        "Chat/Context Menu/GoToMessage",
++        "Chat/Context Menu/Groups",
++        "Chat/Context Menu/Help",
++        "Chat/Context Menu/Image",
++        "Chat/Context Menu/ImageEnlarge",
++        "Chat/Context Menu/Info",
++        "Chat/Context Menu/Link",
++        "Chat/Context Menu/Lock",
++        "Chat/Context Menu/Logout",
++        "Chat/Context Menu/MarkAsRead",
++        "Chat/Context Menu/MarkAsUnread",
++        "Chat/Context Menu/Mention",
++        "Chat/Context Menu/Message",
++        "Chat/Context Menu/MessageBubble",
++        "Chat/Context Menu/More",
++        "Chat/Context Menu/MoveToChats",
++        "Chat/Context Menu/MoveToContacts",
++        "Chat/Context Menu/Mute2d",
++        "Chat/Context Menu/Muted",
++        "Chat/Context Menu/Pencil",
++        "Chat/Context Menu/PhoneCall",
++        "Chat/Context Menu/Pin",
++        "Chat/Context Menu/PinnedList",
++        "Chat/Context Menu/Play",
++        "Chat/Context Menu/PriceTag",
++        "Chat/Context Menu/Privacy",
++        "Chat/Context Menu/Promote",
++        "Chat/Context Menu/QualityHd",
++        "Chat/Context Menu/QualitySd",
++        "Chat/Context Menu/Quote",
++        "Chat/Context Menu/QuoteRemove",
++        "Chat/Context Menu/QuoteSelected",
++        "Chat/Context Menu/Raise",
++        "Chat/Context Menu/Rate",
++        "Chat/Context Menu/ReactionExpandArrow",
++        "Chat/Context Menu/Reactions",
++        "Chat/Context Menu/Read",
++        "Chat/Context Menu/ReadAll",
++        "Chat/Context Menu/ReadingList",
++        "Chat/Context Menu/Reload",
++        "Chat/Context Menu/RemoveFromFolder",
++        "Chat/Context Menu/RemoveFromFolderUp",
++        "Chat/Context Menu/RemovePrice",
++        "Chat/Context Menu/ReorderItems",
++        "Chat/Context Menu/Replace",
++        "Chat/Context Menu/Replies",
++        "Chat/Context Menu/Reply",
++        "Chat/Context Menu/Report",
++        "Chat/Context Menu/ReportCopyright",
++        "Chat/Context Menu/ReportDrugs",
++        "Chat/Context Menu/ReportFake",
++        "Chat/Context Menu/ReportPersonal",
++        "Chat/Context Menu/ReportViolence",
++        "Chat/Context Menu/ReportXxx",
++        "Chat/Context Menu/Resend",
++        "Chat/Context Menu/Restrict",
++        "Chat/Context Menu/Save",
++        "Chat/Context Menu/Schedule",
++        "Chat/Context Menu/Search",
++        "Chat/Context Menu/Select",
++        "Chat/Context Menu/SelectAll",
++        "Chat/Context Menu/Settings",
++        "Chat/Context Menu/Share",
++        "Chat/Context Menu/Smile",
++        "Chat/Context Menu/SoundOff",
++        "Chat/Context Menu/SoundOn",
++        "Chat/Context Menu/Speed",
++        "Chat/Context Menu/Stars",
++        "Chat/Context Menu/Statistics",
++        "Chat/Context Menu/Sticker",
++        "Chat/Context Menu/StopPoll",
++        "Chat/Context Menu/Stories",
++        "Chat/Context Menu/StoryArchive",
++        "Chat/Context Menu/Tag",
++        "Chat/Context Menu/TagEditName",
++        "Chat/Context Menu/TagFilter",
++        "Chat/Context Menu/TagRemove",
++        "Chat/Context Menu/Telegram",
++        "Chat/Context Menu/ThumbsDown",
++        "Chat/Context Menu/ThumbsUp",
++        "Chat/Context Menu/Time",
++        "Chat/Context Menu/Timer",
++        "Chat/Context Menu/Tip",
++        "Chat/Context Menu/Ton",
++        "Chat/Context Menu/Translate",
++        "Chat/Context Menu/Unfave",
++        "Chat/Context Menu/Ungroup",
++        "Chat/Context Menu/Unmute",
++        "Chat/Context Menu/Unpin",
++        "Chat/Context Menu/Unvote",
++        "Chat/Context Menu/User",
++        "Chat/Context Menu/VideoCall",
++        "Chat/Context Menu/VoiceChat",
++        "Chat/Empty Chat/BotPattern",
++        "Chat/Empty Chat/ListCheckIcon",
++        "Chat/GridPlayIcon",
++        "Chat/Hashtag/ClearRecent",
++        "Chat/Hashtag/EmptyHashtag",
++        "Chat/Hashtag/RecentHashtag",
++        "Chat/Hashtag/SuggestHashtag",
++        "Chat/ImportedMessageTooltipIcon",
++        "Chat/Info/CallButton",
++        "Chat/Info/DiscussDayIcon",
++        "Chat/Info/DiscussNightAccentIcon",
++        "Chat/Info/DiscussNightIcon",
++        "Chat/Info/GeneralIcon",
++        "Chat/Info/GroupInfoIcon",
++        "Chat/Info/GroupRequestsIcon",
++        "Chat/Info/VideoCallButton",
++        "Chat/Input/Accessory Panels/EditIcon",
++        "Chat/Input/Accessory Panels/EncircledCloseButton",
++        "Chat/Input/Accessory Panels/ForwardIcon",
++        "Chat/Input/Accessory Panels/ForwardSettingsIcon",
++        "Chat/Input/Accessory Panels/LinkSettingsIcon",
++        "Chat/Input/Accessory Panels/MessageSelectionAction",
++        "Chat/Input/Accessory Panels/MessageSelectionForward",
++        "Chat/Input/Accessory Panels/MessageSelectionTrash",
++        "Chat/Input/Accessory Panels/PanelTextChannelIcon",
++        "Chat/Input/Accessory Panels/PanelTextGroupIcon",
++        "Chat/Input/Accessory Panels/PinnedList",
++        "Chat/Input/Accessory Panels/ReplyIcon",
++        "Chat/Input/Accessory Panels/ReplyQuoteIcon",
++        "Chat/Input/Accessory Panels/ReplySettingsIcon",
++        "Chat/Input/Accessory Panels/SuggestPostIcon",
++        "Chat/Input/Accessory Panels/TextLockIcon",
++        "Chat/Input/Accessory Panels/WebpageIcon",
++        "Chat/Input/Media/EntityInputClearIcon",
++        "Chat/Input/Media/EntityInputEmojiIcon",
++        "Chat/Input/Media/EntityInputPremiumIcon",
++        "Chat/Input/Media/GifsNotFoundIcon",
++        "Chat/Input/Media/GridDismissIcon",
++        "Chat/Input/Media/GridSetupIcon",
++        "Chat/Input/Media/PanelBadgeAdd",
++        "Chat/Input/Media/PanelBadgeLock",
++        "Chat/Input/Media/PanelCollectibleIcon",
++        "Chat/Input/Media/PanelFeaturedIcon",
++        "Chat/Input/Media/PanelHeartIcon",
++        "Chat/Input/Media/PanelRecentIcon",
++        "Chat/Input/Media/PanelSavedIcon",
++        "Chat/Input/Media/PanelSectionLockIcon",
++        "Chat/Input/Media/PanelTrendingIcon",
++        "Chat/Input/Media/StickersNotFoundIcon",
++        "Chat/Input/Menu/ScheduleIcon",
++        "Chat/Input/Menu/SilentIcon",
++        "Chat/Input/Menu/WhenOnlineIcon",
++        "Chat/Input/ScheduleIcon",
++        "Chat/Input/Search/Calendar",
++        "Chat/Input/Search/DownButton",
++        "Chat/Input/Search/Members",
++        "Chat/Input/Search/UpButton",
++        "Chat/Input/Text/AccessoryIconCommands",
++        "Chat/Input/Text/AccessoryIconGift",
++        "Chat/Input/Text/AccessoryIconInputButtons",
++        "Chat/Input/Text/AccessoryIconKeyboard",
++        "Chat/Input/Text/AccessoryIconSchedule",
++        "Chat/Input/Text/AccessoryIconSilentPostOff",
++        "Chat/Input/Text/AccessoryIconSilentPostOn",
++        "Chat/Input/Text/AccessoryIconStickers",
++        "Chat/Input/Text/AccessoryIconSuggestPost",
++        "Chat/Input/Text/AccessoryIconTimer",
++        "Chat/Input/Text/AudioRecordingCancelArrow",
++        "Chat/Input/Text/CommensCross",
++        "Chat/Input/Text/Comments",
++        "Chat/Input/Text/IconAttachment",
++        "Chat/Input/Text/IconExpandInput",
++        "Chat/Input/Text/IconForwardSend",
++        "Chat/Input/Text/IconMicrophone",
++        "Chat/Input/Text/IconVideo",
++        "Chat/Input/Text/InputAIIcon",
++        "Chat/Input/Text/Replace",
++        "Chat/Input/Text/SendIcon",
++        "Chat/Input/Text/SlowmodeArrow",
++        "Chat/Input/Text/SlowmodeFrame",
++        "Chat/Links/LargeLink",
++        "Chat/Links/Link",
++        "Chat/Links/QrLogo",
++        "Chat/Message/AgeRestricted",
++        "Chat/Message/AttachedContentInstantIcon",
++        "Chat/Message/Boost",
++        "Chat/Message/Boosts",
++        "Chat/Message/BotAddToChat",
++        "Chat/Message/BotCopy",
++        "Chat/Message/BotLink",
++        "Chat/Message/BotLocation",
++        "Chat/Message/BotMessage",
++        "Chat/Message/BotPayment",
++        "Chat/Message/BotPhone",
++        "Chat/Message/BotProfile",
++        "Chat/Message/BotShare",
++        "Chat/Message/BotWebApp",
++        "Chat/Message/BubbleComments",
++        "Chat/Message/BubbleReplies",
++        "Chat/Message/CallIncomingArrow",
++        "Chat/Message/CallOutgoingArrow",
++        "Chat/Message/CollapseIcon",
++        "Chat/Message/ExpandIcon",
++        "Chat/Message/ExpiredStoryIcon",
++        "Chat/Message/FileCloudFetch",
++        "Chat/Message/FileCloudFetched",
++        "Chat/Message/FreeRepliesIcon",
++        "Chat/Message/GiftRibbon",
++        "Chat/Message/HeaderArrow",
++        "Chat/Message/Hidden",
++        "Chat/Message/ImpressionCount",
++        "Chat/Message/InlineVideoMute",
++        "Chat/Message/InstantVideoMute",
++        "Chat/Message/Lamp",
++        "Chat/Message/LivePhoto",
++        "Chat/Message/LocationPin",
++        "Chat/Message/LocationPinBackground",
++        "Chat/Message/LocationPinForeground",
++        "Chat/Message/LocationPinShadow",
++        "Chat/Message/MenuEditIcon",
++        "Chat/Message/MenuReactionIcon",
++        "Chat/Message/MenuReadIcon",
++        "Chat/Message/NavigateToMessageIcon",
++        "Chat/Message/OverlayInstantVideoShadow",
++        "Chat/Message/OverlayPlainVideoShadow",
++        "Chat/Message/Pinned",
++        "Chat/Message/PollReplyIcon",
++        "Chat/Message/Question",
++        "Chat/Message/RadialProgressIconDocument",
++        "Chat/Message/ReactionTagBackground",
++        "Chat/Message/ReplyCount",
++        "Chat/Message/ReplyQuoteIcon",
++        "Chat/Message/ReplyStoryIcon",
++        "Chat/Message/SelfExpiring",
++        "Chat/Message/ServiceTodoAppended",
++        "Chat/Message/ServiceTodoCompleted",
++        "Chat/Message/ServiceTodoIncompleted",
++        "Chat/Message/ShareIcon",
++        "Chat/Message/SideCloseIcon",
++        "Chat/Message/Stars",
++        "Chat/Message/StarsCount",
++        "Chat/Message/SuggestPostApprove",
++        "Chat/Message/SuggestPostChange",
++        "Chat/Message/SuggestPostDecline",
++        "Chat/Message/TextCodeIcon",
++        "Chat/Message/TodoCheck",
++        "Chat/Message/TodoDot",
++        "Chat/Message/ViewOnce",
++        "Chat/Message/VolumeButtonIcon",
++        "Chat/Message/VolumeButtonIconX",
++        "Chat/NavigateToMentions",
++        "Chat/NavigateToPollVotes",
++        "Chat/NavigateToReactions",
++        "Chat/NavigationSearchTagsIcon",
++        "Chat/OverscrollArrow",
++        "Chat/OverscrollFolder",
++        "Chat/Recent Actions/Placeholder",
++        "Chat/Stickers/Lock",
++        "Chat/Stickers/SmallLock",
++        "Chat/Title Panels/MuteIcon",
++        "Chat/Title Panels/SearchTagTab",
++        "Chat/Title Panels/SearchTagTokenBackground",
++        "Chat/Title Panels/Translate",
++        "Chat/ToastImprovingVideo",
++        "Components/AppBadge",
++        "Components/Close",
++        "Components/CommunityShadow",
++        "Components/Context Menu/Shadow",
++        "Components/RoundVideoCorner",
++        "Components/Search Bar/Cashtag",
++        "Components/Search Bar/Clear",
++        "Components/Search Bar/Hashtag",
++        "Components/Search Bar/Loupe",
++        "Components/TextSpeckle",
++        "Contact List/AddBirthdayIcon",
++        "Contact List/AddMemberIcon",
++        "Contact List/CreateChannelActionIcon",
++        "Contact List/CreateGroupActionIcon",
++        "Contact List/InviteActionIcon",
++        "Contact List/LinkActionIcon",
++        "Contact List/SubtitleArrow",
++        "GlobalMusicPlayer/AlbumArtPlaceholder",
++        "GlobalMusicPlayer/Next",
++        "GlobalMusicPlayer/OrderRandom",
++        "GlobalMusicPlayer/OrderReverse",
++        "GlobalMusicPlayer/Previous",
++        "GlobalMusicPlayer/Repeat",
++        "GlobalMusicPlayer/RepeatOne",
++        "GlobalMusicPlayer/Share",
++        "Instant View/ActionIcon",
++        "Instant View/ImageLink",
++        "Instant View/InstantViewOff",
++        "Instant View/MoreIcon",
++        "Instant View/NewTab",
++        "Instant View/PanelCheck",
++        "Instant View/Settings/DecreaseFont",
++        "Instant View/Settings/IncreaseFont",
++        "Instant View/Settings/Reload",
++        "Instant View/Settings/Search",
++        "Instant View/SettingsArrow",
++        "Instant View/SettingsBrightnessMaxIcon",
++        "Instant View/SettingsBrightnessMinIcon",
++        "Instant View/SettingsFontMaxIcon",
++        "Instant View/SettingsFontMinIcon",
++        "Item List/AddChannelIcon",
++        "Item List/AddItemIcon",
++        "Item List/AttachIcon",
++        "Item List/Block",
++        "Item List/CommunitiesIcon",
++        "Item List/ContextDisclosureArrow",
++        "Item List/DisclosureArrow",
++        "Item List/ExpandingItemVerticalRegularArrow",
++        "Item List/ExpandingItemVerticalSmallArrow",
++        "Item List/GlassEdge40x40",
++        "Item List/HeaderContextDisclosureArrow",
++        "Item List/Icons/Backdrop",
++        "Item List/Icons/Gift",
++        "Item List/Icons/Gradient",
++        "Item List/Icons/Premium",
++        "Item List/Icons/Stars",
++        "Item List/Icons/Sticker",
++        "Item List/InlineIconUsers",
++        "Item List/InlineTextRightArrow",
++        "Item List/InviteLink",
++        "Item List/PremiumIcon",
++        "Item List/RemoveItemIcon",
++        "Item List/SubscriptionLink",
++        "Item List/SwitchLockIcon",
++        "Item List/Ton",
++        "Location/CreateGroupIcon",
++        "Location/FoursquareAttribution",
++        "Location/GoogleAttribution",
++        "Location/HomeIcon",
++        "Location/InfoActiveIcon",
++        "Location/NotificationIcon",
++        "Location/PinBackground",
++        "Location/PinShadow",
++        "Location/PinSmallBackground",
++        "Location/ProximityIcon",
++        "Location/SendLocationIcon",
++        "Location/TrackActiveIcon",
++        "Location/TrackHeadingIcon",
++        "Location/TrackIcon",
++        "Location/WorkIcon",
++        "Media Editor/Add",
++        "Media Editor/AddSticker",
++        "Media Editor/AddText",
++        "Media Editor/Adjustments",
++        "Media Editor/Apply",
++        "Media Editor/AudioSmall",
++        "Media Editor/Blur",
++        "Media Editor/BlurLinear",
++        "Media Editor/BlurOff",
++        "Media Editor/BlurPortrait",
++        "Media Editor/BlurRadial",
++        "Media Editor/Close",
++        "Media Editor/Curves",
++        "Media Editor/Cutout",
++        "Media Editor/CutoutUndo",
++        "Media Editor/Done",
++        "Media Editor/DownArrow",
++        "Media Editor/Erase",
++        "Media Editor/Fill",
++        "Media Editor/Flip",
++        "Media Editor/FontArrow",
++        "Media Editor/Grayscale",
++        "Media Editor/LiveBounce",
++        "Media Editor/LiveLoop",
++        "Media Editor/LiveOff",
++        "Media Editor/LiveOn",
++        "Media Editor/LocationSmall",
++        "Media Editor/MediaSlomo",
++        "Media Editor/MediaTimelapse",
++        "Media Editor/MediaVideo",
++        "Media Editor/Mirror",
++        "Media Editor/Outline",
++        "Media Editor/Pencil",
++        "Media Editor/RemoveRecordedVideo",
++        "Media Editor/Restore",
++        "Media Editor/Rotate",
++        "Media Editor/RoundSpectrum",
++        "Media Editor/Scan",
++        "Media Editor/ShapeArrow",
++        "Media Editor/ShapeBubble",
++        "Media Editor/ShapeEllipse",
++        "Media Editor/ShapeRectangle",
++        "Media Editor/ShapeStar",
++        "Media Editor/SmallAudio",
++        "Media Editor/Spectrum",
++        "Media Editor/Stroke",
++        "Media Editor/TextDefault",
++        "Media Editor/TextFilled",
++        "Media Editor/TextSemi",
++        "Media Editor/TextStroke",
++        "Media Editor/Timeline",
++        "Media Editor/Timeout",
++        "Media Editor/Tint",
++        "Media Editor/ToolArrow",
++        "Media Editor/ToolArrowShadow",
++        "Media Editor/ToolArrowTip",
++        "Media Editor/ToolBlur",
++        "Media Editor/ToolBlurShadow",
++        "Media Editor/ToolBlurTip",
++        "Media Editor/ToolEraser",
++        "Media Editor/ToolEraserShadow",
++        "Media Editor/ToolMarker",
++        "Media Editor/ToolMarkerShadow",
++        "Media Editor/ToolMarkerTip",
++        "Media Editor/ToolNeon",
++        "Media Editor/ToolNeonShadow",
++        "Media Editor/ToolNeonTip",
++        "Media Editor/ToolPen",
++        "Media Editor/ToolPenShadow",
++        "Media Editor/ToolPenTip",
++        "Media Editor/Undo",
++        "Media Editor/ZoomOut",
++        "Media Gallery/BackwardButton",
++        "Media Gallery/Check",
++        "Media Gallery/Draw",
++        "Media Gallery/ForwardButton",
++        "Media Gallery/Fullscreen",
++        "Media Gallery/InlineLike",
++        "Media Gallery/InlineShare",
++        "Media Gallery/LiveTextIcon",
++        "Media Gallery/Minimize",
++        "Media Gallery/NavigationSettingsNoDot",
++        "Media Gallery/PictureInPictureButton",
++        "Media Gallery/PictureInPictureClose",
++        "Media Gallery/PictureInPictureIcon",
++        "Media Gallery/PictureInPictureLeave",
++        "Media Gallery/PictureInPicturePause",
++        "Media Gallery/PictureInPicturePlay",
++        "Media Gallery/PlayButton",
++        "Media Gallery/VideoRateToast",
++        "Media Gallery/ViewOnce",
++        "Media Grid/Favorite",
++        "Media Grid/GroupingOff",
++        "Media Grid/Lock",
++        "Media Grid/Paid",
++        "Navigation/Back",
++        "Navigation/Close",
++        "Navigation/Done",
++        "Navigation/Search",
++        "Navigation/Share",
++        "Navigation/TitleExpand",
++        "Open In/Maps",
++        "Open In/Safari",
++        "PasswordSetup/TextHidden",
++        "Peek/Arrow",
++        "Peer Info/AlertArrow",
++        "Peer Info/BotCommands",
++        "Peer Info/BotIntro",
++        "Peer Info/BotSettings",
++        "Peer Info/BotVerify",
++        "Peer Info/CollectibleTonSymbolInline",
++        "Peer Info/DateLockedIcon",
++        "Peer Info/Gifts/AddCollection",
++        "Peer Info/Gifts/AddGift",
++        "Peer Info/Gifts/AddToCollection",
++        "Peer Info/Gifts/Collection",
++        "Peer Info/Gifts/RemoveFromCollection",
++        "Peer Info/GroupStickerPackNotFound",
++        "Peer Info/HiddenIcon",
++        "Peer Info/HideIcon",
++        "Peer Info/InlineRatingWarning",
++        "Peer Info/LocationIcon",
++        "Peer Info/ManagedBotInlineTextIcon",
++        "Peer Info/MediaGridShadow",
++        "Peer Info/MediaGridViewCount",
++        "Peer Info/PremiumIcon",
++        "Peer Info/ProfileLevelProgressIcon",
++        "Peer Info/ProfileLevelWarningIcon",
++        "Peer Info/RemoveIcon",
++        "Peer Info/SavedMusic",
++        "Peer Info/ShowIcon",
++        "Peer Info/SortDate",
++        "Peer Info/SortIcon",
++        "Peer Info/SortNumber",
++        "Peer Info/SortValue",
++        "Peer Info/SuggestAvatar",
++        "Peer Info/TransferIcon",
++        "Peer Info/VerifiedIconBackground",
++        "Peer Info/VerifiedIconForeground",
++        "Peer Info/WearIcon",
++        "Premium/Auction/BidMedium",
++        "Premium/Auction/BidSmall",
++        "Premium/AvatarBoost",
++        "Premium/BoostButtonIcon",
++        "Premium/BoostChannel",
++        "Premium/BoostPerk/CoverColor",
++        "Premium/ButtonIcon",
++        "Premium/Collectible/Hidden",
++        "Premium/Collectible/Sell",
++        "Premium/Collectible/Unlist",
++        "Premium/ContextStar",
++        "Premium/Craft/Craft",
++        "Premium/Craft/DialColorMask",
++        "Premium/File",
++        "Premium/Gift",
++        "Premium/GiftRibbon",
++        "Premium/Icons/Black",
++        "Premium/Icons/Premium",
++        "Premium/Icons/Turbo",
++        "Premium/Link",
++        "Premium/NoIcon",
++        "Premium/PremiumIconBackground",
++        "Premium/ReactionsBackground",
++        "Premium/ReactionsForeground",
++        "Premium/ReactionsStar",
++        "Premium/SendStarsPeerBadgeStarIcon",
++        "Premium/SendStarsStarSliderIcon",
++        "Premium/Stars/Apple",
++        "Premium/Stars/BalanceStar",
++        "Premium/Stars/ButtonStar",
++        "Premium/Stars/Fragment",
++        "Premium/Stars/Google",
++        "Premium/Stars/MediaLock",
++        "Premium/Stars/PaidBroadcast",
++        "Premium/Stars/Particle",
++        "Premium/Stars/StarLarge",
++        "Premium/Stars/StarMedium",
++        "Premium/Stars/StarMediumOutline",
++        "Premium/Stars/StarSmall",
++        "Premium/Stars/Stats",
++        "Premium/Stars/TransactionStar",
++        "Premium/Stars/TransactionStarOutline",
++        "Premium/TonGift",
++        "Premium/X2",
++        "RichText/PremiumStarMask",
++        "RichText/QuoteClose",
++        "RichText/QuoteOpen",
++        "Secure ID/DocumentInputBackSide",
++        "Secure ID/DocumentInputSelfie",
++        "Secure ID/DriversLicenseInputFrontSide",
++        "Secure ID/EmptyPasswordIcon",
++        "Secure ID/GrantIcon",
++        "Secure ID/IdCardInputFrontSide",
++        "Secure ID/PassportInputFrontSide",
++        "Secure ID/PasswordHelpIcon",
++        "Secure ID/ViewPassportIcon",
++        "Settings/CreateThemeIcon",
++        "Settings/Devices/Brave",
++        "Settings/Devices/Firefox",
++        "Settings/Devices/Generic",
++        "Settings/Devices/Opera",
++        "Settings/Devices/Safari",
++        "Settings/Devices/Vivaldi",
++        "Settings/Devices/Xbox",
++        "Settings/Devices/iOS",
++        "Settings/EditTheme",
++        "Settings/GiftSmall",
++        "Settings/Keypad",
++        "Settings/Menu/Passport",
++        "Settings/Menu/TouchId",
++        "Settings/Menu/Watch",
++        "Settings/PasscodeFaceId",
++        "Settings/PasscodeIntroIcon",
++        "Settings/PasscodeTouchId",
++        "Settings/Permissions/CellularData",
++        "Settings/Permissions/Contacts",
++        "Settings/Permissions/Notifications",
++        "Settings/Permissions/Siri",
++        "Settings/QrButtonIcon",
++        "Settings/QrIcon",
++        "Settings/RecentSessionsPlaceholder",
++        "Settings/Refresh",
++        "Settings/Reset",
++        "Settings/SetAvatar",
++        "Settings/SetUsername",
++        "Settings/Storage/ParticleStar",
++        "Settings/TextArrowRight",
++        "Settings/ThemeBubble",
++        "Settings/ThemeColorAddIcon",
++        "Settings/ThemeColorRemoveIcon",
++        "Settings/ThemeColorRotateIcon",
++        "Settings/ThemeColorSwapIcon",
++        "Settings/UploadTone",
++        "Settings/UsageBatteryFrame",
++        "Settings/WallpaperBrightnessMax",
++        "Settings/WallpaperBrightnessMin",
++        "Share/Instagram",
++        "Share/QrPlaneIcon",
++        "Share/SearchBarSearchIcon",
++        "Share/SearchIcon",
++        "Share/ShareIcon",
++        "Share/Story",
++        "Star",
++        "Stories/Close",
++        "Stories/Context Menu/EditCover",
++        "Stories/Context Menu/Repost",
++        "Stories/EmbeddedViewIcon",
++        "Stories/HeaderForward",
++        "Stories/HeaderRepost",
++        "Stories/InputLikeOff",
++        "Stories/InputLikeOn",
++        "Stories/InputRepost",
++        "Stories/LiveChatCrown",
++        "Stories/PrivacyCloseFriends",
++        "Stories/PrivacyContacts",
++        "Stories/PrivacyDownArrow",
++        "Stories/PrivacyEveryone",
++        "Stories/PrivacySelectedContacts",
++        "Stories/ReactionOutline",
++        "Stories/ReactionShadow",
++        "Stories/SelectorArrowDown",
++        "Stories/StealthModeIntroIconMain",
++        "Wallet/CameraFlashIcon",
++        "Wallet/CameraGalleryIcon",
++    ]
++}
+diff --git a/submodules/Lunagram/Sources/LunagramAppIcons.swift b/submodules/Lunagram/Sources/LunagramAppIcons.swift
+new file mode 100644
+index 00000000..5d650527
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramAppIcons.swift
+@@ -0,0 +1,72 @@
++import Foundation
++import UIKit
++
++// Lunagram: свои картинки вместо значков приложения.
++//
++// На Android значки лежат файлами, и чужой набор подменяет их разом. На iOS
++// они лежат в сжатом каталоге внутри приложения и зовутся по-своему: не
++// «ic_delete», а «Chat/Context Menu/Delete». Чужой набор сюда не ляжет ни
++// одним файлом — имена не совпадают и совпасть не могут. Поэтому меняем
++// поштучно: перечень всех значков, поиск по имени, своя картинка на любой.
++//
++// Хранилище общее со значками строк настроек — тот же список «ключ → файл», —
++// но ключ начинается с «app:». Так выбор картинки, подгонка и уборка
++// ненужных файлов написаны один раз и работают на оба случая.
++
++public enum LunagramAppIcons {
++    /// Есть ли вообще что подменять.
++    ///
++    /// Воронку значков дёргают тысячи раз за запуск, и лезть на каждый
++    /// значок в настройки и в список замен — дорого. Поэтому держим один
++    /// ответ наготове и обновляем его, когда настройки меняются.
++    private static var hasAny = false
++    private static var started = false
++
++    /// Зовётся один раз при запуске, с главного потока.
++    public static func start() {
++        guard !started else {
++            return
++        }
++        started = true
++        refresh()
++        NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { _ in
++            LunagramAppIcons.refresh()
++        })
++    }
++
++    private static func refresh() {
++        hasAny = LunagramSettings.appIcons && LunagramSettingIcons.appCount > 0
++    }
++
++    /// Ключ значка в общем списке картинок.
++    public static func key(for name: String) -> String {
++        return LunagramSettingIcons.appPrefix + name
++    }
++
++    /// Включены ли свои значки приложения.
++    public static var enabled: Bool {
++        return LunagramSettings.appIcons
++    }
++
++    /// Заменён ли этот значок.
++    public static func hasCustom(_ name: String) -> Bool {
++        return LunagramSettingIcons.hasCustom(key(for: name))
++    }
++
++    /// Сколько значков заменено — для строки настроек.
++    public static var count: Int {
++        return LunagramSettingIcons.appCount
++    }
++
++    /// Своя картинка значка в его же размер.
++    ///
++    /// Размер родного значка держим нарочно: по значкам считается разметка, и
++    /// значок другого размера сдвинул бы всё вокруг — от кнопок в шапке до
++    /// полосы ввода.
++    public static func image(for name: String, size: CGSize) -> UIImage? {
++        guard hasAny else {
++            return nil
++        }
++        return LunagramSettingIcons.image(for: key(for: name), size: size)
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+index 3394b4e2..da051f6c 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaceIcons.swift
+@@ -120,6 +120,8 @@ public extension LunagramPlace {
+             return (0xA8B4C8, 0x6E7C93)
+         case .glass:
+             return (0xB9A6FF, 0x7B5CF0)
++        case .appIcons:
++            return (0xD9A066, 0xA66A2E)
+         }
+     }
+ 
+diff --git a/submodules/Lunagram/Sources/LunagramPlaces.swift b/submodules/Lunagram/Sources/LunagramPlaces.swift
+index b5033cad..11ba7284 100644
+--- a/submodules/Lunagram/Sources/LunagramPlaces.swift
++++ b/submodules/Lunagram/Sources/LunagramPlaces.swift
+@@ -41,6 +41,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+     /// Вид кнопок под аватаркой: цвет букв, цвет оболочки, её густота.
+     case profileButtons = 15
+     case glass = 16
++    /// Свои картинки вместо значков приложения.
++    case appIcons = 17
+ 
+     public var title: String {
+         switch self {
+@@ -72,6 +74,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "Кнопки профиля"
+         case .glass:
+             return "Матовое стекло"
++        case .appIcons:
++            return "Значки приложения"
+         }
+     }
+ 
+@@ -107,6 +111,8 @@ public enum LunagramPlace: Int32, CaseIterable {
+             return "capsule.portrait,capsule"
+         case .glass:
+             return "square.stack.3d.up,square.on.square"
++        case .appIcons:
++            return "swatchpalette,paintpalette"
+         }
+     }
+ }
+diff --git a/submodules/Lunagram/Sources/LunagramSettingIcons.swift b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+index e80590fb..ec1b9a72 100644
+--- a/submodules/Lunagram/Sources/LunagramSettingIcons.swift
++++ b/submodules/Lunagram/Sources/LunagramSettingIcons.swift
+@@ -22,6 +22,10 @@ public enum LunagramSettingIcons {
+     /// Скругление значка — доля стороны. Столько же у значков самого iOS.
+     static let cornerFactor: CGFloat = 0.2237
+     private static let filePrefix = "icon-"
++    /// Значки приложения лежат в том же списке, что и значки строк
++    /// настроек, но их ключи начинаются с этого. Так вся возня с выбором
++    /// картинки, подгонкой и уборкой написана один раз на оба случая.
++    static let appPrefix = "app:"
+ 
+     struct Entry: Equatable {
+         var file: String
+@@ -35,14 +39,36 @@ public enum LunagramSettingIcons {
+         return LunagramSettings.settingIcons
+     }
+ 
++    /// Значок приложения это или строки настроек.
++    static func isApp(_ key: String) -> Bool {
++        return key.hasPrefix(appPrefix)
++    }
++
++    /// У значков приложения свой выключатель: человек может хотеть свои
++    /// картинки в настройках и не хотеть их по всему приложению.
++    static func enabled(for key: String) -> Bool {
++        return isApp(key) ? LunagramSettings.appIcons : LunagramSettings.settingIcons
++    }
++
++    /// Сколько значков приложения заменено.
++    static var appCount: Int {
++        return entries().keys.filter({ isApp($0) }).count
++    }
++
+     // MARK: Список «строка → картинка»
+ 
+     private static var parsedSource: String?
+     private static var parsedEntries: [String: Entry] = [:]
++    /// Значки строк настроек спрашивали только с главного потока. Значки
++    /// приложения — откуда угодно: их рисуют и на побочных очередях. Два
++    /// словаря ниже этого не переживут, поэтому вход к ним по одному.
++    private static let storeLock = NSLock()
+ 
+     /// Разбираем, только когда список сменился: значки рисуются часто, а
+     /// меняется список редко.
+     static func entries() -> [String: Entry] {
++        storeLock.lock()
++        defer { storeLock.unlock() }
+         let source = LunagramSettings.settingIconsMap
+         if source != parsedSource {
+             parsedSource = source
+@@ -121,7 +147,9 @@ public enum LunagramSettingIcons {
+         if entries().values.contains(where: { $0.file == file }) {
+             return
+         }
++        storeLock.lock()
+         originals.removeValue(forKey: file)
++        storeLock.unlock()
+         guard file.hasPrefix(filePrefix), let folder = try? LunagramSettings.lunagramFolder() else {
+             return
+         }
+@@ -167,6 +195,8 @@ public enum LunagramSettingIcons {
+     }()
+ 
+     static func original(_ file: String) -> UIImage? {
++        storeLock.lock()
++        defer { storeLock.unlock() }
+         if let image = originals[file] {
+             return image
+         }
+@@ -199,10 +229,11 @@ public enum LunagramSettingIcons {
+     /// Своя картинка строки в размер её значка. nil — своей нет или свои
+     /// значки выключены: тогда рисуется обычный.
+     public static func image(for key: String, size: CGSize) -> UIImage? {
+-        guard enabled, size.width > 0.0, size.height > 0.0, let entry = entry(for: key), let image = original(entry.file) else {
++        guard enabled(for: key), size.width > 0.0, size.height > 0.0, let entry = entry(for: key), let image = original(entry.file) else {
+             return nil
+         }
+-        let cacheKey = "\(entry.file)|\(entry.zoom)|\(entry.offsetX)|\(entry.offsetY)|\(size.width)x\(size.height)" as NSString
++        let rounded = !isApp(key)
++        let cacheKey = "\(entry.file)|\(entry.zoom)|\(entry.offsetX)|\(entry.offsetY)|\(size.width)x\(size.height)|\(rounded)" as NSString
+         if let cached = rendered.object(forKey: cacheKey) {
+             return cached
+         }
+@@ -212,9 +243,13 @@ public enum LunagramSettingIcons {
+         // Как у рамки: чётко на любом айфоне, а значок крошечный — память не жалко.
+         format.scale = 3.0
+         let result = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+-            // Обрезаем по квадрату со скруглением — как родные значки Telegram.
+-            let side = min(size.width, size.height)
+-            UIBezierPath(roundedRect: CGRect(origin: CGPoint(), size: size), cornerRadius: side * cornerFactor).addClip()
++            // Значок строки настроек обрезаем по квадрату со скруглением —
++            // как родные значки Telegram. Значки самого приложения формы не
++            // имеют вовсе: там и стрелки, и галочки, и обрезать их нечем.
++            if rounded {
++                let side = min(size.width, size.height)
++                UIBezierPath(roundedRect: CGRect(origin: CGPoint(), size: size), cornerRadius: side * cornerFactor).addClip()
++            }
+             image.draw(in: rect)
+         }
+         rendered.setObject(result, forKey: cacheKey)
+@@ -247,7 +282,7 @@ public enum LunagramSettingIcons {
+     /// картинки нет.
+     public static func showMenu(key rawKey: String, icon: UIImage?, iconSize: CGSize, from view: UIView, palette: Palette) {
+         let key = normalizedKey(rawKey)
+-        guard enabled, !key.isEmpty, let presenter = findPresenter(for: view) else {
++        guard enabled(for: key), !key.isEmpty, let presenter = findPresenter(for: view) else {
+             return
+         }
+         let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+@@ -441,7 +476,13 @@ private final class LunagramIconCanvasView: UIView {
+         if let entry = LunagramSettingIcons.entry(for: self.key), let image = LunagramSettingIcons.original(entry.file) {
+             let place = LunagramSettingIcons.placement(original: image.size, target: bounds.size, entry: entry)
+             UIGraphicsGetCurrentContext()?.saveGState()
+-            shape.addClip()
++            // Значок приложения не скругляется — и в образце тоже, иначе
++            // подгонял бы человек одно, а получалось другое.
++            if LunagramSettingIcons.isApp(self.key) {
++                UIBezierPath(rect: bounds).addClip()
++            } else {
++                shape.addClip()
++            }
+             image.draw(in: place)
+             UIGraphicsGetCurrentContext()?.restoreGState()
+         } else {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 484c267f..c5f9206c 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -101,6 +101,9 @@ public final class LunagramSettings {
+         static let glassTintCycleSpeed = "lunagram.glass.tintCycleSpeed"
+         static let vignette = "lunagram.glass.vignette"
+         static let vignetteStrength = "lunagram.glass.vignetteStrength"
++        static let ownReactions = "lunagram.reactions.own"
++        static let ownReactionsList = "lunagram.reactions.list"
++        static let appIcons = "lunagram.appIcons.enabled"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -916,6 +919,36 @@ public final class LunagramSettings {
+         set { setPercent(newValue, Key.vignetteStrength) }
+     }
+ 
++    /// Свои картинки вместо значков приложения.
++    public static var appIcons: Bool {
++        get { return flag(Key.appIcons, default: false) }
++        set { setFlag(newValue, Key.appIcons) }
++    }
++
++    /// Свои реакции впереди обычных.
++    ///
++    /// Telegram сам решает, что показать первым в панели реакций: сервер
++    /// присылает свой список «часто используемых», и он то и дело
++    /// перетасовывается. Свой набор этого не делает — он лежит как положили.
++    public static var ownReactions: Bool {
++        get { return flag(Key.ownReactions, default: false) }
++        set { setFlag(newValue, Key.ownReactions) }
++    }
++
++    /// Сами реакции, по порядку. Хранится сам значок — им же Telegram
++    /// называет обычную реакцию, и искать по нему ничего не надо.
++    public static var ownReactionsList: [String] {
++        get { return (defaults.array(forKey: Key.ownReactionsList) as? [String]) ?? [] }
++        set {
++            if newValue.isEmpty {
++                defaults.removeObject(forKey: Key.ownReactionsList)
++            } else {
++                defaults.set(newValue, forKey: Key.ownReactionsList)
++            }
++            changed()
++        }
++    }
++
+     /// Подмешать свой цвет к телеграмовскому. Цвет не выбран — отдаём как было.
+     ///
+     /// Именно подмешать, а не заменить: у панели важна ещё и прозрачность, и
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 60246b6c..752432c8 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -454,7 +454,7 @@ private func themeSettingsControllerEntries(
+     // порядком складывания, а не номерами строк: на этом я и споткнулся,
+     // и из-за этого же список сличался по неверным местам и вылетал.
+     entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .glass, .wording] {
++    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .glass, .appIcons, .wording] {
+         entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+     }
+ 
+diff --git a/submodules/TelegramUI/Components/Chat/TopMessageReactions/BUILD b/submodules/TelegramUI/Components/Chat/TopMessageReactions/BUILD
+index 29c6d108..aeb45475 100644
+--- a/submodules/TelegramUI/Components/Chat/TopMessageReactions/BUILD
++++ b/submodules/TelegramUI/Components/Chat/TopMessageReactions/BUILD
+@@ -14,6 +14,7 @@ swift_library(
+         "//submodules/TelegramCore",
+         "//submodules/AccountContext",
+         "//submodules/ReactionSelectionNode",
++        "//submodules/Lunagram",
+     ],
+     visibility = [
+         "//visibility:public",
+diff --git a/submodules/TelegramUI/Components/Chat/TopMessageReactions/Sources/TopMessageReactions.swift b/submodules/TelegramUI/Components/Chat/TopMessageReactions/Sources/TopMessageReactions.swift
+index 5e99e364..18cbd814 100644
+--- a/submodules/TelegramUI/Components/Chat/TopMessageReactions/Sources/TopMessageReactions.swift
++++ b/submodules/TelegramUI/Components/Chat/TopMessageReactions/Sources/TopMessageReactions.swift
+@@ -3,6 +3,7 @@ import SwiftSignalKit
+ import TelegramCore
+ import AccountContext
+ import ReactionSelectionNode
++import Lunagram
+ 
+ public enum AllowedReactions {
+     case set(Set<MessageReaction.Reaction>)
+@@ -316,7 +317,45 @@ public func topMessageReactions(context: AccountContext, message: EngineRawMessa
+         
+         var result: [ReactionItem] = []
+         var existingIds = Set<MessageReaction.Reaction>()
+-        
++
++        // Lunagram: свой набор идёт первым, телеграмовский — за ним.
++        //
++        // Проверки те же, что и у списка ниже: реакция должна быть разрешена в
++        // этой переписке и иметь обе картинки — без них её нечем рисовать.
++        if LunagramSettings.ownReactions {
++            for own in LunagramSettings.ownReactionsList {
++                guard let reaction = availableReactions.reactions.first(where: { $0.value == .builtin(own) }) else {
++                    continue
++                }
++                guard let centerAnimation = reaction.centerAnimation, let aroundAnimation = reaction.aroundAnimation else {
++                    continue
++                }
++                if existingIds.contains(reaction.value) {
++                    continue
++                }
++                switch allowedReactionsAndFiles.reactions {
++                case let .set(set):
++                    if !set.contains(reaction.value) {
++                        continue
++                    }
++                case .all:
++                    break
++                }
++                existingIds.insert(reaction.value)
++
++                result.append(ReactionItem(
++                    reaction: ReactionItem.Reaction(rawValue: reaction.value),
++                    appearAnimation: reaction.appearAnimation,
++                    stillAnimation: reaction.selectAnimation,
++                    listAnimation: centerAnimation,
++                    largeListAnimation: reaction.activateAnimation,
++                    applicationAnimation: aroundAnimation,
++                    largeApplicationAnimation: reaction.effectAnimation,
++                    isCustom: false
++                ))
++            }
++        }
++
+         for topReaction in topReactions {
+             switch topReaction.content {
+             case let .builtin(value):
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAppIconsScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAppIconsScreen.swift
+new file mode 100644
+index 00000000..4d4f0559
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAppIconsScreen.swift
+@@ -0,0 +1,266 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import AppBundle
++import Lunagram
++
++// Lunagram: экран «Значки приложения».
++//
++// Перечень всех значков, поиск по имени и своя картинка на любой. Выбор
++// картинки, подгонка и уборка — те же, что у значков строк настроек: там это
++// уже написано, и делать второй такой же набор окошек незачем.
++//
++// Показываем не весь список разом: значок надо нарисовать, чтобы показать, а
++// их восемь с лишним сотен. Поэтому на экране первые несколько десятков —
++// остальное находится поиском.
++
++private let lunagramAppIconsLimit = 60
++private let lunagramAppIconSide: CGFloat = 26.0
++
++/// Нарисованные значки держим сами: при каждой букве в поиске список
++/// пересобирается, а рисовать одно и то же заново незачем.
++private var lunagramAppIconCache: [String: UIImage] = [:]
++
++private func lunagramAppIconPreview(name: String, tint: UIColor) -> (image: UIImage?, size: CGSize) {
++    guard let original = UIImage(bundleImageName: name) else {
++        return (nil, .zero)
++    }
++    let custom = LunagramAppIcons.image(for: name, size: original.size)
++    let cacheKey = "\(name)|\(custom == nil ? 0 : 1)|\(tint.argb)"
++    if let cached = lunagramAppIconCache[cacheKey] {
++        return (cached, original.size)
++    }
++
++    // Родные значки почти все одноцветные и рисуются цветом темы — без
++    // подкраски половина из них была бы не видна на своём же фоне. Своя
++    // картинка цветная, её не трогаем.
++    let source = custom ?? generateTintedImage(image: original, color: tint) ?? original
++    let side = max(source.size.width, source.size.height)
++    var result = source
++    if side > lunagramAppIconSide {
++        let scale = lunagramAppIconSide / side
++        let target = CGSize(width: max(1.0, source.size.width * scale), height: max(1.0, source.size.height * scale))
++        let format = UIGraphicsImageRendererFormat()
++        format.opaque = false
++        format.scale = 3.0
++        result = UIGraphicsImageRenderer(size: target, format: format).image { _ in
++            source.draw(in: CGRect(origin: CGPoint(), size: target))
++        }
++    }
++    lunagramAppIconCache[cacheKey] = result
++    if lunagramAppIconCache.count > 400 {
++        lunagramAppIconCache.removeAll()
++    }
++    return (result, original.size)
++}
++
++private enum LunagramAppIconEntry: ItemListNodeEntry {
++    case master(Bool)
++    case masterInfo(String)
++    case search(String)
++    /// Место в списке, имя значка, картинка, заменён ли.
++    case icon(Int32, String, UIImage?, Bool)
++    case info(String)
++
++    var section: ItemListSectionId {
++        switch self {
++        case .master, .masterInfo:
++            return 0
++        case .search:
++            return 1
++        case .icon, .info:
++            return 2
++        }
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case .master:
++            return 0
++        case .masterInfo:
++            return 1
++        case .search:
++            return 2
++        case let .icon(place, _, _, _):
++            return 100 + place
++        case .info:
++            return 90_000
++        }
++    }
++
++    static func ==(lhs: LunagramAppIconEntry, rhs: LunagramAppIconEntry) -> Bool {
++        switch lhs {
++        case let .master(lhsValue):
++            if case let .master(rhsValue) = rhs, lhsValue == rhsValue {
++                return true
++            }
++            return false
++        case let .masterInfo(lhsText):
++            if case let .masterInfo(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .search(lhsText):
++            if case let .search(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .icon(lhsPlace, lhsName, lhsImage, lhsCustom):
++            if case let .icon(rhsPlace, rhsName, rhsImage, rhsCustom) = rhs, lhsPlace == rhsPlace, lhsName == rhsName, lhsImage === rhsImage, lhsCustom == rhsCustom {
++                return true
++            }
++            return false
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramAppIconEntry, rhs: LunagramAppIconEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramAppIconsArguments
++        switch self {
++        case let .master(value):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Свои значки приложения", value: value, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.setEnabled(value)
++            })
++        case let .masterInfo(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        case let .search(text):
++            return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: ""), text: text, placeholder: "Поиск по имени", clearType: .always, sectionId: self.section, textUpdated: { value in
++                arguments.setQuery(value)
++            }, action: {})
++        case let .icon(_, name, image, custom):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: image, title: name, label: custom ? "своя" : "", sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {
++                arguments.pick(name)
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++private final class LunagramAppIconsArguments {
++    let setEnabled: (Bool) -> Void
++    let setQuery: (String) -> Void
++    let pick: (String) -> Void
++
++    init(setEnabled: @escaping (Bool) -> Void, setQuery: @escaping (String) -> Void, pick: @escaping (String) -> Void) {
++        self.setEnabled = setEnabled
++        self.setQuery = setQuery
++        self.pick = pick
++    }
++}
++
++/// Держит подписку на «настройки изменились», пока жив экран: картинку
++/// выбирают в отдельном окошке, и список надо пересобрать, когда оно закроется.
++private final class LunagramAppIconsWatcher {
++    private var observer: NSObjectProtocol?
++
++    init(changed: @escaping () -> Void) {
++        self.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { _ in
++            changed()
++        })
++    }
++
++    deinit {
++        if let observer = self.observer {
++            NotificationCenter.default.removeObserver(observer)
++        }
++    }
++}
++
++func lunagramAppIconsScreen(context: AccountContext, refresh: @escaping () -> Void) -> ViewController {
++    let queryPromise = ValuePromise<String>("", ignoreRepeated: true)
++    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
++    var counter = 0
++    let bump: () -> Void = {
++        counter += 1
++        changed.set(counter)
++    }
++    let watcher = LunagramAppIconsWatcher(changed: bump)
++
++    var presentMenu: ((String) -> Void)?
++
++    let arguments = LunagramAppIconsArguments(setEnabled: { value in
++        LunagramSettings.appIcons = value
++        refresh()
++    }, setQuery: { value in
++        queryPromise.set(value)
++    }, pick: { name in
++        presentMenu?(name)
++    })
++
++    let signal = combineLatest(
++        context.sharedContext.presentationData,
++        queryPromise.get(),
++        changed.get()
++    )
++    |> deliverOnMainQueue
++    |> map { presentationData, currentQuery, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        // Пока экран жив, наблюдатель должен быть жив вместе с ним.
++        let _ = watcher
++
++        let needle = currentQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
++        var matched = LunagramAppIconNames.all
++        if !needle.isEmpty {
++            matched = matched.filter { $0.lowercased().contains(needle) }
++        }
++        // Заменённые вперёд: их ищут чаще всего — чтобы вернуть обычный.
++        let custom = matched.filter { LunagramAppIcons.hasCustom($0) }
++        if !custom.isEmpty {
++            matched = custom + matched.filter { !LunagramAppIcons.hasCustom($0) }
++        }
++        let shown = Array(matched.prefix(lunagramAppIconsLimit))
++
++        var entries: [LunagramAppIconEntry] = []
++        entries.append(.master(LunagramSettings.appIcons))
++        entries.append(.masterInfo("Пока выключено, замены не видны и картинку не выбрать."))
++        entries.append(.search(currentQuery))
++
++        for (place, name) in shown.enumerated() {
++            let preview = lunagramAppIconPreview(name: name, tint: presentationData.theme.list.itemPrimaryTextColor)
++            entries.append(.icon(Int32(place), name, preview.image, LunagramAppIcons.hasCustom(name)))
++        }
++
++        if shown.isEmpty {
++            entries.append(.info("Ничего не нашлось. Имена значков английские: попробуй «call», «trash», «folder»."))
++        } else if matched.count > shown.count {
++            entries.append(.info("Показаны первые \(shown.count) из \(matched.count) — уточни поиск.\n\nЗначок меняется на свою картинку в его же размере: по значкам считается разметка, и значок другого размера сдвинул бы всё вокруг. Некоторые значки приложение запоминает при запуске — они сменятся после перезапуска."))
++        } else {
++            entries.append(.info("Значок меняется на свою картинку в его же размере: по значкам считается разметка, и значок другого размера сдвинул бы всё вокруг.\n\nНекоторые значки приложение запоминает при запуске — они сменятся после перезапуска."))
++        }
++
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Значки приложения"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    presentMenu = { [weak controller] name in
++        guard let controller = controller, let original = UIImage(bundleImageName: name) else {
++            return
++        }
++        let presentationData = context.sharedContext.currentPresentationData.with({ $0 })
++        let palette = LunagramSettingIcons.Palette(
++            isDark: presentationData.theme.overallDarkAppearance,
++            background: presentationData.theme.list.blocksBackgroundColor,
++            card: presentationData.theme.list.itemBlocksBackgroundColor,
++            text: presentationData.theme.list.itemPrimaryTextColor,
++            secondaryText: presentationData.theme.list.itemSecondaryTextColor,
++            accent: presentationData.theme.list.itemAccentColor
++        )
++        LunagramSettingIcons.showMenu(key: LunagramAppIcons.key(for: name), icon: original, iconSize: original.size, from: controller.view, palette: palette)
++    }
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramReactionsScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramReactionsScreen.swift
+new file mode 100644
+index 00000000..6ebb366c
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramReactionsScreen.swift
+@@ -0,0 +1,146 @@
++import Foundation
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// Lunagram: свой набор реакций.
++//
++// Telegram сам решает, что показать первым в панели реакций: сервер присылает
++// список «часто используемых», и он то и дело перетасовывается. Здесь человек
++// складывает свой набор, и тот лежит как положили.
++//
++// Отмеченные поднимаются наверх списка — ровно в том порядке, в котором их
++// отмечали. Так видно не только что выбрано, но и каким оно будет в панели.
++
++private enum LunagramReactionEntry: ItemListNodeEntry {
++    /// Место в списке, свой номер, значок, надпись, отмечена ли.
++    case reaction(Int32, Int32, String, String, Bool)
++    case info(String)
++
++    var section: ItemListSectionId {
++        return 0
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .reaction(_, id, _, _, _):
++            return id
++        case .info:
++            return 10_000
++        }
++    }
++
++    /// Порядок на экране. Отдельно от номера: номер у реакции свой навсегда,
++    /// а место меняется, как только её отметили или сняли.
++    private var position: Int32 {
++        switch self {
++        case let .reaction(position, _, _, _, _):
++            return position
++        case .info:
++            return 9_999
++        }
++    }
++
++    static func ==(lhs: LunagramReactionEntry, rhs: LunagramReactionEntry) -> Bool {
++        switch lhs {
++        case let .reaction(lhsPosition, lhsId, lhsValue, lhsTitle, lhsChecked):
++            if case let .reaction(rhsPosition, rhsId, rhsValue, rhsTitle, rhsChecked) = rhs, lhsPosition == rhsPosition, lhsId == rhsId, lhsValue == rhsValue, lhsTitle == rhsTitle, lhsChecked == rhsChecked {
++                return true
++            } else {
++                return false
++            }
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            } else {
++                return false
++            }
++        }
++    }
++
++    static func <(lhs: LunagramReactionEntry, rhs: LunagramReactionEntry) -> Bool {
++        return lhs.position < rhs.position
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let select = arguments as! (String) -> Void
++        switch self {
++        case let .reaction(_, _, value, title, checked):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: checked, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                select(value)
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++/// Экран «какие реакции показывать первыми».
++func lunagramReactionsScreen(context: AccountContext, refresh: @escaping () -> Void) -> ViewController {
++    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
++    var counter = 0
++
++    let arguments: (String) -> Void = { value in
++        var list = LunagramSettings.ownReactionsList
++        if let index = list.firstIndex(of: value) {
++            list.remove(at: index)
++        } else {
++            list.append(value)
++        }
++        LunagramSettings.ownReactionsList = list
++        counter += 1
++        changed.set(counter)
++        refresh()
++    }
++
++    let signal = combineLatest(
++        context.sharedContext.presentationData,
++        context.engine.stickers.availableReactions(),
++        changed.get()
++    )
++    |> deliverOnMainQueue
++    |> map { presentationData, availableReactions, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        // Только обычные реакции: у премиальных значок — своя картинка, и
++        // выбирать их пришлось бы совсем другим экраном.
++        var all: [(value: String, title: String, isPremium: Bool)] = []
++        for reaction in availableReactions?.reactions ?? [] {
++            guard reaction.isEnabled else {
++                continue
++            }
++            guard case let .builtin(value) = reaction.value else {
++                continue
++            }
++            all.append((value, reaction.title, reaction.isPremium))
++        }
++
++        var numbers: [String: Int32] = [:]
++        for (index, item) in all.enumerated() {
++            numbers[item.value] = Int32(index)
++        }
++
++        // Отмеченные вперёд, в том порядке, в котором их отмечали.
++        let chosen = LunagramSettings.ownReactionsList
++        var ordered = chosen.compactMap { value in
++            return all.first(where: { $0.value == value })
++        }
++        ordered.append(contentsOf: all.filter { !chosen.contains($0.value) })
++
++        var entries: [LunagramReactionEntry] = []
++        for (place, item) in ordered.enumerated() {
++            let title = item.isPremium ? "\(item.value)  \(item.title) · премиум" : "\(item.value)  \(item.title)"
++            entries.append(.reaction(Int32(place), numbers[item.value] ?? Int32(place), item.value, title, chosen.contains(item.value)))
++        }
++        entries.append(.info("Отмеченные поднимаются наверх списка — в этом же порядке они встанут в панели реакций.\n\nПремиальные без премиума не отправятся: Telegram их не примет."))
++
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Свои реакции"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    return ItemListController(context: context, state: signal)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 5a21fd58..2798e036 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -69,6 +69,7 @@ private enum LunagramToggle: Int32 {
+     case linkGuard
+     case linkGuardClean
+     case scamRegistry
++    case ownReactions
+ 
+     var value: Bool {
+         switch self {
+@@ -170,6 +171,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramLinkGuard.cleanTrackers
+         case .scamRegistry:
+             return LunagramScamRegistry.enabled
++        case .ownReactions:
++            return LunagramSettings.ownReactions
+         }
+     }
+ 
+@@ -273,6 +276,8 @@ private enum LunagramToggle: Int32 {
+             LunagramLinkGuard.cleanTrackers = value
+         case .scamRegistry:
+             LunagramScamRegistry.enabled = value
++        case .ownReactions:
++            LunagramSettings.ownReactions = value
+         }
+     }
+ 
+@@ -376,6 +381,8 @@ private enum LunagramToggle: Int32 {
+             return "Вырезать метки слежения"
+         case .scamRegistry:
+             return "Метка из реестра GiD"
++        case .ownReactions:
++            return "Свои реакции"
+         }
+     }
+ 
+@@ -429,7 +436,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions:
+             return nil
+         }
+     }
+@@ -590,6 +597,8 @@ extension LunagramToggle {
+             return "scissors"
+         case .scamRegistry:
+             return "exclamationmark.bubble"
++        case .ownReactions:
++            return "hand.thumbsup"
+         }
+     }
+ }
+@@ -1401,6 +1410,7 @@ private struct LunagramMediaState: Equatable {
+     var glassTintCycleSpeed: Int = 30
+     var vignette: Bool = false
+     var vignetteStrength: Int = 45
++    var ownReactionsCount: Int = 0
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1430,6 +1440,7 @@ private struct LunagramMediaState: Equatable {
+         state.glassTintCycleSpeed = LunagramSettings.glassTintCycleSpeed
+         state.vignette = LunagramSettings.vignette
+         state.vignetteStrength = LunagramSettings.vignetteStrength
++        state.ownReactionsCount = LunagramSettings.ownReactionsList.count
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
+@@ -2156,6 +2167,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramComposeButton.action = LunagramComposeButton.Action(rawValue: index) ?? .compose
+                 refreshMedia()
+             }))
++        case .ownReactionsPick:
++            shared.push?(lunagramReactionsScreen(context: context, refresh: refreshMedia))
+         case .scamRefresh:
+             lunagramRefreshScamRegistry(context: context, force: true, done: { count in
+                 refreshMedia()
+@@ -2508,6 +2521,8 @@ private enum LunagramChoice: Int32 {
+     case profileTextReset = 91
+     case profileGlassColor = 92
+     case profileGlassReset = 93
++    // Свои реакции.
++    case ownReactionsPick = 140
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2887,8 +2902,14 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+ 
+     rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
+     rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
++
+     rows.info("В профиле собеседника или канала появится строка «Эмодзи и стикеры чата»: она соберёт наборы, из которых здесь что-то попадалось, и покажет, сколько раз. Нажал на набор — открылось его окно с «Добавить».\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем. Ползунок задаёт, сколько сообщений просматривать: больше — полнее, но дольше.")
+ 
++    rows.header("Реакции")
++    rows.row(.toggle(.ownReactions, value(.ownReactions), "Свои реакции", "hand.thumbsup"))
++    rows.row(.value(LunagramChoice.ownReactionsPick.rawValue, "Какие показывать", media.ownReactionsCount == 0 ? "нет" : "\(media.ownReactionsCount)", "face.smiling"))
++    rows.info("Твои реакции встают в начале панели, обычные — сразу за ними. Порядок тот, в котором отмечал: снял и отметил заново — встанет в конец.\n\nПанель всё равно слушается переписки: если в канале разрешён узкий набор реакций, лишние из твоих там не появятся.")
++
+     rows.row(.toggle(.scamRegistry, value(.scamRegistry), "Метка из реестра GiD", "exclamationmark.bubble"))
+     rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
+     rows.info("В профиле появится строка, если человек упомянут в открытом канале-реестре @GID_ScamBase. Нажатие открывает сам канал.\n\nФормулировка намеренно осторожная: «упоминается в реестре», а не «мошенник». Список чужой, проверить его нечем, а ошибка в нём ударила бы по живому человеку — и выглядело бы это так, будто сказал сам Telegram. Смотри источник и решай сам.\n\nКанал перечитывается раз в месяц. В сеть ходим только к Telegram, наружу ничего не уходит.")
+@@ -3091,6 +3112,10 @@ private func lunagramPlaceEntries(
+         }
+         rows.info("Оболочка — стеклянная капсула вокруг кнопок. Густота задаёт, насколько плотно она закрывает обложку: на нуле почти прозрачная, на сотне сплошная.\n\nПока цвет не выбран, густота ни на что не влияет: оболочку рисует Telegram по-своему.")
+ 
++    case .appIcons:
++        // Место открывает свой экран целиком, сюда не заходит.
++        break
++
+     case .messages:
+         let fonts = LunagramSendFont.allCases
+         let font = fonts[max(0, min(fonts.count - 1, media.sendFontStyle))]
+@@ -3129,6 +3154,11 @@ private func lunagramPlaceEntries(
+         rows.row(.toggle(.chatStickers, value(.chatStickers), "Эмодзи и стикеры чата", "face.smiling"))
+         rows.info("В профиле собеседника или канала появится строка со списком наборов, которые в этой переписке встречались, и сколько раз. Нажатие открывает набор.\n\nСмотрим только сохранённое на телефоне, у сервера ничего не спрашиваем: ползунок задаёт, сколько сообщений просматривать.")
+         rows.row(.slider(96, "Сколько сообщений смотреть", media.chatStickersDepth, 500, 10000, 500))
++
++        rows.header("Реакции")
++        rows.row(.toggle(.ownReactions, value(.ownReactions), "Свои реакции", "hand.thumbsup"))
++        rows.row(.value(LunagramChoice.ownReactionsPick.rawValue, "Какие показывать", media.ownReactionsCount == 0 ? "нет" : "\(media.ownReactionsCount)", "face.smiling"))
++        rows.info("Твои реакции встают в начале панели, обычные — сразу за ними. Порядок тот, в котором отмечал: снял и отметил заново — встанет в конец.\n\nПанель всё равно слушается переписки: если в канале разрешён узкий набор реакций, лишние из твоих там не появятся.")
+     }
+ 
+     return rows.entries
+@@ -3137,6 +3167,11 @@ private func lunagramPlaceEntries(
+ /// Экран одного места. Своё свежее состояние — чтобы открываться откуда
+ /// угодно, в том числе из родных настроек Telegram.
+ public func lunagramPlaceController(context: AccountContext, place: LunagramPlace) -> ViewController {
++    // Значки приложения — не список выключателей, а поиск по восьми сотням
++    // имён: у них свой экран целиком.
++    if place == .appIcons {
++        return lunagramAppIconsScreen(context: context, refresh: {})
++    }
+     let shared = LunagramSharedState()
+     let arguments = lunagramMakeArguments(context: context, shared: shared)
+     shared.arguments = arguments
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index a53db17e..88c7b7d2 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -422,6 +422,13 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         self.window = window
+         self.nativeWindow = window
+ 
++        // Lunagram: свои картинки вместо значков приложения. Ставим ответчик
++        // на воронку значков — раньше, чем приложение начнёт их спрашивать.
++        LunagramAppIcons.start()
++        LunagramSetIconOverride({ name, size in
++            return LunagramAppIcons.image(for: name, size: size)
++        })
++
+         // Lunagram: виньетка — слоем поверх всего окна, нажатий не забирает.
+         LunagramVignette.install(in: window)
+         
