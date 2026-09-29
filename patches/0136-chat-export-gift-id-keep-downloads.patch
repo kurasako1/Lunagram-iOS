@@ -1,0 +1,1029 @@
+diff --git a/submodules/AccountContext/BUILD b/submodules/AccountContext/BUILD
+index acd19b9f..10595052 100644
+--- a/submodules/AccountContext/BUILD
++++ b/submodules/AccountContext/BUILD
+@@ -19,6 +19,7 @@ swift_library(
+         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
+         "//submodules/Postbox:Postbox",
+         "//submodules/TelegramCore:TelegramCore",
++        "//submodules/LunagramGhost",
+         "//submodules/MusicAlbumArtResources:MusicAlbumArtResources",
+         "//submodules/Utils/RangeSet:RangeSet",
+         "//submodules/InAppPurchaseManager:InAppPurchaseManager",
+diff --git a/submodules/AccountContext/Sources/FetchMediaUtils.swift b/submodules/AccountContext/Sources/FetchMediaUtils.swift
+index b969890f..0456774e 100644
+--- a/submodules/AccountContext/Sources/FetchMediaUtils.swift
++++ b/submodules/AccountContext/Sources/FetchMediaUtils.swift
+@@ -5,6 +5,7 @@ import Postbox
+ import SwiftSignalKit
+ import TelegramUIPreferences
+ import RangeSet
++import LunagramGhost
+ 
+ public func freeMediaFileInteractiveFetched(account: Account, userLocation: MediaResourceUserLocation, fileReference: FileMediaReference) -> Signal<FetchResourceSourceType, FetchResourceError> {
+     return fetchedMediaResource(mediaBox: account.postbox.mediaBox, userLocation: userLocation, userContentType: MediaResourceUserContentType(file: fileReference.media), reference: fileReference.resourceReference(fileReference.media.resource))
+@@ -35,7 +36,13 @@ private func fetchCategoryForFile(_ file: TelegramMediaFile) -> FetchManagerCate
+ }
+ 
+ public func messageMediaFileInteractiveFetched(context: AccountContext, message: Message, file: TelegramMediaFile, userInitiated: Bool, storeToDownloadsPeerId: EnginePeer.Id? = nil) -> Signal<Void, NoError> {
+-    return messageMediaFileInteractiveFetched(fetchManager: context.fetchManager, messageId: message.id, messageReference: MessageReference(message), file: file, userInitiated: userInitiated, priority: .userInitiated, storeToDownloadsPeerId: storeToDownloadsPeerId)
++    let signal = messageMediaFileInteractiveFetched(fetchManager: context.fetchManager, messageId: message.id, messageReference: MessageReference(message), file: file, userInitiated: userInitiated, priority: .userInitiated, storeToDownloadsPeerId: storeToDownloadsPeerId)
++    if userInitiated {
++        // Lunagram: держим свою ссылку, чтобы закачка не оборвалась вместе
++        // с узлом сообщения, когда тот уходит с экрана.
++        LunagramKeepDownloads.keep(postbox: context.account.postbox, resource: file.resource, fetch: signal)
++    }
++    return signal
+ }
+ 
+ public func messageMediaFileInteractiveFetched(fetchManager: FetchManager, messageId: MessageId, messageReference: MessageReference, file: TelegramMediaFile, ranges: RangeSet<Int64> = RangeSet<Int64>(0 ..< Int64.max), userInitiated: Bool, priority: FetchManagerPriority, storeToDownloadsPeerId: EnginePeer.Id? = nil) -> Signal<Void, NoError> {
+diff --git a/submodules/AccountContext/Sources/LunagramKeepDownloads.swift b/submodules/AccountContext/Sources/LunagramKeepDownloads.swift
+new file mode 100644
+index 00000000..13aa124b
+--- /dev/null
++++ b/submodules/AccountContext/Sources/LunagramKeepDownloads.swift
+@@ -0,0 +1,67 @@
++import Foundation
++import SwiftSignalKit
++import Postbox
++import LunagramGhost
++
++// Lunagram: не обрывать начатую закачку.
++//
++// Закачку в переписке держит узел сообщения: он подписывается на неё и
++// отпускает подписку, когда уходит с экрана. А с последней отпущенной ссылкой
++// управляющий закачками выкидывает запись и останавливает саму закачку.
++// Поэтому стоит выйти из переписки или отмотать далеко вверх — и недокачанное
++// бросается на полпути.
++//
++// Здесь держится своя ссылка: ничья, не привязанная ни к какому узлу.
++// Отпускается она сама — когда файл докачан или когда ждать уже бессмысленно.
++
++public final class LunagramKeepDownloads {
++    /// Всё делаем на одной очереди: список ниже общий, а трогают его и
++    /// начало закачки, и её конец.
++    private static let queue = Queue.mainQueue()
++    private static var held: [String: DisposableSet] = [:]
++
++    /// Сколько ждать, прежде чем отпустить. Не вечность: файл может не
++    /// докачаться никогда — например, его удалили с сервера, — и тогда наша
++    /// ссылка висела бы до конца работы приложения.
++    private static let limit: Double = 30.0 * 60.0
++
++    /// Подержать закачку своей ссылкой.
++    ///
++    /// `fetch` — тот же сигнал, который взял себе узел сообщения. Подписка на
++    /// него и есть ссылка: пока жива хоть одна, закачка идёт.
++    public static func keep(postbox: Postbox, resource: MediaResource, fetch: Signal<Void, NoError>) {
++        guard LunagramDownloadSettings.keepDownloads else {
++            return
++        }
++        let key = resource.id.stringRepresentation
++        queue.async {
++            guard self.held[key] == nil else {
++                return
++            }
++            let bag = DisposableSet()
++            self.held[key] = bag
++
++            bag.add(fetch.startStrict())
++
++            bag.add((postbox.mediaBox.resourceStatus(resource)
++            |> deliverOn(self.queue)).startStrict(next: { status in
++                if case .Local = status {
++                    LunagramKeepDownloads.release(key)
++                }
++            }))
++
++            bag.add((Signal<Never, NoError>.complete()
++            |> delay(self.limit, queue: self.queue)).startStrict(completed: {
++                LunagramKeepDownloads.release(key)
++            }))
++        }
++    }
++
++    private static func release(_ key: String) {
++        queue.async {
++            if let bag = self.held.removeValue(forKey: key) {
++                bag.dispose()
++            }
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index c5f9206c..b8afa0a9 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -104,6 +104,8 @@ public final class LunagramSettings {
+         static let ownReactions = "lunagram.reactions.own"
+         static let ownReactionsList = "lunagram.reactions.list"
+         static let appIcons = "lunagram.appIcons.enabled"
++        static let giftId = "lunagram.gift.showId"
++        static let chatExport = "lunagram.chatExport.enabled"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -919,6 +921,32 @@ public final class LunagramSettings {
+         set { setPercent(newValue, Key.vignetteStrength) }
+     }
+ 
++    /// Не обрывать начатую закачку.
++    ///
++    /// Само значение лежит в LunagramGhost: читает его AccountContext —
++    /// слой, к которому общий Lunagram подключать нельзя, иначе каждая наша
++    /// мелочь пересобирала бы полприложения. Здесь только пересылка туда и
++    /// рассылка о смене.
++    public static var keepDownloads: Bool {
++        get { return LunagramDownloadSettings.keepDownloads }
++        set {
++            LunagramDownloadSettings.keepDownloads = newValue
++            changed()
++        }
++    }
++
++    /// Показывать номер подарка в его окне.
++    public static var giftId: Bool {
++        get { return flag(Key.giftId, default: false) }
++        set { setFlag(newValue, Key.giftId) }
++    }
++
++    /// Строка «Выгрузить переписку» в профиле собеседника.
++    public static var chatExport: Bool {
++        get { return flag(Key.chatExport, default: false) }
++        set { setFlag(newValue, Key.chatExport) }
++    }
++
+     /// Свои картинки вместо значков приложения.
+     public static var appIcons: Bool {
+         get { return flag(Key.appIcons, default: false) }
+diff --git a/submodules/LunagramGhost/Sources/LunagramDownloadSettings.swift b/submodules/LunagramGhost/Sources/LunagramDownloadSettings.swift
+new file mode 100644
+index 00000000..c1cc3625
+--- /dev/null
++++ b/submodules/LunagramGhost/Sources/LunagramDownloadSettings.swift
+@@ -0,0 +1,22 @@
++import Foundation
++
++/// Не обрывать начатую закачку.
++///
++/// Живёт рядом с Ghost, а не в общем модуле Lunagram, и это нарочно: читает
++/// эту настройку AccountContext — очень низкий слой, от которого зависит
++/// почти всё приложение. Подключи туда общий Lunagram — и каждая наша
++/// новая мелочь пересобирала бы полприложения. Здесь меняется редко.
++public enum LunagramDownloadSettings {
++    private static let defaults = UserDefaults.standard
++
++    private enum Key {
++        static let keepDownloads = "lunagram.downloads.keep"
++    }
++
++    /// Держать свою ссылку на начатую закачку, чтобы она не оборвалась,
++    /// когда сообщение уходит с экрана.
++    public static var keepDownloads: Bool {
++        get { return defaults.bool(forKey: Key.keepDownloads) }
++        set { defaults.set(newValue, forKey: Key.keepDownloads) }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftViewScreen/BUILD b/submodules/TelegramUI/Components/Gifts/GiftViewScreen/BUILD
+index 3dad3ead..66c45681 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftViewScreen/BUILD
++++ b/submodules/TelegramUI/Components/Gifts/GiftViewScreen/BUILD
+@@ -13,6 +13,7 @@ swift_library(
+         "//submodules/AsyncDisplayKit",
+         "//submodules/Display",
+         "//submodules/TelegramCore",
++        "//submodules/Lunagram",
+         "//submodules/SSignalKit/SwiftSignalKit",
+         "//submodules/TelegramPresentationData",
+         "//submodules/TelegramUIPreferences",
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftViewScreen/Sources/GiftViewScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftViewScreen/Sources/GiftViewScreen.swift
+index 1a5228a9..a8cd127b 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftViewScreen/Sources/GiftViewScreen.swift
++++ b/submodules/TelegramUI/Components/Gifts/GiftViewScreen/Sources/GiftViewScreen.swift
+@@ -41,6 +41,7 @@ import AnimatedTextComponent
+ import InfoParagraphComponent
+ import ChatMessagePaymentAlertController
+ import TableComponent
++import Lunagram
+ import PeerTableCellComponent
+ import AvatarComponent
+ import GlassControls
+@@ -493,6 +494,30 @@ private final class GiftViewSheetContent: CombinedComponent {
+             HapticFeedback().tap()
+         }
+         
++        /// Lunagram: скопировать номер подарка. Отдельно от адреса — иначе
++        /// всплывало бы «адрес скопирован», а скопирован был номер.
++        func lunagramCopyGiftId(_ value: String) {
++            guard let controller = self.getController() as? GiftViewScreen else {
++                return
++            }
++
++            UIPasteboard.general.string = value
++            controller.dismissAllTooltips()
++
++            let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
++            controller.present(
++                UndoOverlayController(
++                    presentationData: presentationData,
++                    content: .copy(text: "Номер подарка скопирован"),
++                    position: .bottom,
++                    action: { _ in return true }
++                ),
++                in: .current
++            )
++
++            HapticFeedback().tap()
++        }
++        
+         func updateSavedToProfile(_ added: Bool) {
+             guard let controller = self.getController() as? GiftViewScreen, let arguments = self.subject.arguments, let reference = arguments.reference else {
+                 return
+@@ -4585,6 +4610,34 @@ private final class GiftViewSheetContent: CombinedComponent {
+                     }
+                 }
+                 
++                // Lunagram: номер подарка — чтобы на него можно было
++                // сослаться: у подарков он единственная опора, имена
++                // повторяются.
++                if LunagramSettings.giftId {
++                    var giftIdText: String?
++                    if let uniqueGift {
++                        giftIdText = "\(uniqueGift.id)"
++                    } else if let genericGift {
++                        giftIdText = "\(genericGift.id)"
++                    }
++                    if let giftIdText {
++                        tableItems.append(.init(
++                            id: "lunagram_gift_id",
++                            title: "Номер",
++                            component: AnyComponent(
++                                Button(
++                                    content: AnyComponent(
++                                        MultilineTextComponent(text: .plain(NSAttributedString(string: giftIdText, font: tableLargeMonospaceFont, textColor: tableLinkColor)), truncationType: .middle, maximumNumberOfLines: 1, lineSpacing: 0.2)
++                                    ),
++                                    action: { [weak state] in
++                                        state?.lunagramCopyGiftId(giftIdText)
++                                    }
++                                )
++                            )
++                        ))
++                    }
++                }
++
+                 let table = table.update(
+                     component: TableComponent(
+                         theme: theme,
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatExport.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatExport.swift
+new file mode 100644
+index 00000000..7b6f77b7
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramChatExport.swift
+@@ -0,0 +1,623 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// Lunagram: выгрузка переписки.
++//
++// Складывает переписку в один файл — страницей, записями или просто текстом.
++// Берём только то, что уже лежит на телефоне: у сервера ничего не спрашиваем,
++// и старое, до чего ты никогда не прокручивал, в выгрузку не попадёт. Так
++// честнее, чем делать вид, что выгружается «вся история».
++//
++// Вложения по желанию: они кладутся рядом папкой, и в выгрузку идёт только
++// уже скачанное — недокачанное качать ради выгрузки не станем.
++
++enum LunagramExportFormat: Int32, CaseIterable {
++    case html = 0
++    case json = 1
++    case text = 2
++
++    var title: String {
++        switch self {
++        case .html:
++            return "Страницей (HTML)"
++        case .json:
++            return "Записями (JSON)"
++        case .text:
++            return "Просто текстом"
++        }
++    }
++
++    var fileExtension: String {
++        switch self {
++        case .html:
++            return "html"
++        case .json:
++            return "json"
++        case .text:
++            return "txt"
++        }
++    }
++}
++
++/// Одно сообщение, вынутое из хранилища. Собираем такие внутри сделки с
++/// хранилищем, а собственно выгрузку строим уже снаружи: сделка должна быть
++/// короткой, а разметка — дело не быстрое.
++private struct LunagramExportedMessage {
++    var id: Int32
++    var timestamp: Int32
++    var author: String
++    var isOutgoing: Bool
++    var text: String
++    var media: String?
++    var mediaFile: (path: String, name: String)?
++    var replyTo: Int32?
++    var forwardedFrom: String?
++}
++
++/// То же для сообщения из хранилища: там собеседник приходит в своём
++/// низкоуровневом виде.
++private func lunagramPeerName(_ peer: Peer) -> String {
++    return lunagramPeerName(EnginePeer(peer))
++}
++
++func lunagramPeerName(_ peer: EnginePeer) -> String {
++    switch peer {
++    case let .user(user):
++        let parts = [user.firstName, user.lastName].compactMap({ $0 }).filter({ !$0.isEmpty })
++        if parts.isEmpty {
++            return user.addressName.flatMap({ "@" + $0 }) ?? "Без имени"
++        }
++        return parts.joined(separator: " ")
++    case let .legacyGroup(group):
++        return group.title
++    case let .channel(channel):
++        return channel.title
++    case let .community(community):
++        return community.title
++    case .secretChat:
++        return "Секретная переписка"
++    }
++}
++
++/// Как назвать вложение словами. Файл называем его именем: по «документ» в
++/// выгрузке потом не разберёшь, что это было.
++private func lunagramMediaName(_ media: Media) -> String? {
++    if media is TelegramMediaImage {
++        return "фотография"
++    }
++    if let file = media as? TelegramMediaFile {
++        if file.isSticker {
++            return "стикер"
++        }
++        if file.isInstantVideo {
++            return "кружок"
++        }
++        if file.isVoice {
++            return "голосовое"
++        }
++        if file.isMusic {
++            return "музыка"
++        }
++        if file.isAnimated {
++            return "гифка"
++        }
++        if file.isVideo {
++            return "видео"
++        }
++        if let fileName = file.fileName, !fileName.isEmpty {
++            return "файл: " + fileName
++        }
++        return "файл"
++    }
++    if media is TelegramMediaMap {
++        return "геопозиция"
++    }
++    if media is TelegramMediaContact {
++        return "контакт"
++    }
++    if media is TelegramMediaPoll {
++        return "опрос"
++    }
++    if media is TelegramMediaAction {
++        return "действие в переписке"
++    }
++    return nil
++}
++
++/// Имя файла вложения на диске — с расширением, иначе ни один просмотрщик
++/// его не откроет.
++private func lunagramMediaFileName(_ file: TelegramMediaFile, id: Int32) -> String {
++    if let fileName = file.fileName, !fileName.isEmpty {
++        return "\(id)-" + fileName.replacingOccurrences(of: "/", with: "_")
++    }
++    var suffix = "bin"
++    if let mimeExtension = file.mimeType.components(separatedBy: "/").last, !mimeExtension.isEmpty, mimeExtension.count <= 5 {
++        suffix = mimeExtension
++    }
++    return "\(id).\(suffix)"
++}
++
++private func lunagramCollect(context: AccountContext, peerId: EnginePeer.Id, depth: Int, withMedia: Bool) -> Signal<[LunagramExportedMessage], NoError> {
++    return context.account.postbox.transaction { transaction -> [LunagramExportedMessage] in
++        var result: [LunagramExportedMessage] = []
++        var scanned = 0
++
++        transaction.withAllMessages(peerId: peerId, { message in
++            scanned += 1
++
++            var media: String?
++            var mediaFile: (path: String, name: String)?
++            for item in message.media {
++                if let name = lunagramMediaName(item) {
++                    media = name
++                }
++                if withMedia, let file = item as? TelegramMediaFile {
++                    if let path = context.account.postbox.mediaBox.completedResourcePath(file.resource) {
++                        mediaFile = (path, lunagramMediaFileName(file, id: message.id.id))
++                    }
++                } else if withMedia, let image = item as? TelegramMediaImage, let representation = image.representations.last {
++                    if let path = context.account.postbox.mediaBox.completedResourcePath(representation.resource) {
++                        mediaFile = (path, "\(message.id.id).jpg")
++                    }
++                }
++            }
++
++            var replyTo: Int32?
++            for attribute in message.attributes {
++                if let attribute = attribute as? ReplyMessageAttribute {
++                    replyTo = attribute.messageId.id
++                }
++            }
++
++            var forwardedFrom: String?
++            if let forwardInfo = message.forwardInfo {
++                if let author = forwardInfo.author {
++                    forwardedFrom = lunagramPeerName(author)
++                } else if let signature = forwardInfo.authorSignature {
++                    forwardedFrom = signature
++                }
++            }
++
++            let isOutgoing = !message.flags.contains(.Incoming)
++            let author: String
++            if let messageAuthor = message.author {
++                author = lunagramPeerName(messageAuthor)
++            } else if isOutgoing {
++                author = "Я"
++            } else {
++                author = "Неизвестно"
++            }
++
++            result.append(LunagramExportedMessage(
++                id: message.id.id,
++                timestamp: message.timestamp,
++                author: author,
++                isOutgoing: isOutgoing,
++                text: message.text,
++                media: media,
++                mediaFile: mediaFile,
++                replyTo: replyTo,
++                forwardedFrom: forwardedFrom
++            ))
++
++            return scanned < depth
++        })
++
++        // Хранилище отдаёт свежие первыми — читать выгрузку удобнее наоборот.
++        result.sort(by: { $0.timestamp < $1.timestamp })
++        return result
++    }
++}
++
++private func lunagramExportDate(_ timestamp: Int32) -> String {
++    let formatter = DateFormatter()
++    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
++    return formatter.string(from: Date(timeIntervalSince1970: Double(timestamp)))
++}
++
++private func lunagramEscapeHTML(_ text: String) -> String {
++    var result = text.replacingOccurrences(of: "&", with: "&amp;")
++    result = result.replacingOccurrences(of: "<", with: "&lt;")
++    result = result.replacingOccurrences(of: ">", with: "&gt;")
++    result = result.replacingOccurrences(of: "\"", with: "&quot;")
++    return result.replacingOccurrences(of: "\n", with: "<br>")
++}
++
++private func lunagramBuildText(_ messages: [LunagramExportedMessage], title: String) -> String {
++    var lines: [String] = [title, ""]
++    for message in messages {
++        var line = "[" + lunagramExportDate(message.timestamp) + "] " + message.author + ":"
++        if let forwardedFrom = message.forwardedFrom {
++            line += " (переслано от " + forwardedFrom + ")"
++        }
++        if let replyTo = message.replyTo {
++            line += " (ответ на #\(replyTo))"
++        }
++        if let media = message.media {
++            line += " [" + media + "]"
++        }
++        if !message.text.isEmpty {
++            line += " " + message.text
++        }
++        lines.append(line)
++    }
++    return lines.joined(separator: "\n")
++}
++
++private func lunagramBuildJSON(_ messages: [LunagramExportedMessage], title: String) -> String {
++    var items: [[String: Any]] = []
++    for message in messages {
++        var item: [String: Any] = [
++            "id": Int(message.id),
++            "date": lunagramExportDate(message.timestamp),
++            "timestamp": Int(message.timestamp),
++            "author": message.author,
++            "outgoing": message.isOutgoing,
++            "text": message.text
++        ]
++        if let media = message.media {
++            item["media"] = media
++        }
++        if let mediaFile = message.mediaFile {
++            item["file"] = "files/" + mediaFile.name
++        }
++        if let replyTo = message.replyTo {
++            item["reply_to"] = Int(replyTo)
++        }
++        if let forwardedFrom = message.forwardedFrom {
++            item["forwarded_from"] = forwardedFrom
++        }
++        items.append(item)
++    }
++    let root: [String: Any] = ["chat": title, "count": messages.count, "messages": items]
++    guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
++        return "{}"
++    }
++    return String(data: data, encoding: .utf8) ?? "{}"
++}
++
++private func lunagramBuildHTML(_ messages: [LunagramExportedMessage], title: String) -> String {
++    var body = ""
++    for message in messages {
++        let side = message.isOutgoing ? "out" : "in"
++        body += "<div class=\"m " + side + "\">"
++        body += "<div class=\"h\">" + lunagramEscapeHTML(message.author) + " · " + lunagramExportDate(message.timestamp) + "</div>"
++        if let forwardedFrom = message.forwardedFrom {
++            body += "<div class=\"f\">переслано от " + lunagramEscapeHTML(forwardedFrom) + "</div>"
++        }
++        if let replyTo = message.replyTo {
++            body += "<div class=\"f\">ответ на #\(replyTo)</div>"
++        }
++        if let media = message.media {
++            if let mediaFile = message.mediaFile {
++                body += "<div class=\"a\"><a href=\"files/" + lunagramEscapeHTML(mediaFile.name) + "\">" + lunagramEscapeHTML(media) + "</a></div>"
++            } else {
++                body += "<div class=\"a\">" + lunagramEscapeHTML(media) + "</div>"
++            }
++        }
++        if !message.text.isEmpty {
++            body += "<div class=\"t\">" + lunagramEscapeHTML(message.text) + "</div>"
++        }
++        body += "</div>"
++    }
++
++    var page = "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">"
++    page += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
++    page += "<title>" + lunagramEscapeHTML(title) + "</title><style>"
++    page += "body{margin:0;padding:16px;background:#0e1621;color:#e9edf2;font:15px/1.45 -apple-system,system-ui,sans-serif}"
++    page += "h1{font-size:19px;margin:0 0 16px}"
++    page += ".m{max-width:640px;margin:0 0 10px;padding:8px 12px;border-radius:14px;background:#182533}"
++    page += ".m.out{background:#2b5278;margin-left:auto}"
++    page += ".h{font-size:12px;color:#8fa6bd;margin-bottom:3px}"
++    page += ".f{font-size:12px;color:#8fa6bd;border-left:2px solid #5c8ab8;padding-left:6px;margin-bottom:3px}"
++    page += ".a{font-size:13px;color:#7cc3ff;margin-bottom:3px}"
++    page += ".a a{color:#7cc3ff}"
++    page += ".t{white-space:normal;word-wrap:break-word}"
++    page += "</style></head><body><h1>" + lunagramEscapeHTML(title) + "</h1>"
++    page += body
++    page += "</body></html>"
++    return page
++}
++
++/// Складывает выгрузку на диск и отдаёт папку или файл, который надо отдать
++/// человеку. Зовётся не с главного потока: тут и запись файлов, и копирование.
++private func lunagramWriteExport(messages: [LunagramExportedMessage], title: String, format: LunagramExportFormat, withMedia: Bool) -> URL? {
++    let folderName = "Lunagram-export-" + String(Int(Date().timeIntervalSince1970))
++    let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(folderName, isDirectory: true)
++    do {
++        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: nil)
++    } catch {
++        return nil
++    }
++
++    let contents: String
++    switch format {
++    case .html:
++        contents = lunagramBuildHTML(messages, title: title)
++    case .json:
++        contents = lunagramBuildJSON(messages, title: title)
++    case .text:
++        contents = lunagramBuildText(messages, title: title)
++    }
++
++    let file = root.appendingPathComponent("chat." + format.fileExtension)
++    do {
++        try contents.write(to: file, atomically: true, encoding: .utf8)
++    } catch {
++        return nil
++    }
++
++    var copied = 0
++    if withMedia {
++        let files = root.appendingPathComponent("files", isDirectory: true)
++        try? FileManager.default.createDirectory(at: files, withIntermediateDirectories: true, attributes: nil)
++        for message in messages {
++            guard let mediaFile = message.mediaFile else {
++                continue
++            }
++            let target = files.appendingPathComponent(mediaFile.name)
++            if FileManager.default.fileExists(atPath: target.path) {
++                continue
++            }
++            do {
++                try FileManager.default.copyItem(at: URL(fileURLWithPath: mediaFile.path), to: target)
++                copied += 1
++            } catch {
++            }
++        }
++    }
++
++    // Без вложений отдавать папку незачем — один файл человеку удобнее.
++    return (withMedia && copied > 0) ? root : file
++}
++
++private enum LunagramExportEntry: ItemListNodeEntry {
++    case formatHeader(String)
++    case format(Int32, String, Bool)
++    case depthHeader(String)
++    case depth(Int32, String, Bool)
++    case mediaToggle(Bool)
++    case run(String)
++    case info(String)
++
++    var section: ItemListSectionId {
++        switch self {
++        case .formatHeader, .format:
++            return 0
++        case .depthHeader, .depth:
++            return 1
++        case .mediaToggle:
++            return 2
++        case .run, .info:
++            return 3
++        }
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case .formatHeader:
++            return 0
++        case let .format(index, _, _):
++            return 1 + index
++        case .depthHeader:
++            return 50
++        case let .depth(index, _, _):
++            return 51 + index
++        case .mediaToggle:
++            return 100
++        case .run:
++            return 200
++        case .info:
++            return 201
++        }
++    }
++
++    static func ==(lhs: LunagramExportEntry, rhs: LunagramExportEntry) -> Bool {
++        switch lhs {
++        case let .formatHeader(lhsText):
++            if case let .formatHeader(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .format(lhsIndex, lhsTitle, lhsSelected):
++            if case let .format(rhsIndex, rhsTitle, rhsSelected) = rhs, lhsIndex == rhsIndex, lhsTitle == rhsTitle, lhsSelected == rhsSelected {
++                return true
++            }
++            return false
++        case let .mediaToggle(lhsValue):
++            if case let .mediaToggle(rhsValue) = rhs, lhsValue == rhsValue {
++                return true
++            }
++            return false
++        case let .depthHeader(lhsText):
++            if case let .depthHeader(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        case let .depth(lhsIndex, lhsTitle, lhsSelected):
++            if case let .depth(rhsIndex, rhsTitle, rhsSelected) = rhs, lhsIndex == rhsIndex, lhsTitle == rhsTitle, lhsSelected == rhsSelected {
++                return true
++            }
++            return false
++        case let .run(lhsTitle):
++            if case let .run(rhsTitle) = rhs, lhsTitle == rhsTitle {
++                return true
++            }
++            return false
++        case let .info(lhsText):
++            if case let .info(rhsText) = rhs, lhsText == rhsText {
++                return true
++            }
++            return false
++        }
++    }
++
++    static func <(lhs: LunagramExportEntry, rhs: LunagramExportEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramExportArguments
++        switch self {
++        case let .formatHeader(text):
++            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++        case let .format(index, title, selected):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                arguments.setFormat(index)
++            })
++        case let .mediaToggle(value):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Вложения", value: value, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.setMedia(value)
++            })
++        case let .depthHeader(text):
++            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
++        case let .depth(index, title, selected):
++            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
++                arguments.setDepth(Int(index))
++            })
++        case let .run(title):
++            return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .center, sectionId: self.section, style: .blocks, action: {
++                arguments.run()
++            })
++        case let .info(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++private final class LunagramExportArguments {
++    let setFormat: (Int32) -> Void
++    let setMedia: (Bool) -> Void
++    let setDepth: (Int) -> Void
++    let run: () -> Void
++
++    init(setFormat: @escaping (Int32) -> Void, setMedia: @escaping (Bool) -> Void, setDepth: @escaping (Int) -> Void, run: @escaping () -> Void) {
++        self.setFormat = setFormat
++        self.setMedia = setMedia
++        self.setDepth = setDepth
++        self.run = run
++    }
++}
++
++/// Докуда копать. «Всё, что есть» — это всё, что лежит на телефоне, а не вся
++/// история переписки: у сервера мы ничего не спрашиваем.
++private let lunagramExportDepths: [(value: Int, title: String)] = [
++    (1_000, "Последняя тысяча сообщений"),
++    (5_000, "Последние пять тысяч"),
++    (20_000, "Последние двадцать тысяч"),
++    (Int.max, "Всё, что есть на телефоне")
++]
++
++private final class LunagramExportState {
++    var format: Int32 = 0
++    var withMedia: Bool = false
++    var depthIndex: Int = 1
++    var running: Bool = false
++}
++
++func lunagramChatExportController(context: AccountContext, peerId: EnginePeer.Id, title: String) -> ViewController {
++    let state = LunagramExportState()
++    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
++    var counter = 0
++    let bump: () -> Void = {
++        counter += 1
++        changed.set(counter)
++    }
++
++    var present: ((ViewController) -> Void)?
++    var share: ((URL) -> Void)?
++    let disposable = MetaDisposable()
++
++    let arguments = LunagramExportArguments(setFormat: { value in
++        state.format = value
++        bump()
++    }, setMedia: { value in
++        state.withMedia = value
++        bump()
++    }, setDepth: { index in
++        state.depthIndex = max(0, min(lunagramExportDepths.count - 1, index))
++        bump()
++    }, run: {
++        guard !state.running else {
++            return
++        }
++        state.running = true
++        bump()
++
++        let format = LunagramExportFormat(rawValue: state.format) ?? .html
++        let withMedia = state.withMedia
++        let depth = lunagramExportDepths[state.depthIndex].value
++        disposable.set((lunagramCollect(context: context, peerId: peerId, depth: depth, withMedia: withMedia)
++        |> map { messages -> (URL?, Int) in
++            return (lunagramWriteExport(messages: messages, title: title, format: format, withMedia: withMedia), messages.count)
++        }
++        |> deliverOnMainQueue).startStrict(next: { value in
++            let (result, count) = value
++            state.running = false
++            bump()
++            guard let result = result else {
++                present?(textAlertController(context: context, title: nil, text: "Не вышло записать выгрузку.", actions: [
++                    TextAlertAction(type: .defaultAction, title: context.sharedContext.currentPresentationData.with({ $0 }).strings.Common_OK, action: {})
++                ]))
++                return
++            }
++            if count == 0 {
++                present?(textAlertController(context: context, title: nil, text: "В этой переписке на телефоне ничего не сохранено — выгружать нечего.", actions: [
++                    TextAlertAction(type: .defaultAction, title: context.sharedContext.currentPresentationData.with({ $0 }).strings.Common_OK, action: {})
++                ]))
++                return
++            }
++            share?(result)
++        }))
++    })
++
++    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramExportEntry] = []
++        entries.append(.formatHeader("Чем выгружать"))
++        for format in LunagramExportFormat.allCases {
++            entries.append(.format(format.rawValue, format.title, format.rawValue == state.format))
++        }
++        entries.append(.depthHeader("Сколько брать"))
++        for (index, depth) in lunagramExportDepths.enumerated() {
++            entries.append(.depth(Int32(index), depth.title, index == state.depthIndex))
++        }
++        entries.append(.mediaToggle(state.withMedia))
++        entries.append(.run(state.running ? "Собираю…" : "Выгрузить"))
++        entries.append(.info("Берём только то, что уже лежит на телефоне: у сервера ничего не спрашиваем. До чего ты никогда не прокручивал — того в выгрузке не будет.\n\nВложения кладутся рядом папкой, и только уже скачанные: качать их ради выгрузки не станем. Без вложений выгрузка — один файл.\n\nГотовое откроется окошком «Поделиться»: оттуда его можно сохранить в «Файлы» или отправить себе."))
++
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Выгрузить переписку"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++    |> afterDisposed {
++        disposable.dispose()
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    present = { [weak controller] alert in
++        controller?.present(alert, in: .window(.root))
++    }
++    share = { [weak controller] url in
++        guard let controller = controller else {
++            return
++        }
++        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
++        if let popover = activity.popoverPresentationController {
++            popover.sourceView = controller.view
++            popover.sourceRect = CGRect(origin: CGPoint(x: controller.view.bounds.midX, y: controller.view.bounds.midY), size: CGSize())
++        }
++        controller.view.window?.rootViewController?.present(activity, animated: true, completion: nil)
++    }
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 2798e036..76cdd77f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -70,6 +70,9 @@ private enum LunagramToggle: Int32 {
+     case linkGuardClean
+     case scamRegistry
+     case ownReactions
++    case keepDownloads
++    case giftId
++    case chatExport
+ 
+     var value: Bool {
+         switch self {
+@@ -173,6 +176,12 @@ private enum LunagramToggle: Int32 {
+             return LunagramScamRegistry.enabled
+         case .ownReactions:
+             return LunagramSettings.ownReactions
++        case .keepDownloads:
++            return LunagramSettings.keepDownloads
++        case .giftId:
++            return LunagramSettings.giftId
++        case .chatExport:
++            return LunagramSettings.chatExport
+         }
+     }
+ 
+@@ -278,6 +287,12 @@ private enum LunagramToggle: Int32 {
+             LunagramScamRegistry.enabled = value
+         case .ownReactions:
+             LunagramSettings.ownReactions = value
++        case .keepDownloads:
++            LunagramSettings.keepDownloads = value
++        case .giftId:
++            LunagramSettings.giftId = value
++        case .chatExport:
++            LunagramSettings.chatExport = value
+         }
+     }
+ 
+@@ -383,6 +398,12 @@ private enum LunagramToggle: Int32 {
+             return "Метка из реестра GiD"
+         case .ownReactions:
+             return "Свои реакции"
++        case .keepDownloads:
++            return "Не обрывать закачку"
++        case .giftId:
++            return "Номер подарка"
++        case .chatExport:
++            return "Выгрузка переписки"
+         }
+     }
+ 
+@@ -436,7 +457,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport:
+             return nil
+         }
+     }
+@@ -599,6 +620,12 @@ extension LunagramToggle {
+             return "exclamationmark.bubble"
+         case .ownReactions:
+             return "hand.thumbsup"
++        case .keepDownloads:
++            return "arrow.down.circle"
++        case .giftId:
++            return "gift"
++        case .chatExport:
++            return "square.and.arrow.up"
+         }
+     }
+ }
+@@ -2910,6 +2937,14 @@ private func lunagramFunctionsEntries(values: [LunagramToggle: Bool], media: Lun
+     rows.row(.value(LunagramChoice.ownReactionsPick.rawValue, "Какие показывать", media.ownReactionsCount == 0 ? "нет" : "\(media.ownReactionsCount)", "face.smiling"))
+     rows.info("Твои реакции встают в начале панели, обычные — сразу за ними. Порядок тот, в котором отмечал: снял и отметил заново — встанет в конец.\n\nПанель всё равно слушается переписки: если в канале разрешён узкий набор реакций, лишние из твоих там не появятся.")
+ 
++    rows.header("Ещё")
++    rows.row(.toggle(.keepDownloads, value(.keepDownloads), "Не обрывать закачку", "arrow.down.circle"))
++    rows.info("Начатая закачка держится узлом сообщения: ушло сообщение с экрана — закачка оборвалась. С этой настройкой мы держим свою ссылку, и файл докачивается, даже если выйти из переписки.\n\nСсылка отпускается сама: когда файл скачан или через полчаса — ждать вечно бессмысленно, файл могли и удалить с сервера.")
++    rows.row(.toggle(.chatExport, value(.chatExport), "Выгрузка переписки", "square.and.arrow.up"))
++    rows.info("В профиле собеседника появится строка «Выгрузить переписку»: страницей, записями или просто текстом, вложения по желанию.\n\nБерём только то, что уже лежит на телефоне: у сервера ничего не спрашиваем. До чего ты никогда не прокручивал — того в выгрузке не будет.")
++    rows.row(.toggle(.giftId, value(.giftId), "Номер подарка", "gift"))
++    rows.info("В окне подарка появится строка с его номером. Нажал — скопировался.")
++
+     rows.row(.toggle(.scamRegistry, value(.scamRegistry), "Метка из реестра GiD", "exclamationmark.bubble"))
+     rows.row(.action(LunagramChoice.scamRefresh.rawValue, media.scamCount == 0 ? "Перечитать реестр" : "Перечитать реестр — сейчас \(media.scamCount)", "arrow.clockwise"))
+     rows.info("В профиле появится строка, если человек упомянут в открытом канале-реестре @GID_ScamBase. Нажатие открывает сам канал.\n\nФормулировка намеренно осторожная: «упоминается в реестре», а не «мошенник». Список чужой, проверить его нечем, а ошибка в нём ударила бы по живому человеку — и выглядело бы это так, будто сказал сам Telegram. Смотри источник и решай сам.\n\nКанал перечитывается раз в месяц. В сеть ходим только к Telegram, наружу ничего не уходит.")
+@@ -3159,6 +3194,14 @@ private func lunagramPlaceEntries(
+         rows.row(.toggle(.ownReactions, value(.ownReactions), "Свои реакции", "hand.thumbsup"))
+         rows.row(.value(LunagramChoice.ownReactionsPick.rawValue, "Какие показывать", media.ownReactionsCount == 0 ? "нет" : "\(media.ownReactionsCount)", "face.smiling"))
+         rows.info("Твои реакции встают в начале панели, обычные — сразу за ними. Порядок тот, в котором отмечал: снял и отметил заново — встанет в конец.\n\nПанель всё равно слушается переписки: если в канале разрешён узкий набор реакций, лишние из твоих там не появятся.")
++
++        rows.header("Ещё")
++        rows.row(.toggle(.keepDownloads, value(.keepDownloads), "Не обрывать закачку", "arrow.down.circle"))
++        rows.info("Начатая закачка держится узлом сообщения: ушло сообщение с экрана — закачка оборвалась. С этой настройкой мы держим свою ссылку, и файл докачивается, даже если выйти из переписки.\n\nСсылка отпускается сама: когда файл скачан или через полчаса — ждать вечно бессмысленно, файл могли и удалить с сервера.")
++        rows.row(.toggle(.chatExport, value(.chatExport), "Выгрузка переписки", "square.and.arrow.up"))
++        rows.info("В профиле собеседника появится строка «Выгрузить переписку»: страницей, записями или просто текстом, вложения по желанию.\n\nБерём только то, что уже лежит на телефоне: у сервера ничего не спрашиваем. До чего ты никогда не прокручивал — того в выгрузке не будет.")
++        rows.row(.toggle(.giftId, value(.giftId), "Номер подарка", "gift"))
++        rows.info("В окне подарка появится строка с его номером. Нажал — скопировался.")
+     }
+ 
+     return rows.entries
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+index cc527411..d46d6bd3 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoProfileItems.swift
+@@ -982,6 +982,14 @@ func infoItems(
+         }))
+     }
+ 
++    // Lunagram: «Выгрузить переписку» — страницей, записями или текстом.
++    if LunagramSettings.chatExport, let peer = data.peer {
++        items[.peerInfoTrailing]!.append(PeerInfoScreenDisclosureItem(id: 9102, label: .none, text: "Выгрузить переписку", icon: UIImage(bundleImageName: "Chat/Context Menu/Download"), action: {
++            let controller = lunagramChatExportController(context: context, peerId: peer.id, title: lunagramPeerName(peer))
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(controller)
++        }))
++    }
++
+     // Lunagram: «Что известно» — короткая справка о переписке.
+     if LunagramSettings.chatInfoSheet, let peerId = data.peer?.id {
+         items[.peerInfoTrailing]!.append(PeerInfoScreenDisclosureItem(id: 9101, label: .none, text: "Что известно", icon: UIImage(bundleImageName: "Chat/Context Menu/Info"), action: {
