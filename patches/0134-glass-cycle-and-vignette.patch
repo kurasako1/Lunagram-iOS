@@ -1,0 +1,367 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 91467597..484c267f 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -97,6 +97,10 @@ public final class LunagramSettings {
+         static let settingsBackground = "lunagram.profile.settingsBackground"
+         static let glassTintColor = "lunagram.glass.tintColor"
+         static let glassTintStrength = "lunagram.glass.tintStrength"
++        static let glassTintCycle = "lunagram.glass.tintCycle"
++        static let glassTintCycleSpeed = "lunagram.glass.tintCycleSpeed"
++        static let vignette = "lunagram.glass.vignette"
++        static let vignetteStrength = "lunagram.glass.vignetteStrength"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -885,6 +889,33 @@ public final class LunagramSettings {
+         set { setPercent(newValue, Key.glassTintStrength) }
+     }
+ 
++    /// Медленно водить оттенок выбранного цвета по кругу.
++    ///
++    /// Работает только с выбранным цветом: водить по кругу нечего, если цвет не
++    /// выбран, — телеграмовский белый останется белым при любом обороте.
++    public static var glassTintCycle: Bool {
++        get { return flag(Key.glassTintCycle, default: false) }
++        set { setFlag(newValue, Key.glassTintCycle) }
++    }
++
++    /// Сколько секунд на полный оборот: чем меньше, тем быстрее.
++    public static var glassTintCycleSpeed: Int {
++        get { return clamped(Key.glassTintCycleSpeed, 5, 120, 30) }
++        set { setClamped(newValue, Key.glassTintCycleSpeed, 5, 120) }
++    }
++
++    /// Притемнять края экрана.
++    public static var vignette: Bool {
++        get { return flag(Key.vignette, default: false) }
++        set { setFlag(newValue, Key.vignette) }
++    }
++
++    /// Насколько густа виньетка, 0…100 %.
++    public static var vignetteStrength: Int {
++        get { return percent(Key.vignetteStrength, default: 45) }
++        set { setPercent(newValue, Key.vignetteStrength) }
++    }
++
+     /// Подмешать свой цвет к телеграмовскому. Цвет не выбран — отдаём как было.
+     ///
+     /// Именно подмешать, а не заменить: у панели важна ещё и прозрачность, и
+@@ -893,7 +924,17 @@ public final class LunagramSettings {
+         guard let rgb = glassTintColor else {
+             return base
+         }
+-        let mine = color(from: rgb, alpha: 1.0)
++        var mineColor = UIColor(cgColor: color(from: rgb, alpha: 1.0))
++        if glassTintCycle {
++            // Оттенок едет по кругу, насыщенность и яркость — выбранные.
++            var hue: CGFloat = 0.0, saturation: CGFloat = 0.0, brightness: CGFloat = 0.0, alpha: CGFloat = 0.0
++            if mineColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) {
++                let period = Double(max(1, glassTintCycleSpeed))
++                let shift = CGFloat(Date().timeIntervalSince1970.truncatingRemainder(dividingBy: period) / period)
++                mineColor = UIColor(hue: (hue + shift).truncatingRemainder(dividingBy: 1.0), saturation: saturation, brightness: brightness, alpha: alpha)
++            }
++        }
++        let mine = mineColor.cgColor
+         let share = CGFloat(glassTintStrength) / 100.0
+         var br: CGFloat = 0.0, bg: CGFloat = 0.0, bb: CGFloat = 0.0, ba: CGFloat = 0.0
+         var mr: CGFloat = 0.0, mg: CGFloat = 0.0, mb: CGFloat = 0.0, ma: CGFloat = 0.0
+diff --git a/submodules/Lunagram/Sources/LunagramVignette.swift b/submodules/Lunagram/Sources/LunagramVignette.swift
+new file mode 100644
+index 00000000..a9f68a2d
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramVignette.swift
+@@ -0,0 +1,71 @@
++import Foundation
++import UIKit
++
++// Lunagram: виньетка — края экрана притемняются, середина остаётся светлее.
++//
++// Задумка из Visual Ecstasy. Кладётся поверх всего окна одним слоем и нажатий
++// себе не забирает: она только рисует.
++//
++// Держится наверху не порядком добавления, а высотой слоя. Порядок сбивался бы
++// каждый раз, когда Telegram добавляет своё поверх, — а высота слоя выигрывает
++// у порядка всегда, и переставлять ничего не надо.
++
++public final class LunagramVignetteView: UIView {
++    private let gradient = CAGradientLayer()
++
++    public override init(frame: CGRect) {
++        super.init(frame: frame)
++
++        self.isUserInteractionEnabled = false
++        self.layer.zPosition = 10_000.0
++        self.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++
++        self.gradient.type = .radial
++        self.gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
++        // Конец за углом прямоугольника: иначе по углам остаётся светлый крест.
++        self.gradient.endPoint = CGPoint(x: 1.2, y: 1.2)
++        self.gradient.locations = [0.0, 0.55, 1.0] as [NSNumber]
++        self.layer.addSublayer(self.gradient)
++
++        self.reload()
++    }
++
++    required init?(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    public override func layoutSubviews() {
++        super.layoutSubviews()
++        self.gradient.frame = self.bounds
++    }
++
++    /// Перечитать настройки: включена ли и насколько густая.
++    public func reload() {
++        let strength = CGFloat(LunagramSettings.vignetteStrength) / 100.0
++        self.isHidden = !LunagramSettings.vignette || strength <= 0.0
++        self.gradient.colors = [
++            UIColor.black.withAlphaComponent(0.0).cgColor,
++            UIColor.black.withAlphaComponent(strength * 0.25).cgColor,
++            UIColor.black.withAlphaComponent(strength).cgColor
++        ]
++    }
++}
++
++public enum LunagramVignette {
++    private static var view: LunagramVignetteView?
++    private static var observer: NSObjectProtocol?
++
++    /// Поставить виньетку на окно. Зовётся один раз при запуске.
++    public static func install(in window: UIWindow) {
++        guard self.view == nil else {
++            return
++        }
++        let view = LunagramVignetteView(frame: window.bounds)
++        window.addSubview(view)
++        self.view = view
++
++        self.observer = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { _ in
++            LunagramVignette.view?.reload()
++        })
++    }
++}
+diff --git a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+index c06f583a..59813188 100644
+--- a/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
++++ b/submodules/TelegramUI/Components/GlassBackgroundComponent/Sources/GlassBackgroundComponent.swift
+@@ -51,7 +51,75 @@ private final class ContentContainer: UIView {
+     }
+ }
+ 
++/// Lunagram: кто перекрашивается, пока цвет едет по кругу.
++///
++/// Стеклянная панель меняет цвет только когда её хозяин зовёт `update`. Своего
++/// повода звать его у неё нет, поэтому общий повторитель четыре раза в секунду
++/// просит живые панели повторить последнюю раскладку.
++///
++/// Четыре раза, а не шестьдесят: цвет едет медленно, разницы не видно, а будить
++/// каждую панель каждый кадр — греть телефон впустую. Панели держим слабо: они
++/// приходят и уходят вместе с экранами.
++final class LunagramGlassTicker {
++    static let shared = LunagramGlassTicker()
++
++    private final class Box {
++        weak var view: GlassBackgroundView?
++        init(view: GlassBackgroundView) {
++            self.view = view
++        }
++    }
++
++    private var boxes: [Box] = []
++    private var timer: Timer?
++
++    func add(_ view: GlassBackgroundView) {
++        if self.boxes.contains(where: { $0.view === view }) {
++            return
++        }
++        self.boxes.append(Box(view: view))
++        self.start()
++    }
++
++    private func start() {
++        guard self.timer == nil else {
++            return
++        }
++        let timer = Timer(timeInterval: 0.25, repeats: true, block: { [weak self] _ in
++            self?.tick()
++        })
++        RunLoop.main.add(timer, forMode: .common)
++        self.timer = timer
++    }
++
++    private func tick() {
++        var alive: [Box] = []
++        for box in self.boxes {
++            guard let view = box.view else {
++                continue
++            }
++            alive.append(box)
++            view.lunagramRefreshTint()
++        }
++        self.boxes = alive
++        if self.boxes.isEmpty {
++            self.timer?.invalidate()
++            self.timer = nil
++        }
++    }
++}
++
+ public class GlassBackgroundView: UIView {
++    /// Последняя раскладка — чтобы повторить её с новым цветом.
++    private var lunagramLast: (size: CGSize, shape: Shape, isDark: Bool, tintColor: TintColor, isInteractive: Bool, isVisible: Bool)?
++
++    func lunagramRefreshTint() {
++        guard let last = self.lunagramLast else {
++            return
++        }
++        self.update(size: last.size, shape: last.shape, isDark: last.isDark, tintColor: last.tintColor, isInteractive: last.isInteractive, isVisible: last.isVisible, transition: .immediate)
++    }
++
+     public protocol ContentView: UIView {
+         var tintMask: UIView { get }
+     }
+@@ -606,6 +674,10 @@ public class GlassBackgroundView: UIView {
+     }
+ 
+     func update(size: CGSize, shape: Shape, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
++        self.lunagramLast = (size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible)
++        if case .panel = tintColor.kind, LunagramSettings.glassTintCycle, LunagramSettings.glassTintColor != nil {
++            LunagramGlassTicker.shared.add(self)
++        }
+         
+         if let glassHighlightRecognizer = self.glassHighlightRecognizer {
+             glassHighlightRecognizer.isEnabled = isInteractive
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index a22a802d..b27e821a 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -51,6 +51,8 @@ private enum LunagramToggle: Int32 {
+     case headerCallButton
+     case chatInfoSheet
+     case noLinkPreview
++    case glassCycle
++    case vignette
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
+@@ -132,6 +134,10 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.chatInfoSheet
+         case .noLinkPreview:
+             return LunagramSettings.noLinkPreview
++        case .glassCycle:
++            return LunagramSettings.glassTintCycle
++        case .vignette:
++            return LunagramSettings.vignette
+         case .voiceLengthInList:
+             return LunagramSettings.voiceLengthInList
+         case .storiesClickOnly:
+@@ -231,6 +237,10 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.chatInfoSheet = value
+         case .noLinkPreview:
+             LunagramSettings.noLinkPreview = value
++        case .glassCycle:
++            LunagramSettings.glassTintCycle = value
++        case .vignette:
++            LunagramSettings.vignette = value
+         case .voiceLengthInList:
+             LunagramSettings.voiceLengthInList = value
+         case .storiesClickOnly:
+@@ -330,6 +340,10 @@ private enum LunagramToggle: Int32 {
+             return "Что известно о чате"
+         case .noLinkPreview:
+             return "Убрать предпросмотр ссылок"
++        case .glassCycle:
++            return "Переливать цвет"
++        case .vignette:
++            return "Притемнять края"
+         case .voiceLengthInList:
+             return "Длина голосовых"
+         case .storiesClickOnly:
+@@ -415,7 +429,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -540,6 +554,10 @@ extension LunagramToggle {
+             return "info.circle"
+         case .noLinkPreview:
+             return "link.badge.plus,link"
++        case .glassCycle:
++            return "paintpalette"
++        case .vignette:
++            return "circle.lefthalf.filled"
+         case .voiceLengthInList:
+             return "speaker.wave.1"
+         case .storiesClickOnly:
+@@ -1379,6 +1397,10 @@ private struct LunagramMediaState: Equatable {
+     var profileGlassStrength: Int = 60
+     var glassTint: UInt32? = nil
+     var glassTintStrength: Int = 50
++    var glassTintCycle: Bool = false
++    var glassTintCycleSpeed: Int = 30
++    var vignette: Bool = false
++    var vignetteStrength: Int = 45
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1404,6 +1426,10 @@ private struct LunagramMediaState: Equatable {
+         state.profileGlassStrength = LunagramSettings.profileGlassStrength
+         state.glassTint = LunagramSettings.glassTintColor
+         state.glassTintStrength = LunagramSettings.glassTintStrength
++        state.glassTintCycle = LunagramSettings.glassTintCycle
++        state.glassTintCycleSpeed = LunagramSettings.glassTintCycleSpeed
++        state.vignette = LunagramSettings.vignette
++        state.vignetteStrength = LunagramSettings.vignetteStrength
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
+@@ -2017,6 +2043,10 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileGlassStrength = value
+         case 121:
+             LunagramSettings.glassTintStrength = value
++        case 122:
++            LunagramSettings.glassTintCycleSpeed = value
++        case 123:
++            LunagramSettings.vignetteStrength = value
+         case 92:
+             LunagramMentionAvatars.size = value
+         case 50:
+@@ -3034,6 +3064,17 @@ private func lunagramPlaceEntries(
+         if media.glassTint != nil {
+             rows.row(.action(LunagramChoice.glassTintReset.rawValue, "Вернуть как было", "arrow.uturn.backward"))
+         }
++        rows.row(.check(.glassCycleToggle, media.glassTintCycle, "Переливать цвет"))
++        if media.glassTintCycle {
++            rows.row(.slider(122, "Секунд на оборот", media.glassTintCycleSpeed, 5, 120, 5))
++        }
++        rows.info("Оттенок выбранного цвета медленно едет по кругу. Работает только с выбранным цветом: водить по кругу нечего, если цвет не выбран.")
++
++        rows.header("Края экрана")
++        rows.row(.check(.vignetteToggle, media.vignette, "Притемнять края"))
++        rows.row(.slider(123, "Насколько густо", media.vignetteStrength, 0, 100, 5))
++        rows.info("Углы экрана уходят в темноту, середина остаётся светлее — как в кино. Рисуется поверх всего одним слоем и нажатий себе не забирает.")
++
+         rows.info("Матовые панели — полоса ввода, меню, всплывающие окошки — красит сам Telegram. Выбранный цвет к этому подмешивается, ползунок задаёт насколько густо.\n\nЦвет именно подмешивается, а не ставится целиком: у панели важна ещё и прозрачность, и со сплошным цветом стекло перестало бы быть стеклом.\n\nПрозрачные панели и цветные кнопки не трогаем — их Telegram красит так нарочно.")
+ 
+     case .profileButtons:
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index f06bbef8..a53db17e 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -421,6 +421,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }
+         self.window = window
+         self.nativeWindow = window
++
++        // Lunagram: виньетка — слоем поверх всего окна, нажатий не забирает.
++        LunagramVignette.install(in: window)
+         
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
+         
