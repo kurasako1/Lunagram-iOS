@@ -1,0 +1,129 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b2d76355..55c17ef0 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -96,6 +96,7 @@ public final class LunagramSettings {
+         static let settingsBackground = "lunagram.profile.settingsBackground"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
++        static let noLinkPreview = "lunagram.chat.noLinkPreview"
+         // Фон полоски с песней в своём профиле — как на ПК.
+         static let profileMusicBgFile = "lunagram.profile.musicBgFile"
+         static let profileMusicBgColor = "lunagram.profile.musicBgColor"
+@@ -838,6 +839,12 @@ public final class LunagramSettings {
+         return "\(deletedIconColor)-\(showMessageSeconds ? 1 : 0)"
+     }
+ 
++    /// Не делать предпросмотр ссылок у своих сообщений.
++    public static var noLinkPreview: Bool {
++        get { return flag(Key.noLinkPreview, default: false) }
++        set { setFlag(newValue, Key.noLinkPreview) }
++    }
++
+     /// Справка «Что известно» о переписке.
+     public static var chatInfoSheet: Bool {
+         get {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index c058448a..64b6d44c 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -50,6 +50,7 @@ private enum LunagramToggle: Int32 {
+     case settingsBackground
+     case headerCallButton
+     case chatInfoSheet
++    case noLinkPreview
+     case voiceLengthInList
+     case storiesClickOnly
+     case searchFilterButton
+@@ -129,6 +130,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.headerCallButton
+         case .chatInfoSheet:
+             return LunagramSettings.chatInfoSheet
++        case .noLinkPreview:
++            return LunagramSettings.noLinkPreview
+         case .voiceLengthInList:
+             return LunagramSettings.voiceLengthInList
+         case .storiesClickOnly:
+@@ -226,6 +229,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.headerCallButton = value
+         case .chatInfoSheet:
+             LunagramSettings.chatInfoSheet = value
++        case .noLinkPreview:
++            LunagramSettings.noLinkPreview = value
+         case .voiceLengthInList:
+             LunagramSettings.voiceLengthInList = value
+         case .storiesClickOnly:
+@@ -323,6 +328,8 @@ private enum LunagramToggle: Int32 {
+             return "Кнопка звонка в шапке"
+         case .chatInfoSheet:
+             return "Что известно о чате"
++        case .noLinkPreview:
++            return "Убрать предпросмотр ссылок"
+         case .voiceLengthInList:
+             return "Длина голосовых"
+         case .storiesClickOnly:
+@@ -408,7 +415,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry:
+             return nil
+         }
+     }
+@@ -531,6 +538,8 @@ extension LunagramToggle {
+             return "phone"
+         case .chatInfoSheet:
+             return "info.circle"
++        case .noLinkPreview:
++            return "link.badge.plus,link"
+         case .voiceLengthInList:
+             return "speaker.wave.1"
+         case .storiesClickOnly:
+@@ -3015,6 +3024,8 @@ private func lunagramPlaceEntries(
+         rows.info("У сообщений будет видно не только час и минуту, но и секунды.")
+         rows.row(.toggle(.showRoundSource, value(.showRoundSource), "Откуда записан кружок", "info.circle"))
+         rows.info("Рядом с длительностью кружка появится iOS, Android или Desktop. Когда определить не выходит, метки нет — неверная хуже отсутствующей.")
++        rows.row(.toggle(.noLinkPreview, value(.noLinkPreview), "Убрать предпросмотр ссылок", "link"))
++        rows.info("Твои сообщения со ссылками будут уходить без картинки-предпросмотра. У собеседника тоже: предпросмотр делает сервер, и мы просим его этого не делать.\n\nНа чужие сообщения не влияет. Убрать предпросмотр у одного сообщения по-прежнему можно крестиком над полосой ввода.")
+         rows.row(.toggle(.chatInfoSheet, value(.chatInfoSheet), "Что известно о чате", "info.circle"))
+         rows.info("Короткая справка о переписке: тип, номер, @ник, был в сети; проверен ли, скам, фейк, ограничен; у групп и каналов — сколько участников, создатель ли ты и твои права. Внизу «Скопировать всё».\n\nОткрывается двумя путями: строкой в профиле собеседника и долгим нажатием на аватарку в шапке переписки. На имя в шапке не вешаю: там у Telegram уже свой поиск, и отнимать его незачем.\n\nВсё показанное телефон уже знает — у сервера ничего не спрашиваем.")
+         rows.row(.toggle(.headerCallButton, value(.headerCallButton), "Кнопка звонка в шапке", "phone"))
+diff --git a/submodules/TelegramUI/Sources/ChatControllerNode.swift b/submodules/TelegramUI/Sources/ChatControllerNode.swift
+index 83c19884..88b9a6b0 100644
+--- a/submodules/TelegramUI/Sources/ChatControllerNode.swift
++++ b/submodules/TelegramUI/Sources/ChatControllerNode.swift
+@@ -4,6 +4,7 @@ import AsyncDisplayKit
+ import Postbox
+ import SwiftSignalKit
+ import Display
++import Lunagram
+ import TelegramCore
+ import TelegramPresentationData
+ import TelegramUIPreferences
+@@ -5077,7 +5078,12 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                     var attributes: [MessageAttribute] = [RichTextMessageAttribute(instantPage: instantPage(from: composeContent), fullInstantPage: nil)]
+ 
+                     // url-preview attribute parity (duplicated, not shared, to keep the text loop byte-identical)
+-                    if let urlPreview = self.chatPresentationInterfaceState.urlPreview {
++                    if LunagramSettings.noLinkPreview {
++                        // Lunagram: пометку ставим всегда, а не только когда
++                        // предпросмотр успел подгрузиться: без неё сервер сделает
++                        // его сам, и настройка окажется бесполезной.
++                        attributes.append(OutgoingContentInfoMessageAttribute(flags: [.disableLinkPreviews]))
++                    } else if let urlPreview = self.chatPresentationInterfaceState.urlPreview {
+                         if self.chatPresentationInterfaceState.interfaceState.composeDisableUrlPreviews.contains(urlPreview.url) {
+                             attributes.append(OutgoingContentInfoMessageAttribute(flags: [.disableLinkPreviews]))
+                         } else {
+@@ -5113,7 +5119,10 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                                 attributes.append(TextEntitiesMessageAttribute(entities: entities))
+                             }
+                             
+-                            if let urlPreview = self.chatPresentationInterfaceState.urlPreview {
++                            if LunagramSettings.noLinkPreview {
++                                // Lunagram: см. выше — пометка нужна всегда.
++                                attributes.append(OutgoingContentInfoMessageAttribute(flags: [.disableLinkPreviews]))
++                            } else if let urlPreview = self.chatPresentationInterfaceState.urlPreview {
+                                 if self.chatPresentationInterfaceState.interfaceState.composeDisableUrlPreviews.contains(urlPreview.url) {
+                                     attributes.append(OutgoingContentInfoMessageAttribute(flags: [.disableLinkPreviews]))
+                                 } else {
