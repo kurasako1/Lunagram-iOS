@@ -235,7 +235,7 @@ index c06f583a..59813188 100644
          if let glassHighlightRecognizer = self.glassHighlightRecognizer {
              glassHighlightRecognizer.isEnabled = isInteractive
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index a22a802d..b27e821a 100644
+index a22a802d..5a21fd58 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -51,6 +51,8 @@ private enum LunagramToggle: Int32 {
@@ -337,14 +337,14 @@ index a22a802d..b27e821a 100644
          if media.glassTint != nil {
              rows.row(.action(LunagramChoice.glassTintReset.rawValue, "Вернуть как было", "arrow.uturn.backward"))
          }
-+        rows.row(.check(.glassCycleToggle, media.glassTintCycle, "Переливать цвет"))
++        rows.row(.check(.glassCycle, media.glassTintCycle, "Переливать цвет"))
 +        if media.glassTintCycle {
 +            rows.row(.slider(122, "Секунд на оборот", media.glassTintCycleSpeed, 5, 120, 5))
 +        }
 +        rows.info("Оттенок выбранного цвета медленно едет по кругу. Работает только с выбранным цветом: водить по кругу нечего, если цвет не выбран.")
 +
 +        rows.header("Края экрана")
-+        rows.row(.check(.vignetteToggle, media.vignette, "Притемнять края"))
++        rows.row(.check(.vignette, media.vignette, "Притемнять края"))
 +        rows.row(.slider(123, "Насколько густо", media.vignetteStrength, 0, 100, 5))
 +        rows.info("Углы экрана уходят в темноту, середина остаётся светлее — как в кино. Рисуется поверх всего одним слоем и нажатий себе не забирает.")
 +
