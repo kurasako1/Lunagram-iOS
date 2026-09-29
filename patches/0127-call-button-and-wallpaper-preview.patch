@@ -1,0 +1,110 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+index 0d660ed2..d84ea112 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramPreviewItem.swift
+@@ -12,6 +12,17 @@ import AvatarNode
+ import TelegramCore
+ import Lunagram
+ 
++/// Рамка пропорцией телефона посередине образца.
++///
++/// Экран айфона примерно девять к девятнадцати с половиной. Показывать обои в
++/// лежачем прямоугольнике бессмысленно: на телефоне они лягут иначе, и по
++/// такому образцу не понять, что окажется видно.
++private func lunagramPhoneShapedFrame(in size: CGSize) -> CGRect {
++    let height = max(1.0, size.height - 16.0)
++    let width = min(max(1.0, size.width - 24.0), floor(height * 9.0 / 19.5))
++    return CGRect(x: floor((size.width - width) / 2.0), y: 8.0, width: width, height: height)
++}
++
+ /// Что показываем в образце.
+ enum LunagramPreviewKind {
+     case dialogCard
+@@ -217,8 +228,12 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+                 previewHeight = 150.0
+             case .name:
+                 previewHeight = 76.0
+-            case .wallpaper, .particles, .banner:
++            case .particles, .banner:
+                 previewHeight = 170.0
++            case .wallpaper:
++                // Обои ложатся на стоячий экран, а образец был лежачим — по
++                // нему нельзя было понять, что окажется видно.
++                previewHeight = 420.0
+             case .profileBackground:
+                 // Выше ширины экрана: фон ложится под весь список профиля, и
+                 // образец должен читаться стоячим прямоугольником. При 320 он
+@@ -499,7 +514,16 @@ final class LunagramPreviewItemNode: ListViewItemNode {
+             }
+             self.previewContainer.isUserInteractionEnabled = true
+             cropView.isHidden = false
+-            cropView.frame = CGRect(x: 12.0, y: 8.0, width: rowSize.width - 24.0, height: rowSize.height - 16.0)
++            if case .wallpaper = item.kind {
++                // Обои — в рамке пропорцией телефона: только так видно, что
++                // попадёт на экран, а что уйдёт за край.
++                cropView.frame = lunagramPhoneShapedFrame(in: rowSize)
++                cropView.layer.cornerRadius = 18.0
++                cropView.clipsToBounds = true
++            } else {
++                cropView.frame = CGRect(x: 12.0, y: 8.0, width: rowSize.width - 24.0, height: rowSize.height - 16.0)
++                cropView.layer.cornerRadius = 0.0
++            }
+             cropView.reload()
+         }
+ 
+diff --git a/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift b/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift
+index 49f427c2..77159856 100644
+--- a/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift
++++ b/submodules/TelegramUI/Sources/LunagramHeaderCallButton.swift
+@@ -34,7 +34,33 @@ final class LunagramHeaderCallButton: HighlightableButtonNode {
+         super.init(pointerStyle: pointerStyle)
+ 
+         self.addSubnode(self.iconNode)
+-        self.frame = CGRect(origin: CGPoint(), size: CGSize(width: 44.0, height: 44.0))
++    }
++
++    /// Шапка спрашивает размер отсюда. Своего содержимого у кнопки нет —
++    /// значок лежит отдельным узлом, — поэтому размер надо назвать самому:
++    /// иначе он выходит нулевым и значок уезжает в угол.
++    override func calculateSizeThatFits(_ constrainedSize: CGSize) -> CGSize {
++        return CGSize(width: 44.0, height: 44.0)
++    }
++
++    override func layout() {
++        super.layout()
++        self.lunagramPlaceIcon()
++    }
++
++    /// Значок — посередине кнопки. Считаем при раскладке: в миг создания
++    /// размеры ещё никто не назначил.
++    private func lunagramPlaceIcon() {
++        guard let image = self.iconNode.image else {
++            return
++        }
++        self.iconNode.frame = CGRect(
++            origin: CGPoint(
++                x: floor((self.bounds.width - image.size.width) / 2.0),
++                y: floor((self.bounds.height - image.size.height) / 2.0)
++            ),
++            size: image.size
++        )
+     }
+ 
+     override func didLoad() {
+@@ -58,15 +84,7 @@ final class LunagramHeaderCallButton: HighlightableButtonNode {
+             self.appliedColor = color
+             self.iconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Call"), color: color)
+         }
+-        if let image = self.iconNode.image {
+-            self.iconNode.frame = CGRect(
+-                origin: CGPoint(
+-                    x: floor((self.bounds.width - image.size.width) / 2.0),
+-                    y: floor((self.bounds.height - image.size.height) / 2.0)
+-                ),
+-                size: image.size
+-            )
+-        }
++        self.lunagramPlaceIcon()
+     }
+ }
+ 
