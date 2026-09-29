@@ -1,0 +1,237 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1224f31c..b2d76355 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -2070,6 +2070,8 @@ public final class LunagramSettings {
+         changePending = true
+         DispatchQueue.main.async {
+             changePending = false
++            // Цвет корзинки мог поменяться — нарисованное больше не годится.
++            lunagramClearTrashCache()
+             NotificationCenter.default.post(name: didChangeNotification, object: nil)
+         }
+     }
+diff --git a/submodules/Lunagram/Sources/LunagramTrashImage.swift b/submodules/Lunagram/Sources/LunagramTrashImage.swift
+new file mode 100644
+index 00000000..9ad10263
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramTrashImage.swift
+@@ -0,0 +1,84 @@
++import Foundation
++import UIKit
++
++// Lunagram: сама картинка корзинки — та, что стоит у удалённых сообщений.
++//
++// Лежит здесь, а не рядом с перепиской, нарочно: её рисует и переписка, и
++// экран настроек. Хозяин трижды говорил, что цвет не меняется, а я трижды
++// чинил не ту половину пути — поэтому теперь настройки показывают ровно ту же
++// картинку, что уходит в сообщения. Если образец в настройках меняет цвет, а
++// в переписке нет, значит ломается доставка; если и образец не меняется —
++// ломается рисование или чтение настройки. Догадок больше не будет.
++//
++// Рисуем своими линиями, а не перекрашиваем системный значок: у перекрашенного
++// системного значка цвет живёт в описании картинки, а не в её точках, и кто
++// именно его потеряет по дороге — проверить отсюда нечем.
++
++private let lunagramTrashLock = NSLock()
++private var lunagramTrashCache: [String: UIImage] = [:]
++
++/// Сбросить нарисованное. Зовётся при смене настроек: цвет мог поменяться.
++public func lunagramClearTrashCache() {
++    lunagramTrashLock.lock()
++    lunagramTrashCache.removeAll()
++    lunagramTrashLock.unlock()
++}
++
++/// Корзинка выбранного цвета, высотой примерно `pointSize`.
++///
++/// Памятку держим по самому числу цвета, а не по разобранным на красный,
++/// зелёный и синий долям: разбор — лишний шаг, на котором можно потерять
++/// разницу между двумя близкими цветами.
++public func lunagramTrashImage(pointSize: CGFloat) -> UIImage? {
++    let value = LunagramSettings.deletedIconColor
++    let height = max(6.0, ceil(pointSize))
++    let key = "\(value)-\(Int(height))"
++
++    lunagramTrashLock.lock()
++    if let cached = lunagramTrashCache[key] {
++        lunagramTrashLock.unlock()
++        return cached
++    }
++    lunagramTrashLock.unlock()
++
++    let width = ceil(height * 0.88)
++    let color = UIColor(
++        red: CGFloat((value >> 16) & 0xFF) / 255.0,
++        green: CGFloat((value >> 8) & 0xFF) / 255.0,
++        blue: CGFloat(value & 0xFF) / 255.0,
++        alpha: 1.0
++    )
++
++    let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
++        let cg = context.cgContext
++        cg.setFillColor(color.cgColor)
++
++        let unit = height / 12.0
++        // Ручка сверху.
++        let handleWidth = width * 0.38
++        cg.fill(CGRect(x: (width - handleWidth) / 2.0, y: 0.0, width: handleWidth, height: unit))
++        // Крышка во всю ширину.
++        let lid = CGRect(x: 0.0, y: unit * 1.2, width: width, height: unit * 1.6)
++        cg.addPath(UIBezierPath(roundedRect: lid, cornerRadius: unit * 0.8).cgPath)
++        cg.fillPath()
++        // Бак: чуть у́же крышки, со скруглённым низом.
++        let bodyWidth = width * 0.82
++        let body = CGRect(
++            x: (width - bodyWidth) / 2.0,
++            y: lid.maxY + unit * 0.5,
++            width: bodyWidth,
++            height: height - lid.maxY - unit * 0.5
++        )
++        cg.addPath(UIBezierPath(
++            roundedRect: body,
++            byRoundingCorners: [.bottomLeft, .bottomRight],
++            cornerRadii: CGSize(width: unit * 1.2, height: unit * 1.2)
++        ).cgPath)
++        cg.fillPath()
++    }
++
++    lunagramTrashLock.lock()
++    lunagramTrashCache[key] = image
++    lunagramTrashLock.unlock()
++    return image
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+index fa51773b..20a100ca 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/LunagramDeletedIcon.swift
+@@ -7,43 +7,56 @@ import Lunagram
+ // Lunagram: значок удалённого — корзинка, как в AyuGram.
+ //
+ // Картинку AyuGram не берём: их настольная версия под GPLv3, а Telegram для
+-// iOS — под GPLv2, и смешивать их нельзя. Рисуем системной корзинкой iOS:
+-// она почти такая же — залитый бак с крышкой, — а разрешение на неё даёт
+-// сама Apple всем приложениям.
++// iOS — под GPLv2, и смешивать их нельзя.
+ //
+-// Цвет — свой, из настроек (по умолчанию красный): цветом времени корзинка
+-// сливалась с сообщением и была незаметна. Размер — от шрифта времени.
+-// Готовые картинки запоминаются: сообщений с корзинкой на экране может быть
+-// много, а цветов и размеров — пара штук.
++// Саму корзинку рисует общий модуль (LunagramTrashImage): её же показывает
++// экран настроек рядом с выбором цвета. Сделано так нарочно — хозяин трижды
++// говорил, что цвет не меняется, а я трижды чинил не ту половину пути. Теперь
++// будет видно: если образец в настройках меняет цвет, а в переписке нет —
++// ломается доставка; если и образец не меняется — чтение настройки или само
++// рисование.
+ 
+-private let lunagramDeletedIconLock = NSLock()
+-private var lunagramDeletedIconCache: [String: UIImage] = [:]
++/// Какие картинки мы отдавали значкам. Держим их крепко и по счёту: по ним
++/// узнаём свой значок, чтобы не перекрасить чужой — тот же узел список может
++/// отдать под родной значок просмотров.
++private let lunagramGivenLock = NSLock()
++private var lunagramGivenTrashImages: [UIImage] = []
+ 
+-/// Наша ли это картинка: сверяем по тем самым, что рисовали сами.
+-///
+-/// Тот же узел список мог отдать под родной значок просмотров — тогда
+-/// перекрашивать его нельзя. Старые картинки из памятки не выкидываем, поэтому
+-/// узел со вчерашним цветом всё равно узнаётся.
++func lunagramDeletedIcon(baseFontSize: CGFloat) -> UIImage? {
++    // Шрифт времени — 11/17 от основного; корзинка чуть мельче букв.
++    guard let image = lunagramTrashImage(pointSize: floor(baseFontSize * 10.0 / 17.0)) else {
++        return nil
++    }
++    lunagramGivenLock.lock()
++    if !lunagramGivenTrashImages.contains(where: { $0 === image }) {
++        lunagramGivenTrashImages.append(image)
++        // Размеров у нас пара штук, цветов — сколько выбирал хозяин. Хранить
++        // весь его выбор ни к чему: помним последние.
++        if lunagramGivenTrashImages.count > 8 {
++            lunagramGivenTrashImages.removeFirst(lunagramGivenTrashImages.count - 8)
++        }
++    }
++    lunagramGivenLock.unlock()
++    return image
++}
++
++/// Наша ли это картинка.
+ func lunagramIsDeletedIcon(_ image: UIImage?) -> Bool {
+     guard let image = image else {
+         return false
+     }
+-    lunagramDeletedIconLock.lock()
++    lunagramGivenLock.lock()
+     defer {
+-        lunagramDeletedIconLock.unlock()
++        lunagramGivenLock.unlock()
+     }
+-    return lunagramDeletedIconCache.values.contains(where: { $0 === image })
++    return lunagramGivenTrashImages.contains(where: { $0 === image })
+ }
+ 
+ /// Уже нарисованные корзинки — чтобы перекрасить их на месте.
+ ///
+-/// Цвет вшивается в сообщение, когда его раскладывают. Перекладку всей
+-/// переписки по смене настройки я пробовал, и до сообщений она не доходила.
+-/// Ждать её и не надо: от цвета размер значка не меняется, значит хватит
+-/// подменить картинку в самом значке.
+-///
+-/// Узлы держим слабо: список их переиспользует и выбрасывает, и держать их
+-/// крепко значило бы не дать им умереть.
++/// От цвета размер значка не меняется, значит перекладывать переписку незачем:
++/// хватит подменить картинку в самом значке. Узлы держим слабо: список их
++/// переиспользует и выбрасывает.
+ final class LunagramDeletedIconRegistry {
+     static let shared = LunagramDeletedIconRegistry()
+ 
+@@ -104,32 +117,3 @@ final class LunagramDeletedIconRegistry {
+         self.entries = alive
+     }
+ }
+-
+-
+-func lunagramDeletedIcon(baseFontSize: CGFloat) -> UIImage? {
+-    let color = UIColor(rgb: LunagramSettings.deletedIconColor)
+-    // Шрифт времени — 11/17 от основного; корзинка чуть мельче букв.
+-    let pointSize = floor(baseFontSize * 10.0 / 17.0)
+-    var red: CGFloat = 0.0
+-    var green: CGFloat = 0.0
+-    var blue: CGFloat = 0.0
+-    var alpha: CGFloat = 0.0
+-    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+-    let key = "\(Int(red * 255.0))-\(Int(green * 255.0))-\(Int(blue * 255.0))-\(Int(alpha * 255.0))-\(Int(pointSize))"
+-
+-    // Узел времени раскладывается и не на главном потоке — отсюда замок.
+-    lunagramDeletedIconLock.lock()
+-    defer {
+-        lunagramDeletedIconLock.unlock()
+-    }
+-    if let cached = lunagramDeletedIconCache[key] {
+-        return cached
+-    }
+-    let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+-    guard let symbol = UIImage(systemName: "trash.fill", withConfiguration: configuration) else {
+-        return nil
+-    }
+-    let image = symbol.withTintColor(color, renderingMode: .alwaysOriginal)
+-    lunagramDeletedIconCache[key] = image
+-    return image
+-}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 0a36674b..c058448a 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -2626,7 +2626,10 @@ private func lunagramRowItem(_ row: LunagramRow, presentationData: ItemListPrese
+             arguments.setSlider(90, newValue)
+         })
+     case let .color(id, title, rgb):
+-        return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", labelStyle: .color(UIColor(rgb: rgb)), sectionId: sectionId, style: .blocks, action: {
++        // У цвета корзинки слева стоит сама корзинка — та же картинка, что
++        // уходит в сообщения. По ней видно, дошёл выбранный цвет или нет.
++        let icon: UIImage? = id == LunagramChoice.deletedIconColor.rawValue ? lunagramTrashImage(pointSize: 22.0) : nil
++        return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: "", labelStyle: .color(UIColor(rgb: rgb)), sectionId: sectionId, style: .blocks, action: {
+             arguments.openChoice(id)
+         })
+     case let .info(text):
