@@ -1,0 +1,355 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 35f70433..f7de4c9c 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -107,6 +107,7 @@ public final class LunagramSettings {
+         static let giftId = "lunagram.gift.showId"
+         static let chatExport = "lunagram.chatExport.enabled"
+         static let copyFields = "lunagram.copy.fields"
++        static let typingEffect = "lunagram.typing.effect"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -936,6 +937,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Как появляются набираемые буквы.
++    public static var typingEffect: Int {
++        get { return clamped(Key.typingEffect, 0, LunagramTypingEffect.allCases.count - 1, 0) }
++        set { setClamped(newValue, Key.typingEffect, 0, LunagramTypingEffect.allCases.count - 1) }
++    }
++
+     /// Что копировать, становясь копией человека, — набор отметок числом.
+     ///
+     /// Минус означает «ещё не выбирали»: тогда берётся всё, как было до
+diff --git a/submodules/Lunagram/Sources/LunagramTypingEffect.swift b/submodules/Lunagram/Sources/LunagramTypingEffect.swift
+new file mode 100644
+index 00000000..4a8fc94f
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramTypingEffect.swift
+@@ -0,0 +1,45 @@
++import Foundation
++
++/// Как появляются буквы, которые ты набираешь.
++///
++/// Раньше вид был один — буквы просто проявлялись. Это осталось, но теперь
++/// рядом стоят те, где буквы двигаются: прилетают, разворачиваются,
++/// отпружинивают. Всё это видишь только ты и только в своём поле ввода —
++/// собеседнику уходит обычный текст.
++public enum LunagramTypingEffect: Int, CaseIterable {
++    case fade = 0
++    case flyUp = 1
++    case flyDown = 2
++    case flyLeft = 3
++    case flyRight = 4
++    case grow = 5
++    case spring = 6
++    case spin = 7
++
++    public var title: String {
++        switch self {
++        case .fade:
++            return "Проявляются"
++        case .flyUp:
++            return "Прилетают снизу"
++        case .flyDown:
++            return "Падают сверху"
++        case .flyLeft:
++            return "Прилетают справа"
++        case .flyRight:
++            return "Прилетают слева"
++        case .grow:
++            return "Вырастают"
++        case .spring:
++            return "С пружинкой"
++        case .spin:
++            return "С поворотом"
++        }
++    }
++
++    /// Двигаются ли сами буквы. Проявление обходится маской, остальным нужна
++    /// копия букв: двигать можно только то, что нарисовано отдельно.
++    public var movesLetters: Bool {
++        return self != .fade
++    }
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 95f711ac..88aed194 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -4011,13 +4011,11 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+     /// Lunagram: сколько было символов — чтобы понять, сколько добавилось.
+     private var lunagramTypedLength = 0
+ 
+-    /// Lunagram: плавное появление набираемых букв — как на ПК.
++    /// Lunagram: появление набираемых букв.
+     ///
+-    /// На ПК поверх новой буквы кладут заплатку цвета фона и растворяют её. Здесь
+-    /// поле ввода стеклянное, и сплошная заплатка была бы видна прямоугольником,
+-    /// поэтому делаем маской: место новых букв сперва прозрачное и за миг
+-    /// проявляется. Сам набор текста не трогаем — пострадать может только
+-    /// картинка, но не ввод.
++    /// Здесь только счёт новых букв и место, где они встали; сама картинка —
++    /// в LunagramTypingAnimation. Видов там восемь, и разводить их прямо в
++    /// поле ввода значило бы раздувать и без того немаленький файл.
+     private func lunagramAnimateTyping() {
+         guard let node = self.richTextInputNode else {
+             return
+@@ -4033,40 +4031,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             return
+         }
+         let layer = node.asNode.layer
+-        // Чужую маску не трогаем — только свою прошлую.
+-        if let current = layer.mask, current.name != "lunagramTyping" {
+-            return
+-        }
+         let bounds = layer.bounds
+         let hole = rect.insetBy(dx: -1.0, dy: -1.0).offsetBy(dx: -bounds.minX, dy: -bounds.minY)
+-        let mask = CALayer()
+-        mask.name = "lunagramTyping"
+-        mask.frame = bounds
+-        let outside = CAShapeLayer()
+-        outside.frame = CGRect(origin: CGPoint(), size: bounds.size)
+-        let path = UIBezierPath(rect: CGRect(origin: CGPoint(), size: bounds.size))
+-        path.append(UIBezierPath(rect: hole))
+-        outside.path = path.cgPath
+-        outside.fillRule = .evenOdd
+-        outside.fillColor = UIColor.white.cgColor
+-        mask.addSublayer(outside)
+-        let reveal = CALayer()
+-        reveal.frame = hole
+-        reveal.backgroundColor = UIColor.white.cgColor
+-        mask.addSublayer(reveal)
+-        layer.mask = mask
+-        CATransaction.begin()
+-        CATransaction.setCompletionBlock({ [weak layer] in
+-            if let layer = layer, layer.mask === mask {
+-                layer.mask = nil
+-            }
+-        })
+-        let animation = CABasicAnimation(keyPath: "opacity")
+-        animation.fromValue = 0.0
+-        animation.toValue = 1.0
+-        animation.duration = 0.16
+-        reveal.add(animation, forKey: "lunagramReveal")
+-        CATransaction.commit()
++        let effect = LunagramTypingEffect(rawValue: LunagramSettings.typingEffect) ?? .fade
++        lunagramRunTypingEffect(on: layer, hole: hole, effect: effect)
+     }
+ 
+     public func chatInputTextNodeDidUpdateText() {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift
+new file mode 100644
+index 00000000..66c50199
+--- /dev/null
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTypingAnimation.swift
+@@ -0,0 +1,156 @@
++import Foundation
++import UIKit
++import Lunagram
++
++// Lunagram: как появляются набираемые буквы.
++//
++// На ПК поверх новой буквы кладут заплатку цвета фона и растворяют её. Здесь
++// поле ввода стеклянное, и сплошная заплатка была бы видна прямоугольником,
++// поэтому место новых букв вырезается маской.
++//
++// Для видов, где буквы двигаются, одной маски мало: маска умеет только
++// показать или спрятать, а двигать надо сами буквы. Поэтому с них снимается
++// копия картинкой, кладётся поверх поля и летит, пока настоящие спрятаны под
++// маской. В конце копия убирается, маска снимается — и на месте оказываются
++// настоящие буквы, ровно там, где им и положено быть.
++//
++// Что бы тут ни случилось, набор текста это не трогает: пострадать может
++// только картинка.
++
++private let lunagramTypingMaskName = "lunagramTyping"
++
++/// Снять копию куска слоя картинкой. Зовётся до того, как поставлена маска:
++/// иначе в копию попала бы и она.
++private func lunagramTypingSnapshot(layer: CALayer, rect: CGRect) -> UIImage? {
++    guard rect.width > 0.5, rect.height > 0.5, rect.width < 2000.0, rect.height < 2000.0 else {
++        return nil
++    }
++    // Плотность точек не задаём: рисовальщик сам берёт ту, что у экрана.
++    let format = UIGraphicsImageRendererFormat()
++    format.opaque = false
++    return UIGraphicsImageRenderer(size: rect.size, format: format).image { context in
++        context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
++        layer.render(in: context.cgContext)
++    }
++}
++
++/// Откуда буквы прилетают — сдвиг в начале полёта.
++private func lunagramTypingOffset(_ effect: LunagramTypingEffect, size: CGSize) -> CGPoint {
++    switch effect {
++    case .flyUp:
++        return CGPoint(x: 0.0, y: size.height * 1.2)
++    case .flyDown:
++        return CGPoint(x: 0.0, y: -size.height * 1.2)
++    case .flyLeft:
++        return CGPoint(x: size.width * 0.8, y: 0.0)
++    case .flyRight:
++        return CGPoint(x: -size.width * 0.8, y: 0.0)
++    default:
++        return CGPoint()
++    }
++}
++
++func lunagramRunTypingEffect(on layer: CALayer, hole: CGRect, effect: LunagramTypingEffect) {
++    // Чужую маску не трогаем — только свою прошлую.
++    if let current = layer.mask, current.name != lunagramTypingMaskName {
++        return
++    }
++
++    // Копию снимаем первой: после маски копировать было бы нечего.
++    var ghost: CALayer?
++    if effect.movesLetters, let superlayer = layer.superlayer, let image = lunagramTypingSnapshot(layer: layer, rect: hole) {
++        let copy = CALayer()
++        copy.contents = image.cgImage
++        copy.contentsScale = image.scale
++        copy.frame = layer.convert(hole, to: superlayer)
++        copy.isOpaque = false
++        superlayer.addSublayer(copy)
++        ghost = copy
++    }
++
++    let bounds = layer.bounds
++    let mask = CALayer()
++    mask.name = lunagramTypingMaskName
++    mask.frame = bounds
++    let outside = CAShapeLayer()
++    outside.frame = CGRect(origin: CGPoint(), size: bounds.size)
++    let path = UIBezierPath(rect: CGRect(origin: CGPoint(), size: bounds.size))
++    path.append(UIBezierPath(rect: hole))
++    outside.path = path.cgPath
++    outside.fillRule = .evenOdd
++    outside.fillColor = UIColor.white.cgColor
++    mask.addSublayer(outside)
++    let reveal = CALayer()
++    reveal.frame = hole
++    reveal.backgroundColor = UIColor.white.cgColor
++    mask.addSublayer(reveal)
++    layer.mask = mask
++
++    let duration: Double = ghost == nil ? 0.16 : 0.22
++
++    CATransaction.begin()
++    CATransaction.setCompletionBlock({ [weak layer, weak ghost] in
++        ghost?.removeFromSuperlayer()
++        if let layer = layer, layer.mask === mask {
++            layer.mask = nil
++        }
++    })
++
++    if let ghost = ghost {
++        // Настоящие буквы держим спрятанными, пока летит копия.
++        reveal.opacity = 0.0
++
++        let fade = CABasicAnimation(keyPath: "opacity")
++        fade.fromValue = 0.0
++        fade.toValue = 1.0
++        fade.duration = duration * 0.6
++        ghost.add(fade, forKey: "lunagramGhostFade")
++
++        switch effect {
++        case .flyUp, .flyDown, .flyLeft, .flyRight:
++            let offset = lunagramTypingOffset(effect, size: hole.size)
++            let move = CABasicAnimation(keyPath: "transform.translation")
++            move.fromValue = NSValue(cgSize: CGSize(width: offset.x, height: offset.y))
++            move.toValue = NSValue(cgSize: CGSize())
++            move.duration = duration
++            move.timingFunction = CAMediaTimingFunction(name: .easeOut)
++            ghost.add(move, forKey: "lunagramGhostMove")
++        case .grow:
++            let scale = CABasicAnimation(keyPath: "transform.scale")
++            scale.fromValue = 0.3 as NSNumber
++            scale.toValue = 1.0 as NSNumber
++            scale.duration = duration
++            scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
++            ghost.add(scale, forKey: "lunagramGhostScale")
++        case .spring:
++            let scale = CAKeyframeAnimation(keyPath: "transform.scale")
++            scale.values = [0.5 as NSNumber, 1.18 as NSNumber, 0.94 as NSNumber, 1.0 as NSNumber]
++            scale.keyTimes = [0.0 as NSNumber, 0.5 as NSNumber, 0.8 as NSNumber, 1.0 as NSNumber]
++            scale.duration = duration
++            ghost.add(scale, forKey: "lunagramGhostSpring")
++        case .spin:
++            let spin = CABasicAnimation(keyPath: "transform.rotation.z")
++            spin.fromValue = -0.7 as NSNumber
++            spin.toValue = 0.0 as NSNumber
++            spin.duration = duration
++            spin.timingFunction = CAMediaTimingFunction(name: .easeOut)
++            ghost.add(spin, forKey: "lunagramGhostSpin")
++            let scale = CABasicAnimation(keyPath: "transform.scale")
++            scale.fromValue = 0.6 as NSNumber
++            scale.toValue = 1.0 as NSNumber
++            scale.duration = duration
++            ghost.add(scale, forKey: "lunagramGhostSpinScale")
++        case .fade:
++            break
++        }
++    } else {
++        // Копию снять не вышло — остаётся то, что было всегда: проявление.
++        let animation = CABasicAnimation(keyPath: "opacity")
++        animation.fromValue = 0.0
++        animation.toValue = 1.0
++        animation.duration = duration
++        reveal.add(animation, forKey: "lunagramReveal")
++    }
++
++    CATransaction.commit()
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 76cdd77f..6f9ade7e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1438,6 +1438,7 @@ private struct LunagramMediaState: Equatable {
+     var vignette: Bool = false
+     var vignetteStrength: Int = 45
+     var ownReactionsCount: Int = 0
++    var typingEffect: Int = 0
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1468,6 +1469,7 @@ private struct LunagramMediaState: Equatable {
+         state.vignette = LunagramSettings.vignette
+         state.vignetteStrength = LunagramSettings.vignetteStrength
+         state.ownReactionsCount = LunagramSettings.ownReactionsList.count
++        state.typingEffect = LunagramSettings.typingEffect
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
+@@ -2194,6 +2196,11 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramComposeButton.action = LunagramComposeButton.Action(rawValue: index) ?? .compose
+                 refreshMedia()
+             }))
++        case .typingEffect:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Как появляются буквы", options: LunagramTypingEffect.allCases.map { $0.title }, selected: LunagramSettings.typingEffect, info: "Видно только тебе и только в своём поле ввода: собеседнику уходит обычный текст.\n\nУ всех видов, кроме «Проявляются», буквы двигаются — для этого с них снимается копия картинкой, а настоящие на миг прячутся. Если снять копию не вышло, вид сам собой становится «Проявляются»: это хуже задуманного, но не ломает ввод.", select: { index in
++                LunagramSettings.typingEffect = index
++                refreshMedia()
++            }))
+         case .ownReactionsPick:
+             shared.push?(lunagramReactionsScreen(context: context, refresh: refreshMedia))
+         case .scamRefresh:
+@@ -2550,6 +2557,8 @@ private enum LunagramChoice: Int32 {
+     case profileGlassReset = 93
+     // Свои реакции.
+     case ownReactionsPick = 140
++    // Как появляются набираемые буквы.
++    case typingEffect = 142
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -3202,6 +3211,10 @@ private func lunagramPlaceEntries(
+         rows.info("В профиле собеседника появится строка «Выгрузить переписку»: страницей, записями или просто текстом, вложения по желанию.\n\nБерём только то, что уже лежит на телефоне: у сервера ничего не спрашиваем. До чего ты никогда не прокручивал — того в выгрузке не будет.")
+         rows.row(.toggle(.giftId, value(.giftId), "Номер подарка", "gift"))
+         rows.info("В окне подарка появится строка с его номером. Нажал — скопировался.")
++
++        rows.row(.toggle(.typingAnimation, value(.typingAnimation), "Появление набираемых букв", "character.cursor.ibeam,textformat"))
++        rows.row(.value(LunagramChoice.typingEffect.rawValue, "Как появляются", LunagramTypingEffect(rawValue: media.typingEffect)?.title ?? "", "textformat"))
++        rows.info("Буквы, которые ты набираешь, появляются не разом: проявляются, прилетают, вырастают — на выбор. Видно только тебе, на отправку не влияет.")
+     }
+ 
+     return rows.entries
