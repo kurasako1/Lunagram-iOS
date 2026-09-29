@@ -274,7 +274,7 @@ index f30ae28c..48cd4b9e 100644
  
      /// Прятать спонсорские сообщения в каналах — как на ПК.
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index 64b6d44c..14da70be 100644
+index 64b6d44c..3dedd281 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -1339,6 +1339,7 @@ private struct LunagramMediaState: Equatable {
@@ -309,7 +309,7 @@ index 64b6d44c..14da70be 100644
  private enum LunagramChoice: Int32 {
      case sendWithoutSound = 1
      case sendFont = 2
-+    case sendFontLatin = 3
++    case sendFontLatin = 4
      case ghostLocks = 13
      case deviceMask = 3
      case listTextMode = 5
