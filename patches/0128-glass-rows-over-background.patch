@@ -1,0 +1,133 @@
+diff --git a/submodules/ItemListUI/Sources/ItemListControllerNode.swift b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+index 78e16a32..0d5d8850 100644
+--- a/submodules/ItemListUI/Sources/ItemListControllerNode.swift
++++ b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+@@ -276,6 +276,7 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             }
+             self.backgroundColor = .clear
+             self.listNode.backgroundColor = .clear
++            self.lunagramRestyleRows()
+             self.leftOverlayNode.backgroundColor = .clear
+             self.rightOverlayNode.backgroundColor = .clear
+         } else if let view = self.lunagramBackgroundView {
+@@ -292,6 +293,70 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             }
+         }
+     }
++/// Строки родных настроек нарисованы под сплошную страницу.
++    ///
++    /// Подложка строки залита цветом блока во всю ширину, а скругление не
++    /// вырезано, а НАРИСОВАНО: поверх строки лежит картинка, залитая цветом
++    /// страницы, у которой прозрачны только уголки. Под чёрной страницей это
++    /// выглядит скруглением, под нашей картинкой — чёрными полосами и чёрными
++    /// углами.
++    ///
++    /// Обойти строки поимённо нельзя: их десятки видов, и новый вид я бы всё
++    /// равно однажды забыл. Поэтому правим то, что сейчас на экране: узнаём
++    /// нарисованные углы по самой картинке, прячем их, а подложку делаем
++    /// полупрозрачной и скругляем маской слоя.
++    private func lunagramRestyleRows() {
++        guard self.lunagramShowsBackground, let theme = self.theme else {
++            return
++        }
++        let opaque = theme.list.itemBlocksBackgroundColor
++        let translucent = opaque.withAlphaComponent(0.72)
++
++        // Картинки углов берутся из темы и хранятся в ней же, поэтому их можно
++        // узнавать по самому объекту: у каждой пары углов своя.
++        var knownCorners: [ObjectIdentifier: (mask: CACornerMask, radius: CGFloat)] = [:]
++        for glass in [true, false] {
++            for (top, bottom) in [(true, true), (true, false), (false, true)] {
++                guard let image = PresentationResourcesItemList.cornersImage(theme, top: top, bottom: bottom, glass: glass) else {
++                    continue
++                }
++                var mask: CACornerMask = []
++                if top {
++                    mask.insert(.layerMinXMinYCorner)
++                    mask.insert(.layerMaxXMinYCorner)
++                }
++                if bottom {
++                    mask.insert(.layerMinXMaxYCorner)
++                    mask.insert(.layerMaxXMaxYCorner)
++                }
++                knownCorners[ObjectIdentifier(image)] = (mask: mask, radius: glass ? 26.0 : 11.0)
++            }
++        }
++
++        self.listNode.forEachItemNode { itemNode in
++            var found: (mask: CACornerMask, radius: CGFloat)?
++            var background: ASDisplayNode?
++            for subnode in itemNode.subnodes ?? [] {
++                if let imageNode = subnode as? ASImageNode, let image = imageNode.image, let corners = knownCorners[ObjectIdentifier(image)] {
++                    imageNode.isHidden = true
++                    found = corners
++                } else if let color = subnode.backgroundColor, color.isEqual(opaque) {
++                    background = subnode
++                }
++            }
++            guard let background = background else {
++                return
++            }
++            background.backgroundColor = translucent
++            if let found = found {
++                background.cornerRadius = found.radius
++                background.layer.cornerCurve = .continuous
++                background.layer.maskedCorners = found.mask
++                background.clipsToBounds = true
++            }
++        }
++    }
++
+     private let leftOverlayNode: ASDisplayNode
+     private let rightOverlayNode: ASDisplayNode
+     private var emptyStateItem: ItemListControllerEmptyStateItem?
+@@ -416,6 +481,9 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             guard let strongSelf = self else {
+                 return
+             }
++            // Lunagram: приехавшая из-за края строка приходит с родной чёрной
++            // подложкой — правим её сразу, иначе мелькнёт полосой.
++            strongSelf.lunagramRestyleRows()
+             var inVoiceOver = false
+             if let validLayout = self?.validLayout {
+                 inVoiceOver = validLayout.0.inVoiceOver
+@@ -1166,6 +1234,9 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                         strongSelf.didSetReady = true
+                         strongSelf._ready.set(true)
+                     }
++
++                    // Lunagram: строки только что переложены — вернуть им стекло.
++                    strongSelf.lunagramRestyleRows()
+                     
+                     var updatedFocusItemTag = false
+                     if let appliedFocusItemTag = strongSelf.appliedFocusItemTag, let focusItemTag = focusItemTag {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+index f12c3e73..0e82aa4a 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+@@ -5,6 +5,7 @@ import AsyncDisplayKit
+ import SwiftSignalKit
+ import TelegramPresentationData
+ import ItemListUI
++import Lunagram
+ 
+ // Lunagram: свёрнутое описание под строкой.
+ //
+@@ -170,6 +171,17 @@ final class LunagramAboutItemNode: ListViewItemNode {
+                 let textFrame = CGRect(origin: CGPoint(x: leftInset, y: topInset), size: textLayout.size)
+                 strongSelf.textNode.frame = textFrame
+ 
++                // Описание лежит вне карточки, прямо на картинке: без тени
++                // серые буквы на светлом месте не читаются. Когда картинки под
++                // списком нет, тень не нужна — фон и так ровный.
++                let onPicture = LunagramSettings.hasProfileBackground && LunagramSettings.settingsBackground
++                for layer in [strongSelf.textNode.layer, strongSelf.arrowNode.layer] {
++                    layer.shadowColor = UIColor.black.cgColor
++                    layer.shadowOffset = CGSize()
++                    layer.shadowRadius = 2.0
++                    layer.shadowOpacity = onPicture ? 0.55 : 0.0
++                }
++
+                 // Растворение — только у свёрнутого: у раскрытого прятать нечего.
+                 if item.isExpanded {
+                     strongSelf.textNode.layer.mask = nil
