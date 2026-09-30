@@ -1,0 +1,15 @@
+diff --git a/submodules/ChatListUI/Sources/LunagramChatReaction.swift b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+index f2b860ad..85253b51 100644
+--- a/submodules/ChatListUI/Sources/LunagramChatReaction.swift
++++ b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+@@ -73,7 +73,9 @@ private func lunagramOpenReactionPanel(context: AccountContext, peerId: EnginePe
+             selectedItems.insert(MediaId(namespace: Namespaces.Media.CloudFile, id: currentFileId))
+         }
+ 
+-        let sourceView = presenter.view
++        // Вид окна приходит «возможно пустым» — панели нужен точный, и
++        // подписываем его прямо.
++        let sourceView: UIView = presenter.view
+         let controller = EmojiStatusSelectionController(
+             context: context,
+             mode: .lunagramReactionSelection(completion: { reaction in
