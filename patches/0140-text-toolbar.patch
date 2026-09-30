@@ -1,0 +1,442 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index f7de4c9c..6347a368 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -108,6 +108,7 @@ public final class LunagramSettings {
+         static let chatExport = "lunagram.chatExport.enabled"
+         static let copyFields = "lunagram.copy.fields"
+         static let typingEffect = "lunagram.typing.effect"
++        static let textToolbar = "lunagram.textToolbar.enabled"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -937,6 +938,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Панель работы с текстом над клавиатурой.
++    public static var textToolbar: Bool {
++        get { return flag(Key.textToolbar, default: false) }
++        set { setFlag(newValue, Key.textToolbar) }
++    }
++
+     /// Как появляются набираемые буквы.
+     public static var typingEffect: Int {
+         get { return clamped(Key.typingEffect, 0, LunagramTypingEffect.allCases.count - 1, 0) }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 88aed194..94d7a674 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -1648,6 +1648,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             self.isUpdating = false
+         }
+         
++        // Lunagram: панель работы с текстом. Здесь же и цвета — тема
++        // приходит вместе с перекладкой.
++        self.lunagramUpdateToolbar(theme: interfaceState.theme)
++
+         let isFirstTime = self.validLayout == nil
+         
+         let previousAdditionalSideInsets = self.validLayout?.4
+@@ -4010,6 +4014,88 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+     
+     /// Lunagram: сколько было символов — чтобы понять, сколько добавилось.
+     private var lunagramTypedLength = 0
++    private var lunagramToolbar: LunagramTextToolbarView?
++
++    /// Lunagram: панель работы с текстом над клавиатурой.
++    ///
++    /// Кладём её в то место, которое iOS отводит под свою полоску над
++    /// клавиатурой. Поэтому она появляется и уезжает вместе с клавиатурой
++    /// сама, а разметку переписки не двигает вовсе.
++    private func lunagramUpdateToolbar(theme: PresentationTheme) {
++        guard let textView = self.richTextInputNode?.inputView as? UITextView else {
++            return
++        }
++        guard LunagramSettings.textToolbar else {
++            if self.lunagramToolbar != nil {
++                self.lunagramToolbar = nil
++                textView.inputAccessoryView = nil
++                textView.reloadInputViews()
++            }
++            return
++        }
++        let toolbar: LunagramTextToolbarView
++        if let current = self.lunagramToolbar {
++            toolbar = current
++        } else {
++            toolbar = LunagramTextToolbarView()
++            toolbar.pressed = { [weak self] action in
++                self?.lunagramToolbarAction(action)
++            }
++            self.lunagramToolbar = toolbar
++            textView.inputAccessoryView = toolbar
++            // Перезапрашиваем виды ввода только при появлении и уходе
++            // панели: на каждой перекладке это дёргало бы клавиатуру.
++            textView.reloadInputViews()
++        }
++        toolbar.update(
++            background: theme.chat.inputPanel.panelBackgroundColor,
++            tint: theme.chat.inputPanel.panelControlAccentColor,
++            separator: theme.chat.inputPanel.panelSeparatorColor
++        )
++    }
++
++    private func lunagramToolbarAction(_ action: LunagramToolbarAction) {
++        guard let textView = self.richTextInputNode?.inputView as? UITextView else {
++            return
++        }
++        switch action {
++        case .bold:
++            self.formatAttributesBold(self)
++        case .italic:
++            self.formatAttributesItalic(self)
++        case .underline:
++            self.formatAttributesUnderline(self)
++        case .strikethrough:
++            self.formatAttributesStrikethrough(self)
++        case .monospace:
++            self.formatAttributesMonospace(self)
++        case .spoiler:
++            self.formatAttributesSpoiler(self)
++        case .quote:
++            self.formatAttributesQuote(self)
++        case .link:
++            self.formatAttributesLink(self)
++        case .cut:
++            textView.cut(nil)
++        case .copy:
++            textView.copy(nil)
++        case .paste:
++            textView.paste(nil)
++        case .selectAll:
++            textView.selectAll(nil)
++        case .clear:
++            self.interfaceInteraction?.updateTextInputStateAndMode { _, inputMode in
++                return (ChatTextInputState(inputText: NSAttributedString(string: "")), inputMode)
++            }
++        case .home, .end, .left, .right, .wordLeft, .wordRight:
++            lunagramToolbarMoveCaret(textView, action: action)
++        case .mention:
++            // Просто знак: дальше Telegram сам покажет свой список имён.
++            textView.insertText("@")
++        case .emoji:
++            self.interfaceInteraction?.openStickers()
++        }
++    }
+ 
+     /// Lunagram: появление набираемых букв.
+     ///
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTextToolbar.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTextToolbar.swift
+new file mode 100644
+index 00000000..e356297d
+--- /dev/null
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/LunagramTextToolbar.swift
+@@ -0,0 +1,240 @@
++import Foundation
++import UIKit
++import Display
++
++// Lunagram: панель работы с текстом над клавиатурой.
++//
++// Четыре группы: оформление текста, работа с написанным, стрелки по тексту,
++// упомянуть и эмодзи. Стоит она в том месте, которое iOS отводит под свою
++// полоску над клавиатурой, — значит появляется и уезжает вместе с клавиатурой
++// сама, и разметку переписки не двигает.
++//
++// Кнопок много, а экран узкий, поэтому панель прокручивается вбок. Группы
++// разделены тонкими чёрточками: так видно, где кончается одна и начинается
++// другая, без подписей.
++
++enum LunagramToolbarAction {
++    // Оформление текста.
++    case bold
++    case italic
++    case underline
++    case strikethrough
++    case monospace
++    case spoiler
++    case quote
++    case link
++    // Работа с написанным.
++    case cut
++    case copy
++    case paste
++    case selectAll
++    case clear
++    // Стрелки по тексту.
++    case home
++    case wordLeft
++    case left
++    case right
++    case wordRight
++    case end
++    // Упомянуть и эмодзи.
++    case mention
++    case emoji
++}
++
++private struct LunagramToolbarButton {
++    let action: LunagramToolbarAction
++    let symbol: String
++}
++
++/// Порядок групп — тот, что назвал хозяин: сперва оформление, потом работа с
++/// написанным, потом стрелки, потом упоминание и эмодзи.
++private let lunagramToolbarGroups: [[LunagramToolbarButton]] = [
++    [
++        LunagramToolbarButton(action: .bold, symbol: "bold"),
++        LunagramToolbarButton(action: .italic, symbol: "italic"),
++        LunagramToolbarButton(action: .underline, symbol: "underline"),
++        LunagramToolbarButton(action: .strikethrough, symbol: "strikethrough"),
++        LunagramToolbarButton(action: .monospace, symbol: "chevron.left.forwardslash.chevron.right"),
++        LunagramToolbarButton(action: .spoiler, symbol: "eye.slash"),
++        LunagramToolbarButton(action: .quote, symbol: "text.quote"),
++        LunagramToolbarButton(action: .link, symbol: "link")
++    ],
++    [
++        LunagramToolbarButton(action: .cut, symbol: "scissors"),
++        LunagramToolbarButton(action: .copy, symbol: "doc.on.doc"),
++        LunagramToolbarButton(action: .paste, symbol: "doc.on.clipboard"),
++        LunagramToolbarButton(action: .selectAll, symbol: "textformat.abc.dottedunderline"),
++        LunagramToolbarButton(action: .clear, symbol: "trash")
++    ],
++    [
++        LunagramToolbarButton(action: .home, symbol: "arrow.left.to.line"),
++        LunagramToolbarButton(action: .wordLeft, symbol: "chevron.left.2"),
++        LunagramToolbarButton(action: .left, symbol: "chevron.left"),
++        LunagramToolbarButton(action: .right, symbol: "chevron.right"),
++        LunagramToolbarButton(action: .wordRight, symbol: "chevron.right.2"),
++        LunagramToolbarButton(action: .end, symbol: "arrow.right.to.line")
++    ],
++    [
++        LunagramToolbarButton(action: .mention, symbol: "at"),
++        LunagramToolbarButton(action: .emoji, symbol: "face.smiling")
++    ]
++]
++
++final class LunagramTextToolbarView: UIView {
++    private let scrollView = UIScrollView()
++    private let separator = UIView()
++    private var buttons: [UIButton] = []
++    private var dividers: [UIView] = []
++    private var actions: [Int: LunagramToolbarAction] = [:]
++
++    var pressed: ((LunagramToolbarAction) -> Void)?
++
++    init() {
++        super.init(frame: CGRect(origin: CGPoint(), size: CGSize(width: 320.0, height: 44.0)))
++
++        self.autoresizingMask = [.flexibleWidth]
++        self.scrollView.showsHorizontalScrollIndicator = false
++        self.scrollView.alwaysBounceHorizontal = true
++        self.addSubview(self.scrollView)
++        self.addSubview(self.separator)
++
++        var tag = 0
++        for (index, group) in lunagramToolbarGroups.enumerated() {
++            if index > 0 {
++                let divider = UIView()
++                self.dividers.append(divider)
++                self.scrollView.addSubview(divider)
++            }
++            for item in group {
++                let button = UIButton(type: .system)
++                button.tag = tag
++                self.actions[tag] = item.action
++                tag += 1
++                let configuration = UIImage.SymbolConfiguration(pointSize: 17.0, weight: .regular)
++                button.setImage(UIImage(systemName: item.symbol, withConfiguration: configuration), for: .normal)
++                button.addTarget(self, action: #selector(self.buttonPressed(_:)), for: .touchUpInside)
++                self.buttons.append(button)
++                self.scrollView.addSubview(button)
++            }
++        }
++    }
++
++    required init?(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    /// Цвета берём у темы переписки: панель стоит вплотную к полосе ввода, и
++    /// своя раскраска выпадала бы из неё.
++    func update(background: UIColor, tint: UIColor, separator separatorColor: UIColor) {
++        self.backgroundColor = background
++        self.separator.backgroundColor = separatorColor
++        for button in self.buttons {
++            button.tintColor = tint
++        }
++        for divider in self.dividers {
++            divider.backgroundColor = separatorColor
++        }
++    }
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++
++        let height = self.bounds.height
++        self.separator.frame = CGRect(origin: CGPoint(), size: CGSize(width: self.bounds.width, height: UIScreenPixel))
++        self.scrollView.frame = self.bounds
++
++        let buttonWidth: CGFloat = 40.0
++        let groupSpacing: CGFloat = 10.0
++        var x: CGFloat = 8.0
++        var buttonIndex = 0
++        var dividerIndex = 0
++        for (index, group) in lunagramToolbarGroups.enumerated() {
++            if index > 0 {
++                if dividerIndex < self.dividers.count {
++                    x += groupSpacing
++                    self.dividers[dividerIndex].frame = CGRect(x: x, y: floor((height - 20.0) / 2.0), width: UIScreenPixel, height: 20.0)
++                    dividerIndex += 1
++                    x += groupSpacing
++                }
++            }
++            for _ in group {
++                if buttonIndex < self.buttons.count {
++                    self.buttons[buttonIndex].frame = CGRect(x: x, y: 0.0, width: buttonWidth, height: height)
++                    buttonIndex += 1
++                    x += buttonWidth
++                }
++            }
++        }
++        self.scrollView.contentSize = CGSize(width: x + 8.0, height: height)
++    }
++
++    @objc private func buttonPressed(_ sender: UIButton) {
++        guard let action = self.actions[sender.tag] else {
++            return
++        }
++        self.pressed?(action)
++    }
++}
++
++/// Стрелки по тексту. Считаем по знакам, а не по «ячейкам» поля ввода: слово
++/// ищем по ближайшему пробелу, как это делает любой редактор.
++func lunagramToolbarMoveCaret(_ textView: UITextView, action: LunagramToolbarAction) {
++    let text = textView.text as NSString
++    let length = text.length
++    let range = textView.selectedRange
++    // От выделения отталкиваемся от того края, куда идём: так стрелка после
++    // выделения ведёт себя привычно, а не прыгает в середину.
++    let start = range.location
++    let end = range.location + range.length
++
++    func wordBoundary(from position: Int, forward: Bool) -> Int {
++        var index = position
++        let separators = CharacterSet.whitespacesAndNewlines
++        func isSeparator(_ at: Int) -> Bool {
++            guard at >= 0, at < length else {
++                return true
++            }
++            guard let scalar = Unicode.Scalar(text.character(at: at)) else {
++                return false
++            }
++            return separators.contains(scalar)
++        }
++        if forward {
++            while index < length, isSeparator(index) {
++                index += 1
++            }
++            while index < length, !isSeparator(index) {
++                index += 1
++            }
++        } else {
++            while index > 0, isSeparator(index - 1) {
++                index -= 1
++            }
++            while index > 0, !isSeparator(index - 1) {
++                index -= 1
++            }
++        }
++        return index
++    }
++
++    var target: Int
++    switch action {
++    case .home:
++        target = 0
++    case .end:
++        target = length
++    case .left:
++        target = range.length > 0 ? start : max(0, start - 1)
++    case .right:
++        target = range.length > 0 ? end : min(length, end + 1)
++    case .wordLeft:
++        target = wordBoundary(from: start, forward: false)
++    case .wordRight:
++        target = wordBoundary(from: end, forward: true)
++    default:
++        return
++    }
++    target = max(0, min(length, target))
++    textView.selectedRange = NSRange(location: target, length: 0)
++    textView.scrollRangeToVisible(textView.selectedRange)
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 6f9ade7e..59774fd2 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -73,6 +73,7 @@ private enum LunagramToggle: Int32 {
+     case keepDownloads
+     case giftId
+     case chatExport
++    case textToolbar
+ 
+     var value: Bool {
+         switch self {
+@@ -182,6 +183,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.giftId
+         case .chatExport:
+             return LunagramSettings.chatExport
++        case .textToolbar:
++            return LunagramSettings.textToolbar
+         }
+     }
+ 
+@@ -293,6 +296,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.giftId = value
+         case .chatExport:
+             LunagramSettings.chatExport = value
++        case .textToolbar:
++            LunagramSettings.textToolbar = value
+         }
+     }
+ 
+@@ -404,6 +409,8 @@ private enum LunagramToggle: Int32 {
+             return "Номер подарка"
+         case .chatExport:
+             return "Выгрузка переписки"
++        case .textToolbar:
++            return "Панель работы с текстом"
+         }
+     }
+ 
+@@ -457,7 +464,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar:
+             return nil
+         }
+     }
+@@ -626,6 +633,8 @@ extension LunagramToggle {
+             return "gift"
+         case .chatExport:
+             return "square.and.arrow.up"
++        case .textToolbar:
++            return "textformat.size"
+         }
+     }
+ }
+@@ -3215,6 +3224,9 @@ private func lunagramPlaceEntries(
+         rows.row(.toggle(.typingAnimation, value(.typingAnimation), "Появление набираемых букв", "character.cursor.ibeam,textformat"))
+         rows.row(.value(LunagramChoice.typingEffect.rawValue, "Как появляются", LunagramTypingEffect(rawValue: media.typingEffect)?.title ?? "", "textformat"))
+         rows.info("Буквы, которые ты набираешь, появляются не разом: проявляются, прилетают, вырастают — на выбор. Видно только тебе, на отправку не влияет.")
++
++        rows.row(.toggle(.textToolbar, value(.textToolbar), "Панель работы с текстом", "textformat.size"))
++        rows.info("Над клавиатурой появится полоса с четырьмя наборами кнопок: оформление текста, работа с написанным, стрелки по тексту, упомянуть и эмодзи.\n\nСтоит она в том месте, которое iOS отводит под свою полоску над клавиатурой: появляется и уезжает вместе с клавиатурой и разметку переписки не двигает. Кнопок больше, чем влезает, — полоса прокручивается вбок.")
+     }
+ 
+     return rows.entries
