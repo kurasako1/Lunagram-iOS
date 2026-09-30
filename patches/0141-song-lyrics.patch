@@ -1,0 +1,536 @@
+diff --git a/submodules/Lunagram/Sources/LunagramLyrics.swift b/submodules/Lunagram/Sources/LunagramLyrics.swift
+new file mode 100644
+index 00000000..9a60ca48
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramLyrics.swift
+@@ -0,0 +1,90 @@
++import Foundation
++
++// Lunagram: разбор текстов песен.
++//
++// Тексты приходят в двух видах. Простой — просто строки. Размеченный — строки
++// с временем: «[01:23.45] и тут он поёт». Второй и даёт караоке: видно, какая
++// строка звучит сейчас.
++//
++// Здесь только разбор, без сети и без картинки: так его легко читать и трудно
++// сломать.
++
++public struct LunagramLyricLine: Equatable {
++    /// Секунда, на которой строка начинает звучать. Нет времени — строка из
++    /// простого текста, подсвечивать её не по чему.
++    public let time: Double?
++    public let text: String
++
++    public init(time: Double?, text: String) {
++        self.time = time
++        self.text = text
++    }
++}
++
++/// Разобрать одну метку времени вида «01:23.45» или «01:23».
++private func lunagramParseStamp(_ value: String) -> Double? {
++    let parts = value.components(separatedBy: ":")
++    guard parts.count == 2, let minutes = Double(parts[0]) else {
++        return nil
++    }
++    // Доли секунды отделяются точкой, но кое-где ставят и запятую.
++    let secondsText = parts[1].replacingOccurrences(of: ",", with: ".")
++    guard let seconds = Double(secondsText) else {
++        return nil
++    }
++    return minutes * 60.0 + seconds
++}
++
++/// Собрать строки песни: сперва размеченные, а если их нет — простые.
++public func lunagramParseLyrics(synced: String?, plain: String?) -> [LunagramLyricLine] {
++    if let synced = synced, !synced.isEmpty {
++        var result: [LunagramLyricLine] = []
++        for raw in synced.components(separatedBy: "\n") {
++            var rest = raw
++            var stamps: [Double] = []
++            // У одной строки меток может быть несколько: припев поют не раз, а
++            // пишут его в файле однажды.
++            while rest.hasPrefix("[") {
++                guard let close = rest.firstIndex(of: "]") else {
++                    break
++                }
++                let inside = String(rest[rest.index(after: rest.startIndex) ..< close])
++                rest = String(rest[rest.index(after: close)...])
++                if let stamp = lunagramParseStamp(inside) {
++                    stamps.append(stamp)
++                }
++            }
++            let text = rest.trimmingCharacters(in: .whitespaces)
++            for stamp in stamps {
++                result.append(LunagramLyricLine(time: stamp, text: text))
++            }
++        }
++        if !result.isEmpty {
++            result.sort(by: { ($0.time ?? 0.0) < ($1.time ?? 0.0) })
++            return result
++        }
++    }
++
++    guard let plain = plain, !plain.isEmpty else {
++        return []
++    }
++    return plain.components(separatedBy: "\n").map { line in
++        return LunagramLyricLine(time: nil, text: line.trimmingCharacters(in: .whitespaces))
++    }
++}
++
++/// Какая строка звучит сейчас. Отдаём последнюю, чьё время уже прошло.
++public func lunagramCurrentLyricLine(_ lines: [LunagramLyricLine], at position: Double) -> Int? {
++    var found: Int?
++    for (index, line) in lines.enumerated() {
++        guard let time = line.time else {
++            continue
++        }
++        if time <= position {
++            found = index
++        } else {
++            break
++        }
++    }
++    return found
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 6347a368..61d94ddf 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -109,6 +109,7 @@ public final class LunagramSettings {
+         static let copyFields = "lunagram.copy.fields"
+         static let typingEffect = "lunagram.typing.effect"
+         static let textToolbar = "lunagram.textToolbar.enabled"
++        static let lyrics = "lunagram.lyrics.enabled"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -938,6 +939,15 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Тексты песен из открытого справочника.
++    ///
++    /// По умолчанию выключено, и это важно: включённая настройка — это
++    /// запросы на чужой сервер. Пока не включишь, наружу не уходит ничего.
++    public static var lyrics: Bool {
++        get { return flag(Key.lyrics, default: false) }
++        set { setFlag(newValue, Key.lyrics) }
++    }
++
+     /// Панель работы с текстом над клавиатурой.
+     public static var textToolbar: Bool {
+         get { return flag(Key.textToolbar, default: false) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 59774fd2..0857a0a9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -74,6 +74,7 @@ private enum LunagramToggle: Int32 {
+     case giftId
+     case chatExport
+     case textToolbar
++    case lyrics
+ 
+     var value: Bool {
+         switch self {
+@@ -185,6 +186,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.chatExport
+         case .textToolbar:
+             return LunagramSettings.textToolbar
++        case .lyrics:
++            return LunagramSettings.lyrics
+         }
+     }
+ 
+@@ -298,6 +301,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.chatExport = value
+         case .textToolbar:
+             LunagramSettings.textToolbar = value
++        case .lyrics:
++            LunagramSettings.lyrics = value
+         }
+     }
+ 
+@@ -411,6 +416,8 @@ private enum LunagramToggle: Int32 {
+             return "Выгрузка переписки"
+         case .textToolbar:
+             return "Панель работы с текстом"
++        case .lyrics:
++            return "Тексты песен"
+         }
+     }
+ 
+@@ -464,7 +471,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics:
+             return nil
+         }
+     }
+@@ -635,6 +642,8 @@ extension LunagramToggle {
+             return "square.and.arrow.up"
+         case .textToolbar:
+             return "textformat.size"
++        case .lyrics:
++            return "music.note.list"
+         }
+     }
+ }
+@@ -3227,6 +3236,9 @@ private func lunagramPlaceEntries(
+ 
+         rows.row(.toggle(.textToolbar, value(.textToolbar), "Панель работы с текстом", "textformat.size"))
+         rows.info("Над клавиатурой появится полоса с четырьмя наборами кнопок: оформление текста, работа с написанным, стрелки по тексту, упомянуть и эмодзи.\n\nСтоит она в том месте, которое iOS отводит под свою полоску над клавиатурой: появляется и уезжает вместе с клавиатурой и разметку переписки не двигает. Кнопок больше, чем влезает, — полоса прокручивается вбок.")
++
++        rows.row(.toggle(.lyrics, value(.lyrics), "Тексты песен", "music.note.list"))
++        rows.info("Долгое нажатие на песню в переписке — «Текст песни». Если у текста есть разметка по времени, строка, которая звучит сейчас, светится, а окно само ведёт её к середине.\n\nЕдинственная наша настройка, которая ходит наружу, поэтому по умолчанию выключена. Наружу уходит только название песни, исполнитель и её длительность — ни кто ты, ни с кем переписываешься, ни сам файл. Справочник открытый, ключей и учётной записи у него нет.")
+     }
+ 
+     return rows.entries
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index 629b8299..1682a856 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1289,6 +1289,20 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             })))
+         }
+ 
++        // Lunagram: текст песни из открытого справочника.
++        if LunagramSettings.lyrics, let musicFile = message.media.first(where: { ($0 as? TelegramMediaFile)?.isMusic == true }) as? TelegramMediaFile {
++            actions.append(.action(ContextMenuActionItem(text: "Текст песни", icon: { theme in
++                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/FormatText"), color: theme.actionSheet.primaryTextColor)
++            }, action: { c, _ in
++                c?.dismiss(completion: {
++                    guard let presenter = (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? UIViewController else {
++                        return
++                    }
++                    lunagramShowLyrics(context: context, file: musicFile, from: presenter)
++                })
++            })))
++        }
++
+         // Lunagram: снимок сообщения — как на ПК, но снимаем с экрана.
+         if LunagramSettings.showMessageShot, let messageNode = messageNode {
+             actions.append(.action(ContextMenuActionItem(text: "Снимок сообщения", icon: { theme in
+diff --git a/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift b/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift
+new file mode 100644
+index 00000000..6c87a726
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift
+@@ -0,0 +1,314 @@
++import Foundation
++import UIKit
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import AccountContext
++import UniversalMediaPlayer
++import Lunagram
++
++// Lunagram: текст песни.
++//
++// Текст берём у открытой справочной LRCLib. Она отдаёт два вида: простой и
++// размеченный по времени; второй и даёт караоке — строка, которая звучит
++// сейчас, светится, а остальные приглушены.
++//
++// Что уходит наружу: название песни, исполнитель и её длительность. Больше
++// ничего — ни кто ты, ни с кем переписываешься, ни сам файл. Ключей у LRCLib
++// нет, учётной записи тоже. Настройка по умолчанию выключена: пока не
++// включишь, никаких запросов наружу не уходит вовсе.
++
++private struct LunagramLyricsResponse: Decodable {
++    let plainLyrics: String?
++    let syncedLyrics: String?
++    let instrumental: Bool?
++}
++
++enum LunagramLyricsResult {
++    case lines([LunagramLyricLine])
++    case instrumental
++    case notFound
++    case failed
++}
++
++/// Спросить текст у LRCLib. Сперва точный запрос по названию, исполнителю и
++/// длительности; не нашлось — поиск по названию и исполнителю.
++func lunagramFetchLyrics(title: String, performer: String, duration: Int) -> Signal<LunagramLyricsResult, NoError> {
++    return Signal { subscriber in
++        var components = URLComponents(string: "https://lrclib.net/api/get")
++        components?.queryItems = [
++            URLQueryItem(name: "track_name", value: title),
++            URLQueryItem(name: "artist_name", value: performer),
++            URLQueryItem(name: "duration", value: "\(duration)")
++        ]
++        guard let url = components?.url else {
++            subscriber.putNext(.failed)
++            subscriber.putCompletion()
++            return EmptyDisposable
++        }
++
++        var request = URLRequest(url: url)
++        request.timeoutInterval = 15.0
++        // Справочная просит представляться — это её правило, и мы его чтим.
++        request.setValue("Lunagram (https://github.com/kurasako1/Lunagram-iOS)", forHTTPHeaderField: "User-Agent")
++
++        let task = URLSession.shared.dataTask(with: request, completionHandler: { data, response, _ in
++            if let http = response as? HTTPURLResponse, http.statusCode == 404 {
++                subscriber.putNext(.notFound)
++                subscriber.putCompletion()
++                return
++            }
++            guard let data = data, let decoded = try? JSONDecoder().decode(LunagramLyricsResponse.self, from: data) else {
++                subscriber.putNext(.failed)
++                subscriber.putCompletion()
++                return
++            }
++            if decoded.instrumental == true {
++                subscriber.putNext(.instrumental)
++                subscriber.putCompletion()
++                return
++            }
++            let lines = lunagramParseLyrics(synced: decoded.syncedLyrics, plain: decoded.plainLyrics)
++            subscriber.putNext(lines.isEmpty ? .notFound : .lines(lines))
++            subscriber.putCompletion()
++        })
++        task.resume()
++
++        return ActionDisposable {
++            task.cancel()
++        }
++    }
++}
++
++/// Окно с текстом песни. Обычное окно iOS, а не наш экран: оно ничего не
++/// знает о переписке и ничем в ней не рискует.
++final class LunagramLyricsViewController: UIViewController {
++    private let theme: PresentationTheme
++    private let trackTitle: String
++    private let trackPerformer: String
++
++    private let scrollView = UIScrollView()
++    private let headerLabel = UILabel()
++    private let statusLabel = UILabel()
++    private let closeButton = UIButton(type: .system)
++    private let copyButton = UIButton(type: .system)
++    private var lineLabels: [UILabel] = []
++    private var lines: [LunagramLyricLine] = []
++    private var currentLine: Int?
++    private var timer: Timer?
++    private var positionProvider: (() -> Double?)?
++    /// Кому прибраться, когда окно закрылось: подписку на проигрыватель
++    /// держит тот, кто окно открыл, а живёт она ровно столько же.
++    var onDeinit: (() -> Void)?
++
++    init(theme: PresentationTheme, title: String, performer: String) {
++        self.theme = theme
++        self.trackTitle = title
++        self.trackPerformer = performer
++        super.init(nibName: nil, bundle: nil)
++    }
++
++    required init?(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    deinit {
++        self.timer?.invalidate()
++        self.onDeinit?()
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++
++        self.view.backgroundColor = self.theme.list.plainBackgroundColor
++        self.overrideUserInterfaceStyle = self.theme.overallDarkAppearance ? .dark : .light
++
++        self.headerLabel.numberOfLines = 2
++        self.headerLabel.textAlignment = .center
++        self.headerLabel.font = UIFont.systemFont(ofSize: 17.0, weight: .semibold)
++        self.headerLabel.textColor = self.theme.list.itemPrimaryTextColor
++        self.headerLabel.text = self.trackPerformer.isEmpty ? self.trackTitle : self.trackPerformer + " — " + self.trackTitle
++        self.view.addSubview(self.headerLabel)
++
++        self.closeButton.setTitle("Закрыть", for: .normal)
++        self.closeButton.tintColor = self.theme.list.itemAccentColor
++        self.closeButton.addTarget(self, action: #selector(self.closePressed), for: .touchUpInside)
++        self.view.addSubview(self.closeButton)
++
++        self.copyButton.setTitle("Скопировать", for: .normal)
++        self.copyButton.tintColor = self.theme.list.itemAccentColor
++        self.copyButton.isHidden = true
++        self.copyButton.addTarget(self, action: #selector(self.copyPressed), for: .touchUpInside)
++        self.view.addSubview(self.copyButton)
++
++        self.statusLabel.numberOfLines = 0
++        self.statusLabel.textAlignment = .center
++        self.statusLabel.font = UIFont.systemFont(ofSize: 15.0)
++        self.statusLabel.textColor = self.theme.list.itemSecondaryTextColor
++        self.statusLabel.text = "Спрашиваю…"
++        self.view.addSubview(self.statusLabel)
++
++        self.scrollView.alwaysBounceVertical = true
++        self.view.addSubview(self.scrollView)
++    }
++
++    override func viewDidLayoutSubviews() {
++        super.viewDidLayoutSubviews()
++
++        let bounds = self.view.bounds
++        let inset: CGFloat = 16.0
++        let top = self.view.safeAreaInsets.top
++        let bottom = self.view.safeAreaInsets.bottom
++
++        self.closeButton.frame = CGRect(x: inset, y: top + 8.0, width: 100.0, height: 36.0)
++        self.copyButton.frame = CGRect(x: bounds.width - inset - 130.0, y: top + 8.0, width: 130.0, height: 36.0)
++        self.headerLabel.frame = CGRect(x: inset, y: top + 52.0, width: bounds.width - inset * 2.0, height: 48.0)
++
++        let contentTop = top + 108.0
++        self.scrollView.frame = CGRect(x: 0.0, y: contentTop, width: bounds.width, height: max(0.0, bounds.height - contentTop - bottom))
++        self.statusLabel.frame = CGRect(x: inset, y: contentTop + 40.0, width: bounds.width - inset * 2.0, height: 60.0)
++
++        self.layoutLines()
++    }
++
++    private func layoutLines() {
++        let width = self.scrollView.bounds.width
++        guard width > 0.0 else {
++            return
++        }
++        let inset: CGFloat = 20.0
++        var y: CGFloat = 12.0
++        for label in self.lineLabels {
++            let height = label.sizeThatFits(CGSize(width: width - inset * 2.0, height: .greatestFiniteMagnitude)).height
++            label.frame = CGRect(x: inset, y: y, width: width - inset * 2.0, height: max(22.0, height))
++            y += max(22.0, height) + 8.0
++        }
++        // Место снизу, чтобы последнюю строку можно было вывести на середину.
++        self.scrollView.contentSize = CGSize(width: width, height: y + self.scrollView.bounds.height / 2.0)
++    }
++
++    func show(result: LunagramLyricsResult, positionProvider: (() -> Double?)?) {
++        switch result {
++        case let .lines(lines):
++            self.lines = lines
++            self.statusLabel.isHidden = true
++            self.copyButton.isHidden = false
++            for line in lines {
++                let label = UILabel()
++                label.numberOfLines = 0
++                label.font = UIFont.systemFont(ofSize: 19.0, weight: .medium)
++                label.textColor = self.theme.list.itemPrimaryTextColor
++                label.text = line.text
++                self.scrollView.addSubview(label)
++                self.lineLabels.append(label)
++            }
++            let hasTiming = lines.contains(where: { $0.time != nil })
++            if hasTiming, let positionProvider = positionProvider {
++                self.positionProvider = positionProvider
++                self.dimAll()
++                self.timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true, block: { [weak self] _ in
++                    self?.tick()
++                })
++            }
++            self.view.setNeedsLayout()
++        case .instrumental:
++            self.statusLabel.text = "У этой песни нет слов — она без пения."
++        case .notFound:
++            self.statusLabel.text = "Текста этой песни в справочнике нет.\n\nИщут по названию и исполнителю: если в них лишнее — «(official video)» и подобное, — найти не выйдет."
++        case .failed:
++            self.statusLabel.text = "Не вышло спросить справочник. Проверь сеть и попробуй снова."
++        }
++    }
++
++    private func dimAll() {
++        for label in self.lineLabels {
++            label.textColor = self.theme.list.itemSecondaryTextColor
++        }
++    }
++
++    private func tick() {
++        guard let position = self.positionProvider?() else {
++            return
++        }
++        let index = lunagramCurrentLyricLine(self.lines, at: position)
++        guard index != self.currentLine else {
++            return
++        }
++        self.currentLine = index
++        self.dimAll()
++        guard let index = index, index < self.lineLabels.count else {
++            return
++        }
++        let label = self.lineLabels[index]
++        label.textColor = self.theme.list.itemPrimaryTextColor
++        // Ведём строку к середине окна: так видно и то, что было, и то, что
++        // будет.
++        let target = max(0.0, label.frame.midY - self.scrollView.bounds.height / 2.0)
++        self.scrollView.setContentOffset(CGPoint(x: 0.0, y: min(target, max(0.0, self.scrollView.contentSize.height - self.scrollView.bounds.height))), animated: true)
++    }
++
++    @objc private func closePressed() {
++        self.dismiss(animated: true, completion: nil)
++    }
++
++    @objc private func copyPressed() {
++        UIPasteboard.general.string = self.lines.map({ $0.text }).joined(separator: "\n")
++        self.copyButton.setTitle("Скопировано", for: .normal)
++    }
++}
++
++/// Открыть текст песни для этого файла.
++func lunagramShowLyrics(context: AccountContext, file: TelegramMediaFile, from presenter: UIViewController) {
++    var title = ""
++    var performer = ""
++    var duration = 0
++    for attribute in file.attributes {
++        if case let .Audio(_, audioDuration, audioTitle, audioPerformer, _) = attribute {
++            title = audioTitle ?? ""
++            performer = audioPerformer ?? ""
++            duration = Int(audioDuration)
++        }
++    }
++    if title.isEmpty {
++        title = file.fileName ?? ""
++    }
++
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let controller = LunagramLyricsViewController(theme: presentationData.theme, title: title, performer: performer)
++    presenter.present(controller, animated: true, completion: nil)
++
++    // Где сейчас проигрывание — спрашиваем у общего проигрывателя. Он же
++    // отвечает и за то, ту ли песню слушаем: если сменилась, караоке замрёт,
++    // и это честнее, чем подсвечивать чужие строки.
++    let playerState = Atomic<MediaPlayerStatus?>(value: nil)
++    let stateDisposable = (context.sharedContext.mediaManager.musicMediaPlayerState
++    |> deliverOnMainQueue).startStrict(next: { value in
++        guard let value = value, case let .state(state) = value.1 else {
++            let _ = playerState.swap(nil)
++            return
++        }
++        let _ = playerState.swap(state.status)
++    })
++
++    let positionProvider: () -> Double? = {
++        guard let status = playerState.with({ $0 }) else {
++            return nil
++        }
++        switch status.status {
++        case .playing:
++            return status.timestamp + (CACurrentMediaTime() - status.generationTimestamp) * status.baseRate
++        default:
++            return status.timestamp
++        }
++    }
++
++    let _ = (lunagramFetchLyrics(title: title, performer: performer, duration: duration)
++    |> deliverOnMainQueue).startStandalone(next: { [weak controller] result in
++        controller?.show(result: result, positionProvider: positionProvider)
++    })
++
++    // Подписку держим, пока открыто окно.
++    controller.onDeinit = {
++        stateDisposable.dispose()
++    }
++}
