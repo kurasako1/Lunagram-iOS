@@ -1,0 +1,24 @@
+diff --git a/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift b/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift
+index 6c87a726..dbefda78 100644
+--- a/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift
++++ b/submodules/TelegramUI/Sources/LunagramLyricsScreen.swift
+@@ -95,7 +95,9 @@ final class LunagramLyricsViewController: UIViewController {
+     private var lineLabels: [UILabel] = []
+     private var lines: [LunagramLyricLine] = []
+     private var currentLine: Int?
+-    private var timer: Timer?
++    // Именно Foundation.Timer: у библиотеки сигналов Telegram есть свой
++    // Timer, и просто «Timer» здесь двусмысленно.
++    private var timer: Foundation.Timer?
+     private var positionProvider: (() -> Double?)?
+     /// Кому прибраться, когда окно закрылось: подписку на проигрыватель
+     /// держит тот, кто окно открыл, а живёт она ровно столько же.
+@@ -206,7 +208,7 @@ final class LunagramLyricsViewController: UIViewController {
+             if hasTiming, let positionProvider = positionProvider {
+                 self.positionProvider = positionProvider
+                 self.dimAll()
+-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true, block: { [weak self] _ in
++                self.timer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true, block: { [weak self] _ in
+                     self?.tick()
+                 })
+             }
