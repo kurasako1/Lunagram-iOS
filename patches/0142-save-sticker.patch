@@ -1,0 +1,234 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 61d94ddf..9b1d5eb7 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -110,6 +110,7 @@ public final class LunagramSettings {
+         static let typingEffect = "lunagram.typing.effect"
+         static let textToolbar = "lunagram.textToolbar.enabled"
+         static let lyrics = "lunagram.lyrics.enabled"
++        static let saveSticker = "lunagram.saveSticker.enabled"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -939,6 +940,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Сохранение стикера в галерею.
++    public static var saveSticker: Bool {
++        get { return flag(Key.saveSticker, default: false) }
++        set { setFlag(newValue, Key.saveSticker) }
++    }
++
+     /// Тексты песен из открытого справочника.
+     ///
+     /// По умолчанию выключено, и это важно: включённая настройка — это
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 0857a0a9..eb04e626 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -75,6 +75,7 @@ private enum LunagramToggle: Int32 {
+     case chatExport
+     case textToolbar
+     case lyrics
++    case saveSticker
+ 
+     var value: Bool {
+         switch self {
+@@ -188,6 +189,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.textToolbar
+         case .lyrics:
+             return LunagramSettings.lyrics
++        case .saveSticker:
++            return LunagramSettings.saveSticker
+         }
+     }
+ 
+@@ -303,6 +306,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.textToolbar = value
+         case .lyrics:
+             LunagramSettings.lyrics = value
++        case .saveSticker:
++            LunagramSettings.saveSticker = value
+         }
+     }
+ 
+@@ -418,6 +423,8 @@ private enum LunagramToggle: Int32 {
+             return "Панель работы с текстом"
+         case .lyrics:
+             return "Тексты песен"
++        case .saveSticker:
++            return "Сохранение стикеров"
+         }
+     }
+ 
+@@ -471,7 +478,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker:
+             return nil
+         }
+     }
+@@ -644,6 +651,8 @@ extension LunagramToggle {
+             return "textformat.size"
+         case .lyrics:
+             return "music.note.list"
++        case .saveSticker:
++            return "square.and.arrow.down"
+         }
+     }
+ }
+@@ -3239,6 +3248,9 @@ private func lunagramPlaceEntries(
+ 
+         rows.row(.toggle(.lyrics, value(.lyrics), "Тексты песен", "music.note.list"))
+         rows.info("Долгое нажатие на песню в переписке — «Текст песни». Если у текста есть разметка по времени, строка, которая звучит сейчас, светится, а окно само ведёт её к середине.\n\nЕдинственная наша настройка, которая ходит наружу, поэтому по умолчанию выключена. Наружу уходит только название песни, исполнитель и её длительность — ни кто ты, ни с кем переписываешься, ни сам файл. Справочник открытый, ключей и учётной записи у него нет.")
++
++        rows.row(.toggle(.saveSticker, value(.saveSticker), "Сохранение стикеров", "square.and.arrow.down"))
++        rows.info("Долгое нажатие на стикер — «Сохранить стикер». Неподвижный ляжет в галерею картинкой.\n\nДвигающийся галерея не примет: она берёт только те виды картинок и видео, которые понимает сам айфон, а такой стикер рисует Telegram. Про это скажу прямо и предложу отдать его файлом — молча сохранить первый кадр было бы обманом.")
+     }
+ 
+     return rows.entries
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+index 1682a856..766d5e65 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
+@@ -1289,6 +1289,19 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
+             })))
+         }
+ 
++        // Lunagram: сохранить стикер картинкой в галерею.
++        if LunagramSettings.saveSticker, let stickerFile = message.media.first(where: { ($0 as? TelegramMediaFile)?.isSticker == true }) as? TelegramMediaFile {
++            actions.append(.action(ContextMenuActionItem(text: "Сохранить стикер", icon: { theme in
++                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Download"), color: theme.actionSheet.primaryTextColor)
++            }, action: { c, _ in
++                c?.dismiss(completion: {
++                    lunagramSaveSticker(context: context, file: stickerFile, present: { controller in
++                        controllerInteraction.presentController(controller, nil)
++                    })
++                })
++            })))
++        }
++
+         // Lunagram: текст песни из открытого справочника.
+         if LunagramSettings.lyrics, let musicFile = message.media.first(where: { ($0 as? TelegramMediaFile)?.isMusic == true }) as? TelegramMediaFile {
+             actions.append(.action(ContextMenuActionItem(text: "Текст песни", icon: { theme in
+diff --git a/submodules/TelegramUI/Sources/LunagramSaveSticker.swift b/submodules/TelegramUI/Sources/LunagramSaveSticker.swift
+new file mode 100644
+index 00000000..c0a78e45
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/LunagramSaveSticker.swift
+@@ -0,0 +1,112 @@
++import Foundation
++import UIKit
++import Photos
++import SwiftSignalKit
++import Postbox
++import TelegramCore
++import TelegramPresentationData
++import AccountContext
++import PresentationDataUtils
++import DeviceAccess
++import WebPBinding
++import Lunagram
++
++// Lunagram: сохранить стикер или эмодзи в галерею.
++//
++// Галерея берёт картинки и видео в тех видах, которые понимает сам айфон.
++// Стикеры Telegram лежат иначе: неподвижные — в webp, двигающиеся — в своём
++// виде, который рисует сам клиент, а видео-стикеры — в webm. Ни того, ни
++// другого галерея не понимает.
++//
++// Поэтому неподвижные мы разбираем в обычную картинку и кладём в галерею, а
++// про двигающиеся говорим прямо: галерея их не возьмёт, — и предлагаем отдать
++// файлом. Молча отдать первый кадр было бы хуже: человек думал бы, что
++// сохранил стикер, а сохранил картинку.
++
++private func lunagramStickerImage(path: String) -> UIImage? {
++    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
++        return nil
++    }
++    if let image = WebP.convert(fromWebP: data) {
++        return image
++    }
++    return UIImage(data: data)
++}
++
++private func lunagramPutInGallery(image: UIImage, context: AccountContext, present: @escaping (ViewController) -> Void) {
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let ok = TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++
++    DeviceAccess.authorizeAccess(to: .mediaLibrary(.save), presentationData: presentationData, present: { c, a in
++        context.sharedContext.presentGlobalController(c, a)
++    }, openSettings: context.sharedContext.applicationBindings.openSettings, { authorized in
++        guard authorized else {
++            return
++        }
++        PHPhotoLibrary.shared().performChanges({
++            PHAssetChangeRequest.creationRequestForAsset(from: image)
++        }, completionHandler: { success, _ in
++            Queue.mainQueue().async {
++                if success {
++                    present(textAlertController(context: context, title: nil, text: "Стикер сохранён в галерею.", actions: [ok]))
++                } else {
++                    present(textAlertController(context: context, title: nil, text: "Галерея не приняла стикер.", actions: [ok]))
++                }
++            }
++        })
++    })
++}
++
++/// Отдать файл как есть — окошком «Поделиться». Для двигающихся стикеров это
++/// единственное, что честно: в галерею они не лягут, а в «Файлы» и в переписку
++/// уйдут как были.
++private func lunagramShareFile(path: String, name: String, context: AccountContext, present: @escaping (ViewController) -> Void) {
++    let target = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
++    try? FileManager.default.removeItem(at: target)
++    do {
++        try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: target)
++    } catch {
++        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++        present(textAlertController(context: context, title: nil, text: "Не вышло подготовить файл.", actions: [
++            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++        ]))
++        return
++    }
++    guard let presenter = (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? UIViewController else {
++        return
++    }
++    let activity = UIActivityViewController(activityItems: [target], applicationActivities: nil)
++    if let popover = activity.popoverPresentationController {
++        popover.sourceView = presenter.view
++        popover.sourceRect = CGRect(origin: CGPoint(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY), size: CGSize())
++    }
++    presenter.present(activity, animated: true, completion: nil)
++}
++
++func lunagramSaveSticker(context: AccountContext, file: TelegramMediaFile, present: @escaping (ViewController) -> Void) {
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let ok = TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
++
++    guard let path = context.account.postbox.mediaBox.completedResourcePath(file.resource) else {
++        present(textAlertController(context: context, title: nil, text: "Стикер ещё не скачан. Открой его в переписке и попробуй снова.", actions: [ok]))
++        return
++    }
++
++    let moving = file.isAnimatedSticker || file.isVideoSticker || file.isVideoEmoji
++    if moving {
++        let name = file.isVideoSticker || file.isVideoEmoji ? "sticker.webm" : "sticker.tgs"
++        present(textAlertController(context: context, title: "Двигающийся стикер", text: "Галерея айфона такие не принимает: она берёт только те виды картинок и видео, которые понимает сам айфон, а этот стикер рисует Telegram.\n\nМогу отдать его файлом — в «Файлы» или в переписку он уйдёт как есть.", actions: [
++            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
++            TextAlertAction(type: .defaultAction, title: "Отдать файлом", action: {
++                lunagramShareFile(path: path, name: name, context: context, present: present)
++            })
++        ], actionLayout: .vertical))
++        return
++    }
++
++    guard let image = lunagramStickerImage(path: path) else {
++        present(textAlertController(context: context, title: nil, text: "Не вышло разобрать стикер в картинку.", actions: [ok]))
++        return
++    }
++    lunagramPutInGallery(image: image, context: context, present: present)
++}
