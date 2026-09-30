@@ -1,0 +1,93 @@
+diff --git a/submodules/ItemListUI/Sources/ItemListControllerNode.swift b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+index 0d5d8850..5e1c2e08 100644
+--- a/submodules/ItemListUI/Sources/ItemListControllerNode.swift
++++ b/submodules/ItemListUI/Sources/ItemListControllerNode.swift
+@@ -305,8 +305,43 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     /// равно однажды забыл. Поэтому правим то, что сейчас на экране: узнаём
+     /// нарисованные углы по самой картинке, прячем их, а подложку делаем
+     /// полупрозрачной и скругляем маской слоя.
++    /// Тёмный ореол вокруг букв и значков — как у субтитров в кино.
++    ///
++    /// Заголовки и подписи лежат не на карточке, а прямо на картинке, и
++    /// сливаются с ней. Подбирать цвет под фон нельзя: фотография на длине
++    /// одной строки уходит из светлого в тёмное, и один цвет на всю строку
++    /// где-нибудь да потеряется, а при прокрутке ещё и мигал бы. Ореол
++    /// читается на чём угодно и ничего не считает.
++    ///
++    /// Делаем тенью без смещения: узкой и непрозрачной она ложится вплотную
++    /// к буквам и выглядит обводкой, а не пятном под текстом.
++    private func lunagramHalo(_ node: ASDisplayNode, enabled: Bool) {
++        if node is TextNode || node is ASImageNode {
++            let layer = node.layer
++            layer.shadowColor = UIColor.black.cgColor
++            layer.shadowOffset = CGSize()
++            layer.shadowRadius = 1.5
++            layer.shadowOpacity = enabled ? 1.0 : 0.0
++        }
++        for child in node.subnodes ?? [] {
++            self.lunagramHalo(child, enabled: enabled)
++        }
++    }
++
+     private func lunagramRestyleRows() {
+-        guard self.lunagramShowsBackground, let theme = self.theme else {
++        guard let theme = self.theme else {
++            return
++        }
++        guard self.lunagramShowsBackground else {
++            // Картинки под списком нет. Снимаем ореолы, если остались от
++            // прошлого раза, и больше ничего не трогаем: без картинки всё
++            // рисует сам Telegram, и лезть туда незачем.
++            if self.lunagramHalosApplied {
++                self.lunagramHalosApplied = false
++                self.listNode.forEachItemNode { itemNode in
++                    self.lunagramHalo(itemNode, enabled: false)
++                }
++            }
+             return
+         }
+         let opaque = theme.list.itemBlocksBackgroundColor
+@@ -345,6 +380,10 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                 }
+             }
+             guard let background = background else {
++                // Карточки нет — значит это заголовок раздела или подпись
++                // под строкой. Они лежат прямо на картинке, им и нужен ореол.
++                self.lunagramHalosApplied = true
++                self.lunagramHalo(itemNode, enabled: true)
+                 return
+             }
+             background.backgroundColor = translucent
+@@ -357,6 +396,10 @@ open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+         }
+     }
+ 
++    /// Ставили ли мы ореолы. Нужно, чтобы снять их, когда картинку
++    /// выключили, — и не ходить по строкам зря, когда её и не было.
++    private var lunagramHalosApplied = false
++
+     private let leftOverlayNode: ASDisplayNode
+     private let rightOverlayNode: ASDisplayNode
+     private var emptyStateItem: ItemListControllerEmptyStateItem?
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+index 0e82aa4a..b17a5b54 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramAboutItem.swift
+@@ -174,12 +174,15 @@ final class LunagramAboutItemNode: ListViewItemNode {
+                 // Описание лежит вне карточки, прямо на картинке: без тени
+                 // серые буквы на светлом месте не читаются. Когда картинки под
+                 // списком нет, тень не нужна — фон и так ровный.
++                // Ореол вокруг букв ставит общая подрисовка строк, одна на
++                // все виды строк сразу. Здесь только стрелка: она рисуется
++                // поверх и до общей подрисовки не достаёт.
+                 let onPicture = LunagramSettings.hasProfileBackground && LunagramSettings.settingsBackground
+                 for layer in [strongSelf.textNode.layer, strongSelf.arrowNode.layer] {
+                     layer.shadowColor = UIColor.black.cgColor
+                     layer.shadowOffset = CGSize()
+-                    layer.shadowRadius = 2.0
+-                    layer.shadowOpacity = onPicture ? 0.55 : 0.0
++                    layer.shadowRadius = 1.5
++                    layer.shadowOpacity = onPicture ? 1.0 : 0.0
+                 }
+ 
+                 // Растворение — только у свёрнутого: у раскрытого прятать нечего.
