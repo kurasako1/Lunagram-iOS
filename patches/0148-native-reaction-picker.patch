@@ -1,0 +1,363 @@
+diff --git a/submodules/AccountContext/Sources/AccountContext.swift b/submodules/AccountContext/Sources/AccountContext.swift
+index e1213e5b..896f366f 100644
+--- a/submodules/AccountContext/Sources/AccountContext.swift
++++ b/submodules/AccountContext/Sources/AccountContext.swift
+@@ -1359,6 +1359,10 @@ public enum EmojiStatusSelectionControllerMode {
+     case backgroundSelection(completion: (TelegramMediaFile?) -> Void)
+     case customStatusSelection(completion: (TelegramMediaFile?, Int32?) -> Void)
+     case quickReactionSelection(completion: () -> Void)
++    // Lunagram: тот же выбиратель, что и у общей быстрой реакции, но
++    // выбранное он отдаёт обратно, а не пишет в общие настройки: нам нужна
++    // реакция для одной переписки, а не на всё приложение.
++    case lunagramReactionSelection(completion: (MessageReaction.Reaction?) -> Void)
+ }
+ 
+ public protocol SharedAccountContext: AnyObject {
+diff --git a/submodules/ChatListUI/Sources/LunagramChatReaction.swift b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+index b3791483..f2b860ad 100644
+--- a/submodules/ChatListUI/Sources/LunagramChatReaction.swift
++++ b/submodules/ChatListUI/Sources/LunagramChatReaction.swift
+@@ -2,57 +2,142 @@ import Foundation
+ import UIKit
+ import Display
+ import SwiftSignalKit
++import Postbox
+ import TelegramCore
+ import TelegramPresentationData
+ import AccountContext
++import EmojiStatusSelectionComponent
++import EntityKeyboard
+ import Lunagram
+ 
+-/// Окно выбора быстрой реакции для переписки — вызывается из меню чата в
+-/// списке (зажать переписку). Раньше жило в меню сообщения; перенесено сюда,
+-/// потому что быстрая реакция относится к переписке целиком, а не к одному
+-/// сообщению.
+-///
+-/// Это обычный ActionSheet, поэтому легко живёт в модуле списка, без
+-/// зависимости от переписки.
+-func lunagramPresentChatReactionSheet(context: AccountContext, peerId: EnginePeer.Id, present: @escaping (ViewController) -> Void) {
++// Lunagram: быстрая реакция для одной переписки.
++//
++// Двойное касание по сообщению ставит не общую реакцию, а ту, что задана для
++// этого чата: в одном огонёк, в другом палец вверх.
++//
++// Выбираем **родной панелью Telegram** — той же, что и общую быструю реакцию.
++// Раньше здесь был свой список из дюжины обычных значков, и премиальные со
++// своими эмодзи в него не помещались вовсе. Свой список на это и не годился:
++// премиальные — не значки, а картинки из наборов, и рисовать их надо уметь.
++// Родная панель умеет и заодно выглядит ровно так, как человек привык.
++
++/// Что выбрано сейчас — картинкой, чтобы панель открылась на ней.
++private func lunagramSelectedFileId(stored: String?, availableReactions: AvailableReactions?) -> Int64? {
++    guard let stored = stored else {
++        return nil
++    }
++    if let customId = LunagramSettings.personalReactionCustomId(stored) {
++        return customId
++    }
++    guard let availableReactions = availableReactions else {
++        return nil
++    }
++    for reaction in availableReactions.reactions {
++        if case let .builtin(value) = reaction.value, value == stored {
++            return reaction.selectAnimation.fileId.id
++        }
++    }
++    return nil
++}
++
++/// Запомнить выбранное. Обычная реакция ложится своим значком, своё эмодзи —
++/// строкой «custom:номер».
++private func lunagramStore(peerId: EnginePeer.Id, reaction: MessageReaction.Reaction?) {
++    guard let reaction = reaction else {
++        return
++    }
++    switch reaction {
++    case let .builtin(value):
++        LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: value)
++    case let .custom(fileId):
++        LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: LunagramSettings.personalReactionValue(customId: fileId))
++    case .stars:
++        // Звёзды — платная реакция. Ставить её двойным касанием значило бы
++        // тратить деньги на случайное движение пальца.
++        break
++    }
++}
++
++private func lunagramOpenReactionPanel(context: AccountContext, peerId: EnginePeer.Id, presenter: ViewController) {
+     let _ = (context.engine.stickers.availableReactions()
+     |> take(1)
+-    |> deliverOnMainQueue).startStandalone(next: { availableReactions in
+-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+-        let current = LunagramSettings.personalReaction(peerId: peerId.toInt64())
+-        var choices: [(emoji: String, title: String)] = []
+-        for reaction in availableReactions?.reactions ?? [] {
+-            guard reaction.isEnabled, !reaction.isPremium, case let .builtin(emoji) = reaction.value else {
+-                continue
+-            }
+-            choices.append((emoji, reaction.title))
+-            if choices.count == 12 {
+-                break
+-            }
++    |> deliverOnMainQueue).startStandalone(next: { [weak presenter] availableReactions in
++        guard let presenter = presenter else {
++            return
+         }
++        let stored = LunagramSettings.personalReaction(peerId: peerId.toInt64())
++        let currentFileId = lunagramSelectedFileId(stored: stored, availableReactions: availableReactions)
+ 
+-        let actionSheet = ActionSheetController(presentationData: presentationData)
+-        var items: [ActionSheetItem] = []
+-        items.append(ActionSheetTextItem(title: "Двойное касание по сообщению в этой переписке будет ставить выбранную реакцию. В остальных останется общая."))
+-        items.append(ActionSheetButtonItem(title: current == nil ? "Как обычно ✓" : "Как обычно", color: .accent, action: { [weak actionSheet] in
+-            actionSheet?.dismissAnimated()
+-            LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: nil)
+-        }))
+-        for choice in choices {
+-            let title = "\(choice.emoji)  \(choice.title)" + (choice.emoji == current ? "  ✓" : "")
+-            items.append(ActionSheetButtonItem(title: title, color: .accent, action: { [weak actionSheet] in
+-                actionSheet?.dismissAnimated()
+-                LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: choice.emoji)
+-            }))
++        var selectedItems = Set<MediaId>()
++        if let currentFileId = currentFileId {
++            selectedItems.insert(MediaId(namespace: Namespaces.Media.CloudFile, id: currentFileId))
+         }
+-        actionSheet.setItemGroups([
+-            ActionSheetItemGroup(items: items),
+-            ActionSheetItemGroup(items: [
+-                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
+-                    actionSheet?.dismissAnimated()
+-                })
+-            ])
+-        ])
+-        present(actionSheet)
++
++        let sourceView = presenter.view
++        let controller = EmojiStatusSelectionController(
++            context: context,
++            mode: .lunagramReactionSelection(completion: { reaction in
++                lunagramStore(peerId: peerId, reaction: reaction)
++            }),
++            sourceView: sourceView,
++            emojiContent: EmojiPagerContentComponent.emojiInputData(
++                context: context,
++                animationCache: context.animationCache,
++                animationRenderer: context.animationRenderer,
++                isStandalone: false,
++                subject: .quickReaction,
++                hasTrending: false,
++                topReactionItems: [],
++                areUnicodeEmojiEnabled: false,
++                areCustomEmojiEnabled: true,
++                chatPeerId: context.account.peerId,
++                selectedItems: selectedItems
++            ),
++            currentSelection: currentFileId,
++            destinationItemView: { [weak sourceView] in
++                return sourceView
++            }
++        )
++        presenter.present(controller, in: .window(.root))
+     })
+ }
++
++/// Окно выбора быстрой реакции для переписки — вызывается из меню чата в
++/// списке (зажать переписку).
++///
++/// Реакция уже задана — сперва спрашиваем, менять её или вернуть общую:
++/// вернуть общую иначе нечем, в родной панели такой кнопки нет. Не задана —
++/// открываем панель сразу, без лишнего шага.
++func lunagramPresentChatReactionSheet(context: AccountContext, peerId: EnginePeer.Id, present: @escaping (ViewController) -> Void) {
++    guard let presenter = (context.sharedContext.mainWindow?.viewController as? NavigationController)?.topViewController as? ViewController else {
++        return
++    }
++    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++    let current = LunagramSettings.personalReaction(peerId: peerId.toInt64())
++
++    guard current != nil else {
++        lunagramOpenReactionPanel(context: context, peerId: peerId, presenter: presenter)
++        return
++    }
++
++    let actionSheet = ActionSheetController(presentationData: presentationData)
++    actionSheet.setItemGroups([
++        ActionSheetItemGroup(items: [
++            ActionSheetTextItem(title: "Двойное касание по сообщению в этой переписке ставит свою реакцию. В остальных переписках останется общая."),
++            ActionSheetButtonItem(title: "Выбрать другую", color: .accent, action: { [weak actionSheet] in
++                actionSheet?.dismissAnimated()
++                lunagramOpenReactionPanel(context: context, peerId: peerId, presenter: presenter)
++            }),
++            ActionSheetButtonItem(title: "Вернуть общую", color: .destructive, action: { [weak actionSheet] in
++                actionSheet?.dismissAnimated()
++                LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: nil)
++            })
++        ]),
++        ActionSheetItemGroup(items: [
++            ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
++                actionSheet?.dismissAnimated()
++            })
++        ])
++    ])
++    present(actionSheet)
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index b9fe02ac..1e0e0cc8 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -2006,6 +2006,19 @@ public final class LunagramSettings {
+         return all?[String(peerId)]
+     }
+ 
++    /// Своё эмодзи в той же строке: «custom:номер». Обычная реакция
++    /// хранится сама собой — значком, — и разбирать её не надо.
++    public static func personalReactionCustomId(_ value: String) -> Int64? {
++        guard value.hasPrefix("custom:") else {
++            return nil
++        }
++        return Int64(value.dropFirst("custom:".count))
++    }
++
++    public static func personalReactionValue(customId: Int64) -> String {
++        return "custom:\(customId)"
++    }
++
+     /// Пустая реакция стирает запись — так возвращают общую.
+     public static func setPersonalReaction(peerId: Int64, emoji: String?) {
+         var all = (defaults.dictionary(forKey: Key.personalReactions) as? [String: String]) ?? [:]
+diff --git a/submodules/TelegramUI/Components/EmojiStatusSelectionComponent/Sources/EmojiStatusSelectionComponent.swift b/submodules/TelegramUI/Components/EmojiStatusSelectionComponent/Sources/EmojiStatusSelectionComponent.swift
+index 72e5c128..a5e4cc16 100644
+--- a/submodules/TelegramUI/Components/EmojiStatusSelectionComponent/Sources/EmojiStatusSelectionComponent.swift
++++ b/submodules/TelegramUI/Components/EmojiStatusSelectionComponent/Sources/EmojiStatusSelectionComponent.swift
+@@ -1367,7 +1367,7 @@ public final class EmojiStatusSelectionController: ViewController {
+                 
+                 var animateOutToView = false
+                 switch controller.mode {
+-                case .backgroundSelection, .customStatusSelection, .quickReactionSelection:
++                case .backgroundSelection, .customStatusSelection, .quickReactionSelection, .lunagramReactionSelection:
+                     if let itemFile = item?.itemFile, itemFile.fileId.id != 0 {
+                         animateOutToView = true
+                     }
+@@ -1424,6 +1424,25 @@ public final class EmojiStatusSelectionController: ViewController {
+                     }
+                     
+                     completion()
++                case let .lunagramReactionSelection(completion):
++                    // Разбираем так же, как у общей быстрой реакции: сперва
++                    // ищем обычную по картинке, не нашли — значит это своё
++                    // эмодзи, и берём его по номеру.
++                    var selectedReaction: MessageReaction.Reaction?
++                    if let item = item, let itemFile = item.itemFile {
++                        if let availableReactions = self.availableReactions {
++                            for reaction in availableReactions.reactions {
++                                if reaction.selectAnimation.fileId == itemFile.fileId {
++                                    selectedReaction = reaction.value
++                                    break
++                                }
++                            }
++                        }
++                        if selectedReaction == nil {
++                            selectedReaction = .custom(itemFile.fileId.id)
++                        }
++                    }
++                    completion(selectedReaction)
+                 }
+                 
+                 if animateOutToView, item != nil, let destinationView = controller.destinationItemView() {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+index 627dc501..1eed4e4f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSliderItem.swift
+@@ -136,7 +136,11 @@ final class LunagramSliderItemNode: ListViewItemNode {
+         if let item = self.item, let params = self.layoutParams {
+             sliderView.maximumValue = self.sliderRange(item)
+             sliderView.value = self.sliderPosition(item)
+-            sliderView.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++            // Прозрачный, а не в цвет карточки. Ползунок — отдельная деталь
++            // поверх карточки, и свой фон ему не нужен: карточка под ним и так
++            // есть. А когда она становится полупрозрачной над картинкой,
++            // сплошной фон ползунка остаётся чёрным прямоугольником внутри.
++            sliderView.backgroundColor = .clear
+             sliderView.backColor = item.presentationData.theme.list.itemSwitchColors.frameColor
+             sliderView.startColor = item.presentationData.theme.list.itemSwitchColors.frameColor
+             sliderView.trackColor = item.presentationData.theme.list.itemAccentColor
+@@ -240,7 +244,7 @@ final class LunagramSliderItemNode: ListViewItemNode {
+ 
+                 if let sliderView = strongSelf.sliderView {
+                     if themeUpdated {
+-                        sliderView.backgroundColor = item.presentationData.theme.list.itemBlocksBackgroundColor
++                        sliderView.backgroundColor = .clear
+                         sliderView.backColor = item.presentationData.theme.list.itemSwitchColors.frameColor
+                         sliderView.startColor = item.presentationData.theme.list.itemSwitchColors.frameColor
+                         sliderView.trackColor = item.presentationData.theme.list.itemAccentColor
+diff --git a/submodules/TelegramUI/Sources/LunagramPersonalReaction.swift b/submodules/TelegramUI/Sources/LunagramPersonalReaction.swift
+index 20f59f4a..abdac962 100644
+--- a/submodules/TelegramUI/Sources/LunagramPersonalReaction.swift
++++ b/submodules/TelegramUI/Sources/LunagramPersonalReaction.swift
+@@ -30,8 +30,11 @@ func lunagramPersonalDefaultReaction(peerId: EnginePeer.Id?, base: Signal<(Messa
+     }
+     return combineLatest(base, changes)
+     |> map { value, _ -> (MessageReaction.Reaction?, Bool) in
+-        if let emoji = LunagramSettings.personalReaction(peerId: peerId.toInt64()) {
+-            return (.builtin(emoji), value.1)
++        if let stored = LunagramSettings.personalReaction(peerId: peerId.toInt64()) {
++            if let customId = LunagramSettings.personalReactionCustomId(stored) {
++                return (.custom(customId), value.1)
++            }
++            return (.builtin(stored), value.1)
+         }
+         return value
+     }
+@@ -39,51 +42,3 @@ func lunagramPersonalDefaultReaction(peerId: EnginePeer.Id?, base: Signal<(Messa
+         return lhs.0 == rhs.0 && lhs.1 == rhs.1
+     })
+ }
+-
+-/// Меню выбора своей реакции для переписки.
+-///
+-/// Берём обычные реакции из списка сервера — премиальные и свои эмодзи тут
+-/// не показываем: для них нужен полноценный выбиратель. Первые дюжина —
+-/// самые ходовые, сервер отдаёт их первыми.
+-func lunagramPresentPersonalReactionSheet(context: AccountContext, peerId: EnginePeer.Id, present: @escaping (ViewController) -> Void) {
+-    let _ = (context.engine.stickers.availableReactions()
+-    |> take(1)
+-    |> deliverOnMainQueue).startStandalone(next: { availableReactions in
+-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+-        let current = LunagramSettings.personalReaction(peerId: peerId.toInt64())
+-        var choices: [(emoji: String, title: String)] = []
+-        for reaction in availableReactions?.reactions ?? [] {
+-            guard reaction.isEnabled, !reaction.isPremium, case let .builtin(emoji) = reaction.value else {
+-                continue
+-            }
+-            choices.append((emoji, reaction.title))
+-            if choices.count == 12 {
+-                break
+-            }
+-        }
+-
+-        let actionSheet = ActionSheetController(presentationData: presentationData)
+-        var items: [ActionSheetItem] = []
+-        items.append(ActionSheetTextItem(title: "Двойное касание по сообщению в этой переписке будет ставить выбранную реакцию. В остальных останется общая."))
+-        items.append(ActionSheetButtonItem(title: current == nil ? "Как обычно ✓" : "Как обычно", color: .accent, action: { [weak actionSheet] in
+-            actionSheet?.dismissAnimated()
+-            LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: nil)
+-        }))
+-        for choice in choices {
+-            let title = "\(choice.emoji)  \(choice.title)" + (choice.emoji == current ? "  ✓" : "")
+-            items.append(ActionSheetButtonItem(title: title, color: .accent, action: { [weak actionSheet] in
+-                actionSheet?.dismissAnimated()
+-                LunagramSettings.setPersonalReaction(peerId: peerId.toInt64(), emoji: choice.emoji)
+-            }))
+-        }
+-        actionSheet.setItemGroups([
+-            ActionSheetItemGroup(items: items),
+-            ActionSheetItemGroup(items: [
+-                ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak actionSheet] in
+-                    actionSheet?.dismissAnimated()
+-                })
+-            ])
+-        ])
+-        present(actionSheet)
+-    })
+-}
