@@ -1,0 +1,12 @@
+diff --git a/submodules/TelegramUI/Sources/LunagramSaveSticker.swift b/submodules/TelegramUI/Sources/LunagramSaveSticker.swift
+index c0a78e45..2cbabe1b 100644
+--- a/submodules/TelegramUI/Sources/LunagramSaveSticker.swift
++++ b/submodules/TelegramUI/Sources/LunagramSaveSticker.swift
+@@ -1,6 +1,7 @@
+ import Foundation
+ import UIKit
+ import Photos
++import Display
+ import SwiftSignalKit
+ import Postbox
+ import TelegramCore
