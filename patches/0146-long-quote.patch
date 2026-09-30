@@ -1,0 +1,193 @@
+diff --git a/submodules/ChatListUI/Sources/ChatListControllerNode.swift b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+index 3f44a2ef..63978571 100644
+--- a/submodules/ChatListUI/Sources/ChatListControllerNode.swift
++++ b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+@@ -1524,6 +1524,10 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+         }
+         
+         var navigationHeaderPanels: AnyComponent<Empty>?
++        // Lunagram: сбрасываем ДО условия ниже. Внутри него сброс не годится:
++        // когда папок не остаётся вовсе, условие не выполняется, и полоска
++        // внизу висела бы от прошлого раза.
++        self.lunagramFolderTabs = nil
+         if self.controller?.tabContainerData != nil || !panels.isEmpty {
+             var tabs: AnyComponent<Empty>?
+             if let tabContainerData = self.controller?.tabContainerData, tabContainerData.0.count > 1 {
+@@ -1667,8 +1671,6 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             if LunagramSettings.foldersBelow, tabs != nil {
+                 self.lunagramFolderTabs = tabs
+                 headerTabs = nil
+-            } else {
+-                self.lunagramFolderTabs = nil
+             }
+             // Пустую шапку не собираем вовсе: иначе она заняла бы место
+             // высотой в полоску, которой там больше нет.
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 9a6776ee..b9fe02ac 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -112,6 +112,8 @@ public final class LunagramSettings {
+         static let lyrics = "lunagram.lyrics.enabled"
+         static let saveSticker = "lunagram.saveSticker.enabled"
+         static let foldersBelow = "lunagram.folders.below"
++        static let longQuote = "lunagram.longQuote.enabled"
++        static let longQuoteLimit = "lunagram.longQuote.limit"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -941,6 +943,18 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Сворачивать длинные свои сообщения в цитату.
++    public static var longQuote: Bool {
++        get { return flag(Key.longQuote, default: false) }
++        set { setFlag(newValue, Key.longQuote) }
++    }
++
++    /// С какой длины сворачивать, в знаках.
++    public static var longQuoteLimit: Int {
++        get { return clamped(Key.longQuoteLimit, 100, 2000, 500) }
++        set { setClamped(newValue, Key.longQuoteLimit, 100, 2000) }
++    }
++
+     /// Полоска папок внизу, а не в шапке.
+     public static var foldersBelow: Bool {
+         get { return flag(Key.foldersBelow, default: false) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index f76921b7..40f10a83 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -77,6 +77,7 @@ private enum LunagramToggle: Int32 {
+     case lyrics
+     case saveSticker
+     case foldersBelow
++    case longQuote
+ 
+     var value: Bool {
+         switch self {
+@@ -194,6 +195,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.saveSticker
+         case .foldersBelow:
+             return LunagramSettings.foldersBelow
++        case .longQuote:
++            return LunagramSettings.longQuote
+         }
+     }
+ 
+@@ -313,6 +316,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.saveSticker = value
+         case .foldersBelow:
+             LunagramSettings.foldersBelow = value
++        case .longQuote:
++            LunagramSettings.longQuote = value
+         }
+     }
+ 
+@@ -432,6 +437,8 @@ private enum LunagramToggle: Int32 {
+             return "Сохранение стикеров"
+         case .foldersBelow:
+             return "Папки внизу"
++        case .longQuote:
++            return "Длинное — цитатой"
+         }
+     }
+ 
+@@ -485,7 +492,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow, .longQuote:
+             return nil
+         }
+     }
+@@ -662,6 +669,8 @@ extension LunagramToggle {
+             return "square.and.arrow.down"
+         case .foldersBelow:
+             return "rectangle.bottomthird.inset.filled,folder"
++        case .longQuote:
++            return "text.quote"
+         }
+     }
+ }
+@@ -1475,6 +1484,7 @@ private struct LunagramMediaState: Equatable {
+     var vignetteStrength: Int = 45
+     var ownReactionsCount: Int = 0
+     var typingEffect: Int = 0
++    var longQuoteLimit: Int = 500
+ 
+     static func current() -> LunagramMediaState {
+         var state = LunagramMediaState.legacyCurrent()
+@@ -1506,6 +1516,7 @@ private struct LunagramMediaState: Equatable {
+         state.vignetteStrength = LunagramSettings.vignetteStrength
+         state.ownReactionsCount = LunagramSettings.ownReactionsList.count
+         state.typingEffect = LunagramSettings.typingEffect
++        state.longQuoteLimit = LunagramSettings.longQuoteLimit
+         state.mentionAvatarSize = LunagramMentionAvatars.size
+         state.composeAction = LunagramComposeButton.action.rawValue
+         state.composePeer = LunagramComposeButton.peerId ?? 0
+@@ -2115,6 +2126,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBackgroundBlur = value
+         case 96:
+             LunagramSettings.chatStickersDepth = value
++        case 97:
++            LunagramSettings.longQuoteLimit = value
+         case 120:
+             LunagramSettings.profileGlassStrength = value
+         case 121:
+@@ -3255,6 +3268,10 @@ private func lunagramPlaceEntries(
+         rows.row(.value(LunagramChoice.typingEffect.rawValue, "Как появляются", LunagramTypingEffect(rawValue: media.typingEffect)?.title ?? "", "textformat"))
+         rows.info("Буквы, которые ты набираешь, появляются не разом: проявляются, прилетают, вырастают — на выбор. Видно только тебе, на отправку не влияет.")
+ 
++        rows.row(.toggle(.longQuote, value(.longQuote), "Длинное — цитатой", "text.quote"))
++        rows.row(.slider(97, "С какой длины", media.longQuoteLimit, 100, 2000, 50))
++        rows.info("Твоё длинное сообщение уйдёт свёрнутой цитатой: у собеседника оно займёт несколько строк вместо пол-экрана, а нажатием развернётся целиком.\n\nЭто родная цитата Telegram, а не картинка: текст внутри остаётся текстом, находится поиском и копируется. Если ты разметил сообщение цитатой сам, вторую поверх не кладём.")
++
+         rows.row(.toggle(.textToolbar, value(.textToolbar), "Панель работы с текстом", "textformat.size"))
+         rows.info("Над клавиатурой появится полоса с четырьмя наборами кнопок: оформление текста, работа с написанным, стрелки по тексту, упомянуть и эмодзи.\n\nСтоит она в том месте, которое iOS отводит под свою полоску над клавиатурой: появляется и уезжает вместе с клавиатурой и разметку переписки не двигает. Кнопок больше, чем влезает, — полоса прокручивается вбок.")
+ 
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 4e4765ef..1dbaec19 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8993,6 +8993,39 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 }
+             }
+ 
++            // Lunagram: длинное сообщение уходит свёрнутой цитатой — чтобы
++            // простыня не занимала пол-экрана у собеседника. Разворачивается
++            // нажатием, текст при этом остаётся обычным текстом.
++            //
++            // Считаем знаки так же, как их считает Telegram, — по кодовым
++            // единицам: отметки к тексту меряются ими же, и посчитай мы
++            // иначе, у сообщений со смайлами цитата легла бы не по месту.
++            if LunagramSettings.longQuote, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message {
++                let length = (text as NSString).length
++                if length >= LunagramSettings.longQuoteLimit {
++                    var entities: [MessageTextEntity] = []
++                    var hasQuote = false
++                    for attribute in attributes {
++                        if let attribute = attribute as? TextEntitiesMessageAttribute {
++                            entities = attribute.entities
++                            hasQuote = attribute.entities.contains(where: { entity in
++                                if case .BlockQuote = entity.type {
++                                    return true
++                                }
++                                return false
++                            })
++                        }
++                    }
++                    // Своя цитата в тексте уже есть — вторую поверх не кладём.
++                    if !hasQuote {
++                        entities.append(MessageTextEntity(range: 0 ..< length, type: .BlockQuote(isCollapsed: true)))
++                        var updatedAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
++                        updatedAttributes.append(TextEntitiesMessageAttribute(entities: entities))
++                        message = .message(text: text, attributes: updatedAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
++                    }
++                }
++            }
++
+             // Lunagram: ответ на удалённое — вместо ссылки, которую сервер не
+             // примет, цитата в начале. Подробности — в файле про это.
+             if LunagramSettings.replyToDeleted, case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = message, let replySubject = replyToMessageId, let replied = self.lunagramDeletedReplyTarget(replySubject.messageId) {
