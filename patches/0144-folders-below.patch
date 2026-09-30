@@ -1,0 +1,201 @@
+diff --git a/submodules/ChatListUI/Sources/ChatListControllerNode.swift b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+index 103543f8..3f44a2ef 100644
+--- a/submodules/ChatListUI/Sources/ChatListControllerNode.swift
++++ b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+@@ -1149,6 +1149,15 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+     weak var controller: ChatListControllerImpl?
+     
+     private var toolbar: ComponentView<Empty>?
++    /// Lunagram: полоска папок, отданная вниз.
++    ///
++    /// Собирает её по-прежнему шапка — там она и знает про выбранную папку,
++    /// про счётчики и про перетаскивание. Мы её оттуда забираем и кладём
++    /// сами над панелью вкладок. Так вся начинка остаётся родной, а меняется
++    /// только место.
++    private var lunagramFolderTabs: AnyComponent<Empty>?
++    private var lunagramFolderTabsView: ComponentView<Empty>?
++    private var lunagramFolderTabsBackground: UIView?
+     var toolbarData: Toolbar?
+     var toolbarActionSelected: ((ToolbarActionOption) -> Void)?
+     
+@@ -1653,11 +1662,23 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                 ))
+             }
+                 
+-            navigationHeaderPanels = AnyComponent(HeaderPanelContainerComponent(
+-                theme: self.presentationData.theme,
+-                tabs: tabs,
+-                panels: panels
+-            ))
++            // Lunagram: папки внизу — забираем полоску из шапки себе.
++            var headerTabs = tabs
++            if LunagramSettings.foldersBelow, tabs != nil {
++                self.lunagramFolderTabs = tabs
++                headerTabs = nil
++            } else {
++                self.lunagramFolderTabs = nil
++            }
++            // Пустую шапку не собираем вовсе: иначе она заняла бы место
++            // высотой в полоску, которой там больше нет.
++            if headerTabs != nil || !panels.isEmpty {
++                navigationHeaderPanels = AnyComponent(HeaderPanelContainerComponent(
++                    theme: self.presentationData.theme,
++                    tabs: headerTabs,
++                    panels: panels
++                ))
++            }
+         }
+         
+         var effectiveStorySubscriptions: EngineStorySubscriptions?
+@@ -1954,6 +1975,59 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+             }
+         }
+         
++        // Lunagram: полоска папок внизу. Кладём её над панелью вкладок и на
++        // её высоту поджимаем список: иначе последняя переписка пряталась бы
++        // под полоской.
++        if let lunagramFolderTabs = self.lunagramFolderTabs {
++            let stripHeight: CGFloat = 44.0
++            let bottomInset = layout.insets(options: []).bottom
++            let stripFrame = CGRect(
++                origin: CGPoint(x: 0.0, y: layout.size.height - bottomInset - stripHeight),
++                size: CGSize(width: layout.size.width, height: stripHeight)
++            )
++
++            let background: UIView
++            if let current = self.lunagramFolderTabsBackground {
++                background = current
++            } else {
++                background = UIView()
++                self.lunagramFolderTabsBackground = background
++                self.view.addSubview(background)
++            }
++            background.backgroundColor = self.presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
++            transition.updateFrame(view: background, frame: CGRect(origin: stripFrame.origin, size: CGSize(width: stripFrame.width, height: stripHeight + bottomInset)))
++
++            let stripView: ComponentView<Empty>
++            if let current = self.lunagramFolderTabsView {
++                stripView = current
++            } else {
++                stripView = ComponentView()
++                self.lunagramFolderTabsView = stripView
++            }
++            let _ = stripView.update(
++                transition: ComponentTransition(transition),
++                component: lunagramFolderTabs,
++                environment: {},
++                containerSize: stripFrame.size
++            )
++            if let itemView = stripView.view {
++                if itemView.superview == nil {
++                    self.view.addSubview(itemView)
++                }
++                transition.updateFrame(view: itemView, frame: stripFrame)
++            }
++            insets.bottom += stripHeight
++        } else {
++            if let stripView = self.lunagramFolderTabsView {
++                self.lunagramFolderTabsView = nil
++                stripView.view?.removeFromSuperview()
++            }
++            if let background = self.lunagramFolderTabsBackground {
++                self.lunagramFolderTabsBackground = nil
++                background.removeFromSuperview()
++            }
++        }
++
+         var childrenLayout = layout
+         childrenLayout.intrinsicInsets = UIEdgeInsets(top: visualNavigationHeight, left: childrenLayout.intrinsicInsets.left, bottom: childrenLayout.intrinsicInsets.bottom, right: childrenLayout.intrinsicInsets.right)
+         self.controller?.presentationContext.containerLayoutUpdated(childrenLayout, transition: transition)
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 9b1d5eb7..9a6776ee 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -111,6 +111,7 @@ public final class LunagramSettings {
+         static let textToolbar = "lunagram.textToolbar.enabled"
+         static let lyrics = "lunagram.lyrics.enabled"
+         static let saveSticker = "lunagram.saveSticker.enabled"
++        static let foldersBelow = "lunagram.folders.below"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+         static let chatInfoSheet = "lunagram.chat.infoSheet"
+         static let noLinkPreview = "lunagram.chat.noLinkPreview"
+@@ -940,6 +941,12 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Полоска папок внизу, а не в шапке.
++    public static var foldersBelow: Bool {
++        get { return flag(Key.foldersBelow, default: false) }
++        set { setFlag(newValue, Key.foldersBelow) }
++    }
++
+     /// Сохранение стикера в галерею.
+     public static var saveSticker: Bool {
+         get { return flag(Key.saveSticker, default: false) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index eb04e626..f76921b7 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -76,6 +76,7 @@ private enum LunagramToggle: Int32 {
+     case textToolbar
+     case lyrics
+     case saveSticker
++    case foldersBelow
+ 
+     var value: Bool {
+         switch self {
+@@ -191,6 +192,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.lyrics
+         case .saveSticker:
+             return LunagramSettings.saveSticker
++        case .foldersBelow:
++            return LunagramSettings.foldersBelow
+         }
+     }
+ 
+@@ -308,6 +311,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.lyrics = value
+         case .saveSticker:
+             LunagramSettings.saveSticker = value
++        case .foldersBelow:
++            LunagramSettings.foldersBelow = value
+         }
+     }
+ 
+@@ -425,6 +430,8 @@ private enum LunagramToggle: Int32 {
+             return "Тексты песен"
+         case .saveSticker:
+             return "Сохранение стикеров"
++        case .foldersBelow:
++            return "Папки внизу"
+         }
+     }
+ 
+@@ -478,7 +485,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker:
++        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow:
+             return nil
+         }
+     }
+@@ -653,6 +660,8 @@ extension LunagramToggle {
+             return "music.note.list"
+         case .saveSticker:
+             return "square.and.arrow.down"
++        case .foldersBelow:
++            return "rectangle.bottomthird.inset.filled,folder"
+         }
+     }
+ }
+@@ -3122,6 +3131,9 @@ private func lunagramPlaceEntries(
+         return lunagramWallpaperEntries(values: values, media: media)
+ 
+     case .dialogList:
++        rows.header("Папки")
++        rows.row(.toggle(.foldersBelow, value(.foldersBelow), "Папки внизу", "rectangle.bottomthird.inset.filled,folder"))
++        rows.info("Полоска папок переедет из шапки вниз, над панелью вкладок. Сама полоска остаётся родной: те же названия, те же счётчики, то же перетаскивание — меняется только место.\n\nВнизу она стоит всегда и при прокрутке не сворачивается: в шапке она уезжала вместе с поиском и историями, а внизу уезжать некуда.")
+         return lunagramCardsEntries(values: values, media: media)
+ 
+     case .avatars:
