@@ -1,0 +1,117 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1e0e0cc8..1ebd359d 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -112,6 +112,7 @@ public final class LunagramSettings {
+         static let lyrics = "lunagram.lyrics.enabled"
+         static let saveSticker = "lunagram.saveSticker.enabled"
+         static let foldersBelow = "lunagram.folders.below"
++        static let composeLift = "lunagram.composeLift.enabled"
+         static let longQuote = "lunagram.longQuote.enabled"
+         static let longQuoteLimit = "lunagram.longQuote.limit"
+         static let headerCallButton = "lunagram.chat.headerCallButton"
+@@ -944,6 +945,12 @@ public final class LunagramSettings {
+     }
+ 
+     /// Сворачивать длинные свои сообщения в цитату.
++    /// Просвет под полосой ввода.
++    public static var composeLift: Bool {
++        get { return flag(Key.composeLift, default: false) }
++        set { setFlag(newValue, Key.composeLift) }
++    }
++
+     public static var longQuote: Bool {
+         get { return flag(Key.longQuote, default: false) }
+         set { setFlag(newValue, Key.longQuote) }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index 94d7a674..9669b66f 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -3900,6 +3900,20 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             }
+         }
+ 
++        // Lunagram: просвет под полосой ввода.
++        //
++        // Поднимаем одним движением — ростом самой полосы, и делаем это
++        // здесь, последней строкой разметки. Внутри всё уже расставлено
++        // отсчётом от верха полосы, поэтому она уезжает вверх вместе со
++        // всем содержимым, а снизу остаётся просвет. Трогать десяток
++        // условных кнопок не нужно вовсе.
++        //
++        // Тремя блоками полоса на телефоне разведена и без нас: у скрепки
++        // свой кружок, у поля своё окно, у микрофона своё место.
++        if LunagramSettings.composeLift {
++            contentHeight += 8.0
++        }
++
+         let containerFrame = CGRect(origin: CGPoint(), size: CGSize(width: width, height: contentHeight + 64.0))
+         transition.updateFrame(view: self.glassBackgroundContainer, frame: containerFrame)
+         self.glassBackgroundContainer.update(size: containerFrame.size, isDark: interfaceState.theme.overallDarkAppearance, transition: ComponentTransition(transition))
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 40f10a83..55a6d193 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -77,6 +77,7 @@ private enum LunagramToggle: Int32 {
+     case lyrics
+     case saveSticker
+     case foldersBelow
++    case composeLift
+     case longQuote
+ 
+     var value: Bool {
+@@ -143,6 +144,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.chatInfoSheet
+         case .noLinkPreview:
+             return LunagramSettings.noLinkPreview
++        case .composeLift:
++            return LunagramSettings.composeLift
+         case .glassCycle:
+             return LunagramSettings.glassTintCycle
+         case .vignette:
+@@ -264,6 +267,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.chatInfoSheet = value
+         case .noLinkPreview:
+             LunagramSettings.noLinkPreview = value
++        case .composeLift:
++            LunagramSettings.composeLift = value
+         case .glassCycle:
+             LunagramSettings.glassTintCycle = value
+         case .vignette:
+@@ -385,6 +390,8 @@ private enum LunagramToggle: Int32 {
+             return "Что известно о чате"
+         case .noLinkPreview:
+             return "Убрать предпросмотр ссылок"
++        case .composeLift:
++            return "Просвет под полосой ввода"
+         case .glassCycle:
+             return "Переливать цвет"
+         case .vignette:
+@@ -492,7 +499,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow, .longQuote:
++        case .composeLift, .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow, .longQuote:
+             return nil
+         }
+     }
+@@ -617,6 +624,8 @@ extension LunagramToggle {
+             return "info.circle"
+         case .noLinkPreview:
+             return "link.badge.plus,link"
++        case .composeLift:
++            return "rectangle.bottomthird.inset.filled"
+         case .glassCycle:
+             return "paintpalette"
+         case .vignette:
+@@ -3268,6 +3277,9 @@ private func lunagramPlaceEntries(
+         rows.row(.value(LunagramChoice.typingEffect.rawValue, "Как появляются", LunagramTypingEffect(rawValue: media.typingEffect)?.title ?? "", "textformat"))
+         rows.info("Буквы, которые ты набираешь, появляются не разом: проявляются, прилетают, вырастают — на выбор. Видно только тебе, на отправку не влияет.")
+ 
++        rows.row(.toggle(.composeLift, value(.composeLift), "Просвет под полосой ввода", "rectangle.bottomthird.inset.filled"))
++        rows.info("Полоса ввода отрывается от самого низа экрана: под ней остаётся просвет, и переписка видна насквозь.\n\nТремя отдельными блоками полоса на телефоне разведена и без нас — это родной вид нового Telegram: у скрепки свой кружок, у поля своё окно, у микрофона своё место правее. Поэтому здесь настройка делает только то, чего не хватало, а на ПК ей пришлось разводить и блоки: там полоса была одна.")
++
+         rows.row(.toggle(.longQuote, value(.longQuote), "Длинное — цитатой", "text.quote"))
+         rows.row(.slider(97, "С какой длины", media.longQuoteLimit, 100, 2000, 50))
+         rows.info("Твоё длинное сообщение уйдёт свёрнутой цитатой: у собеседника оно займёт несколько строк вместо пол-экрана, а нажатием развернётся целиком.\n\nЭто родная цитата Telegram, а не картинка: текст внутри остаётся текстом, находится поиском и копируется. Если ты разметил сообщение цитатой сам, вторую поверх не кладём.")
