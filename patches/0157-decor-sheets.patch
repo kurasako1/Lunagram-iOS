@@ -1,0 +1,315 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditorSheet.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditorSheet.swift
+new file mode 100644
+index 00000000..cb423868
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramEditorSheet.swift
+@@ -0,0 +1,286 @@
++import Foundation
++import UIKit
++import AsyncDisplayKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import AccountContext
++
++// Lunagram: окошко правки оформления снизу, а живой профиль — за ним.
++//
++// Так устроена правка в плагине Custom Profile, и хозяин попросил так же: не
++// отдельным экраном, который закрывает тебя целиком, а окошком на нижнюю
++// часть, чтобы шапка профиля осталась видна и менялась на ходу.
++//
++// «На ходу» нам ничего не стоило: шапка профиля УЖЕ слушает смену наших
++// настроек и перестраивается сама. Её просто не было видно из-за экрана
++// поверх. Поэтому здесь нет ни одной строчки про обновление профиля — он
++// обновляется сам, как только мы перестали его закрывать.
++//
++// Внутрь окошка кладём ГОТОВЫЙ экран правки, а не переписанный: узел экрана
++// вкладывается в свой узел, как это делает поиск по хэштегам. Иначе пришлось
++// бы перекладывать на другой механизм шесть экранов со ползунками, плитками,
++// образцами и выбором цвета — и половину рычагов по дороге потерять.
++
++private let sheetCornerRadius: CGFloat = 12.0
++private let handleSize = CGSize(width: 36.0, height: 4.0)
++private let handleAreaHeight: CGFloat = 20.0
++
++/// Какую долю высоты занимает окошко. Остальное — живой профиль сверху.
++///
++/// 0.62 подобрано так, чтобы над окошком оставалась шапка с аватаркой и
++/// именем: ради них всё и затевалось. Меньше — в окошко не влезают строки,
++/// больше — не видно того, что правишь.
++private let sheetHeightFraction: CGFloat = 0.62
++
++public final class LunagramEditorSheet: ViewController {
++    private final class SheetNode: ViewControllerTracingNode, UIScrollViewDelegate {
++        private weak var controller: LunagramEditorSheet?
++        private let context: AccountContext
++        /// Внутри окошка живёт НАВИГАЦИЯ, а не один экран.
++        ///
++        /// Наши экраны правки открывают внутри себя другие — выбор цвета,
++        /// выбор формы, подгонку кадра. Положи внутрь один экран, и такие
++        /// нажатия стали бы мёртвыми: открывать некуда. С навигацией они
++        /// открываются внутри окошка, и заголовок с «назад» появляются сами.
++        private let content: NavigationController
++
++        private let dimNode = ASDisplayNode()
++        private let containerNode = ASDisplayNode()
++        private let handleNode = ASDisplayNode()
++        private var contentAttached = false
++
++        private var validLayout: ContainerViewLayout?
++        /// Насколько окошко стянуто пальцем вниз. Ноль — стоит на месте.
++        private var dragOffset: CGFloat = 0.0
++
++        init(controller: LunagramEditorSheet, context: AccountContext, content: NavigationController) {
++            self.controller = controller
++            self.context = context
++            self.content = content
++
++            super.init()
++
++            // Затемнения нет нарочно: за окошком твой профиль, и его надо
++            // видеть. Узел всё равно нужен — он ловит нажатие мимо окошка.
++            self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.12)
++            self.addSubnode(self.dimNode)
++
++            let theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++            self.containerNode.backgroundColor = theme.list.blocksBackgroundColor
++            self.containerNode.cornerRadius = sheetCornerRadius
++            self.containerNode.clipsToBounds = true
++            if #available(iOS 11.0, *) {
++                self.containerNode.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
++            }
++            self.addSubnode(self.containerNode)
++
++            self.handleNode.backgroundColor = theme.list.controlSecondaryColor
++            self.handleNode.cornerRadius = handleSize.height / 2.0
++            self.containerNode.addSubnode(self.handleNode)
++        }
++
++        override func didLoad() {
++            super.didLoad()
++
++            self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(
++                target: self,
++                action: #selector(self.dimTapped)))
++            // Тянуть можно за всё окошко: хватать пальцем тонкую чёрточку
++            // неудобно, а список внутри перехватывает своё сам.
++            let pan = UIPanGestureRecognizer(target: self, action: #selector(self.panned(_:)))
++            pan.delaysTouchesBegan = false
++            pan.cancelsTouchesInView = false
++            self.containerNode.view.addGestureRecognizer(pan)
++        }
++
++        @objc private func dimTapped() {
++            self.controller?.dismiss()
++        }
++
++        @objc private func panned(_ recognizer: UIPanGestureRecognizer) {
++            guard let layout = self.validLayout else {
++                return
++            }
++            let height = self.sheetHeight(layout: layout)
++            switch recognizer.state {
++            case .changed:
++                // Вверх не растягиваем: окошко одного роста, тянуть его выше
++                // значило бы закрыть профиль, ради которого всё и сделано.
++                self.dragOffset = max(0.0, recognizer.translation(in: self.view).y)
++                self.applyLayout(layout: layout, transition: .immediate)
++            case .ended, .cancelled:
++                let velocity = recognizer.velocity(in: self.view).y
++                // Либо утянул больше чем на треть, либо отпустил с броском —
++                // закрываем. Иначе возвращаем на место.
++                if self.dragOffset > height / 3.0 || velocity > 600.0 {
++                    self.controller?.dismiss()
++                } else {
++                    self.dragOffset = 0.0
++                    self.applyLayout(layout: layout, transition: .animated(duration: 0.3, curve: .spring))
++                }
++            default:
++                break
++            }
++        }
++
++        private func sheetHeight(layout: ContainerViewLayout) -> CGFloat {
++            return floor(layout.size.height * sheetHeightFraction)
++        }
++
++        func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++            self.validLayout = layout
++            self.applyLayout(layout: layout, transition: transition)
++        }
++
++        private func applyLayout(layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++            let height = self.sheetHeight(layout: layout)
++            let top = layout.size.height - height + self.dragOffset
++            let frame = CGRect(
++                x: 0.0,
++                y: top,
++                width: layout.size.width,
++                // Запас снизу на скругление: при стягивании вниз край окошка
++                // не должен открывать щель под собой.
++                height: height + sheetCornerRadius)
++
++            transition.updateFrame(node: self.dimNode, frame: CGRect(origin: CGPoint(), size: layout.size))
++            transition.updateFrame(node: self.containerNode, frame: frame)
++            transition.updateFrame(node: self.handleNode, frame: CGRect(
++                x: floor((layout.size.width - handleSize.width) / 2.0),
++                y: floor((handleAreaHeight - handleSize.height) / 2.0),
++                width: handleSize.width,
++                height: handleSize.height))
++
++            // Вложенному экрану отдаём свою рамку как целый экран: он про
++            // окошко не знает и знать не должен. Отступ сверху — под
++            // чёрточку, снизу — под безопасную область телефона.
++            let contentSize = CGSize(width: frame.width, height: height - handleAreaHeight)
++            let contentLayout = ContainerViewLayout(
++                size: contentSize,
++                metrics: layout.metrics,
++                deviceMetrics: layout.deviceMetrics,
++                intrinsicInsets: UIEdgeInsets(
++                    top: 0.0,
++                    left: layout.safeInsets.left,
++                    bottom: layout.intrinsicInsets.bottom,
++                    right: layout.safeInsets.right),
++                safeInsets: UIEdgeInsets(
++                    top: 0.0,
++                    left: layout.safeInsets.left,
++                    bottom: 0.0,
++                    right: layout.safeInsets.right),
++                additionalInsets: layout.additionalInsets,
++                statusBarHeight: nil,
++                inputHeight: layout.inputHeight,
++                inputHeightIsInteractivellyChanging: false,
++                inVoiceOver: false)
++            self.content.containerLayoutUpdated(contentLayout, transition: transition)
++            transition.updateFrame(
++                node: self.content.displayNode,
++                frame: CGRect(origin: CGPoint(x: 0.0, y: handleAreaHeight), size: contentSize))
++
++            if !self.contentAttached {
++                self.contentAttached = true
++                self.content.viewWillAppear(false)
++                self.containerNode.addSubnode(self.content.displayNode)
++                self.content.viewDidAppear(false)
++            }
++        }
++
++        func animateIn() {
++            guard let layout = self.validLayout else {
++                return
++            }
++            let height = self.sheetHeight(layout: layout)
++            self.containerNode.layer.animatePosition(
++                from: CGPoint(x: 0.0, y: height),
++                to: CGPoint(),
++                duration: 0.4,
++                timingFunction: kCAMediaTimingFunctionSpring,
++                additive: true)
++            self.dimNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
++        }
++
++        func animateOut(completion: @escaping () -> Void) {
++            guard let layout = self.validLayout else {
++                completion()
++                return
++            }
++            let height = self.sheetHeight(layout: layout)
++            self.containerNode.layer.animatePosition(
++                from: CGPoint(),
++                to: CGPoint(x: 0.0, y: height),
++                duration: 0.25,
++                removeOnCompletion: false,
++                additive: true,
++                completion: { _ in
++                    completion()
++                })
++            self.dimNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false)
++        }
++    }
++
++    private let context: AccountContext
++    private let content: NavigationController
++    private var didAnimateIn = false
++    private var isDismissing = false
++
++    private var controllerNode: SheetNode {
++        return self.displayNode as! SheetNode
++    }
++
++    public init(context: AccountContext, content: ViewController) {
++        self.context = context
++
++        let theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++        let navigation = NavigationController(
++            mode: .single,
++            theme: NavigationControllerTheme(presentationTheme: theme))
++        navigation.viewControllers = [content]
++        self.content = navigation
++
++        super.init(navigationBarPresentationData: nil)
++
++        // Окошко не трогает полосу состояния и не затемняет то, что под ним:
++        // профиль за ним должен остаться живым и читаемым.
++        self.statusBar.statusBarStyle = .Ignore
++        self.blocksBackgroundWhenInOverlay = true
++        self.isOpaqueWhenInOverlay = false
++    }
++
++    required public init(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    override public func loadDisplayNode() {
++        self.displayNode = SheetNode(controller: self, context: self.context, content: self.content)
++        self.displayNodeDidLoad()
++    }
++
++    override public func viewDidAppear(_ animated: Bool) {
++        super.viewDidAppear(animated)
++
++        if !self.didAnimateIn {
++            self.didAnimateIn = true
++            self.controllerNode.animateIn()
++        }
++    }
++
++    override public func dismiss(completion: (() -> Void)? = nil) {
++        guard !self.isDismissing else {
++            return
++        }
++        self.isDismissing = true
++        self.controllerNode.animateOut(completion: { [weak self] in
++            self?.presentingViewController?.dismiss(animated: false, completion: nil)
++            completion?()
++        })
++    }
++
++    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++        super.containerLayoutUpdated(layout, transition: transition)
++
++        self.controllerNode.containerLayoutUpdated(layout, transition: transition)
++    }
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 2a030c34..17ba4c0d 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -406,8 +406,17 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     // профиль». Каждая строка открывает свой экран. Всё рисует сам клиент,
+     // на сервер ничего не уходит, видно только тебе.
+     if case .user = data.peer {
++        // Lunagram: правка оформления открывается ОКОШКОМ СНИЗУ, а не
++        // отдельным экраном. За окошком остаётся живой профиль, и правки
++        // видно сразу на себе — так устроено в плагине Custom Profile, и
++        // хозяин попросил так же.
++        //
++        // «На ходу» нам ничего не стоило: шапка профиля уже слушает смену
++        // наших настроек и перестраивается сама. Её просто не было видно
++        // из-за экрана поверх.
+         let pushDecor: (ViewController) -> Void = { screen in
+-            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(screen)
++            let sheet = LunagramEditorSheet(context: context, content: screen)
++            context.sharedContext.mainWindow?.present(sheet, on: .root)
+         }
+         // Порядок, названия и контурные значки — как на ПК.
+         let theme = presentationData.theme
