@@ -1,0 +1,323 @@
+diff --git a/submodules/AvatarNode/Sources/AvatarNode.swift b/submodules/AvatarNode/Sources/AvatarNode.swift
+index e77b38bc..087cfa77 100644
+--- a/submodules/AvatarNode/Sources/AvatarNode.swift
++++ b/submodules/AvatarNode/Sources/AvatarNode.swift
+@@ -735,8 +735,27 @@ public final class AvatarNode: ASDisplayNode {
+                 self.imageNode.cornerRadius = 0.0
+             case .round:
+                 // Lunagram: форма аватарок — как «Закругление аватарок» на ПК.
++                //
++                // Своя форма (звезда, сердце, цветок) скруглением слоя
++                // не выражается — для неё кладём маску контуром. Снимаем
++                // только СВОЮ маску: у пузыря ниже своя, и затереть её
++                // значило бы сломать чужой вид.
+                 self.imageNode.clipsToBounds = true
+-                self.imageNode.cornerRadius = LunagramAvatarShape.cornerRadius(side: displayDimensions.height)
++                if LunagramAvatarShape.isCustomShape {
++                    self.imageNode.cornerRadius = 0.0
++                    let shapeBounds = CGRect(origin: CGPoint(), size: displayDimensions)
++                    let shapeMask = (self.imageNode.layer.mask as? CAShapeLayer) ?? CAShapeLayer()
++                    shapeMask.frame = shapeBounds
++                    shapeMask.path = LunagramAvatarShape.path(in: shapeBounds)
++                    if self.imageNode.layer.mask !== shapeMask {
++                        self.imageNode.layer.mask = shapeMask
++                    }
++                } else {
++                    if self.imageNode.layer.mask is CAShapeLayer {
++                        self.imageNode.layer.mask = nil
++                    }
++                    self.imageNode.cornerRadius = LunagramAvatarShape.cornerRadius(side: displayDimensions.height)
++                }
+             case .roundedRect:
+                 self.imageNode.clipsToBounds = true
+                 self.imageNode.cornerRadius = LunagramAvatarShape.forumRadius(side: displayDimensions.height)
+diff --git a/submodules/Lunagram/Sources/LunagramAvatarShape.swift b/submodules/Lunagram/Sources/LunagramAvatarShape.swift
+index 1b4d5d84..351eda5b 100644
+--- a/submodules/Lunagram/Sources/LunagramAvatarShape.swift
++++ b/submodules/Lunagram/Sources/LunagramAvatarShape.swift
+@@ -7,8 +7,46 @@ public enum LunagramAvatarShape {
+     /// Ступень круга — как kMaxAvatarCorners на ПК.
+     public static let maxCorners = 23
+ 
++    /// Какой контур у аватарки. Ноль — прежнее скругление ползунком:
++    /// оно остаётся главным видом, остальное сверх него.
++    public enum Kind: Int, CaseIterable {
++        case rounded = 0
++        case star = 1
++        case heart = 2
++        case flower = 3
++        case pentagon = 4
++        case hexagon = 5
++
++        public var title: String {
++            switch self {
++            case .rounded: return "Скругление"
++            case .star: return "Звезда"
++            case .heart: return "Сердце"
++            case .flower: return "Цветок"
++            case .pentagon: return "Пятиугольник"
++            case .hexagon: return "Шестиугольник"
++            }
++        }
++    }
++
++    public static var kind: Kind {
++        return Kind(rawValue: LunagramSettings.avatarShape) ?? .rounded
++    }
++
++    /// Выбран свой контур, а не скругление. По нему решается, обрезать
++    /// фото маской или хватит скругления слоя.
++    public static var isCustomShape: Bool {
++        return self.kind != .rounded
++    }
++
+     /// Круг ли сейчас. Тогда Telegram рисует по-своему, и мы не вмешиваемся.
++    ///
++    /// При своём контуре круга нет никогда — иначе родной код решил бы,
++    /// что вмешиваться не нужно, и звезда никогда бы не нарисовалась.
+     public static var isCircle: Bool {
++        if self.isCustomShape {
++            return false
++        }
+         return LunagramSettings.avatarCorners >= maxCorners
+     }
+ 
+@@ -24,14 +62,148 @@ public enum LunagramAvatarShape {
+         return CGFloat(corners) / CGFloat(maxCorners) * side / 2.0
+     }
+ 
+-    /// Контур обычной аватарки: круг или прямоугольник со скруглением.
++    /// Контур обычной аватарки: круг, скруглённый прямоугольник или
++    /// своя форма.
+     public static func path(in rect: CGRect) -> CGPath {
++        if self.isCustomShape {
++            return self.customPath(in: rect)
++        }
+         if isCircle {
+             return CGPath(ellipseIn: rect, transform: nil)
+         }
+         return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius(side: min(rect.width, rect.height))).cgPath
+     }
+ 
++    /// Свой контур, вписанный в квадрат по меньшей стороне и выровненный
++    /// по середине: аватарки бывают и не квадратные, а форма должна
++    /// оставаться формой, а не растягиваться в овал.
++    public static func customPath(in rect: CGRect) -> CGPath {
++        let side = min(rect.width, rect.height)
++        guard side > 0.0 else {
++            return CGPath(rect: rect, transform: nil)
++        }
++        let box = CGRect(
++            x: rect.midX - side / 2.0,
++            y: rect.midY - side / 2.0,
++            width: side,
++            height: side)
++        switch self.kind {
++        case .rounded:
++            return UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius(side: side)).cgPath
++        case .star:
++            return self.starPath(in: box, points: 5, inner: 0.42)
++        case .heart:
++            return self.heartPath(in: box)
++        case .flower:
++            return self.flowerPath(in: box, petals: 6)
++        case .pentagon:
++            return self.polygonPath(in: box, sides: 5)
++        case .hexagon:
++            return self.polygonPath(in: box, sides: 6)
++        }
++    }
++
++    /// Правильный многоугольник, вершиной вверх.
++    private static func polygonPath(in box: CGRect, sides: Int) -> CGPath {
++        let path = UIBezierPath()
++        let radius = box.width / 2.0
++        let center = CGPoint(x: box.midX, y: box.midY)
++        for i in 0 ..< sides {
++            // -90° — чтобы первая вершина смотрела вверх, а не вправо.
++            let angle = -CGFloat.pi / 2.0
++                + CGFloat(i) * 2.0 * CGFloat.pi / CGFloat(sides)
++            let point = CGPoint(
++                x: center.x + radius * cos(angle),
++                y: center.y + radius * sin(angle))
++            if i == 0 {
++                path.move(to: point)
++            } else {
++                path.addLine(to: point)
++            }
++        }
++        path.close()
++        return path.cgPath
++    }
++
++    /// Звезда: вершины по кругу, впадины — по кругу поменьше.
++    private static func starPath(in box: CGRect, points: Int, inner: CGFloat) -> CGPath {
++        let path = UIBezierPath()
++        let outer = box.width / 2.0
++        let center = CGPoint(x: box.midX, y: box.midY)
++        let step = CGFloat.pi / CGFloat(points)
++        for i in 0 ..< (points * 2) {
++            let radius = (i % 2 == 0) ? outer : outer * inner
++            let angle = -CGFloat.pi / 2.0 + CGFloat(i) * step
++            let point = CGPoint(
++                x: center.x + radius * cos(angle),
++                y: center.y + radius * sin(angle))
++            if i == 0 {
++                path.move(to: point)
++            } else {
++                path.addLine(to: point)
++            }
++        }
++        path.close()
++        return path.cgPath
++    }
++
++    /// Сердце: два купола сверху и острие снизу, дугами Безье.
++    private static func heartPath(in box: CGRect) -> CGPath {
++        let w = box.width
++        let h = box.height
++        let x = box.minX
++        let y = box.minY
++        let path = UIBezierPath()
++        path.move(to: CGPoint(x: x + w * 0.5, y: y + h * 0.96))
++        path.addCurve(
++            to: CGPoint(x: x, y: y + h * 0.3),
++            controlPoint1: CGPoint(x: x + w * 0.12, y: y + h * 0.75),
++            controlPoint2: CGPoint(x: x, y: y + h * 0.52))
++        path.addArc(
++            withCenter: CGPoint(x: x + w * 0.25, y: y + h * 0.3),
++            radius: w * 0.25,
++            startAngle: CGFloat.pi,
++            endAngle: 0.0,
++            clockwise: true)
++        path.addArc(
++            withCenter: CGPoint(x: x + w * 0.75, y: y + h * 0.3),
++            radius: w * 0.25,
++            startAngle: CGFloat.pi,
++            endAngle: 0.0,
++            clockwise: true)
++        path.addCurve(
++            to: CGPoint(x: x + w * 0.5, y: y + h * 0.96),
++            controlPoint1: CGPoint(x: x + w, y: y + h * 0.52),
++            controlPoint2: CGPoint(x: x + w * 0.88, y: y + h * 0.75))
++        path.close()
++        return path.cgPath
++    }
++
++    /// Цветок: лепестки по кругу. Радиус гуляет по косинусу — получается
++    /// волна без склейки отдельных лепестков, и контур выходит замкнутым
++    /// сам собой.
++    private static func flowerPath(in box: CGRect, petals: Int) -> CGPath {
++        let path = UIBezierPath()
++        let center = CGPoint(x: box.midX, y: box.midY)
++        let base = box.width / 2.0
++        // Шагаем часто: на редких шагах лепестки выходят гранёными.
++        let steps = max(petals * 36, 72)
++        for i in 0 ... steps {
++            let t = CGFloat(i) / CGFloat(steps) * 2.0 * CGFloat.pi
++            let wave = 0.82 + 0.18 * cos(CGFloat(petals) * t)
++            let point = CGPoint(
++                x: center.x + base * wave * cos(t - CGFloat.pi / 2.0),
++                y: center.y + base * wave * sin(t - CGFloat.pi / 2.0))
++            if i == 0 {
++                path.move(to: point)
++            } else {
++                path.addLine(to: point)
++            }
++        }
++        path.close()
++        return path.cgPath
++    }
++
+     /// Радиус у форумов. С «Единым закруглением» — как у чатов, иначе своя
+     /// телеграмовская четверть стороны.
+     public static func forumRadius(side: CGFloat) -> CGFloat {
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index d3fbe107..e2701a77 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -132,6 +132,7 @@ public final class LunagramSettings {
+         static let typingAnimation = "lunagram.other.typingAnimation"
+         static let avatarCorners = "lunagram.avatars.corners"
+         static let avatarSingleCorner = "lunagram.avatars.singleCorner"
++        static let avatarShape = "lunagram.avatars.shape"
+         static let composeColor = "lunagram.compose.color"
+         static let composeDensity = "lunagram.compose.density"
+         static let composeAuto = "lunagram.compose.auto"
+@@ -577,6 +578,13 @@ public final class LunagramSettings {
+     }
+ 
+     /// «Единое закругление»: форумы той же формы, что и чаты — как на ПК.
++    /// Форма аватарки: 0 — скругление ползунком, дальше свои контуры
++    /// (см. LunagramAvatarShape.Kind).
++    public static var avatarShape: Int {
++        get { return clamped(Key.avatarShape, 0, 5, 0) }
++        set { setClamped(newValue, Key.avatarShape, 0, 5) }
++    }
++
+     public static var avatarSingleCorner: Bool {
+         get {
+             return defaults.bool(forKey: Key.avatarSingleCorner)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 6c0ec709..ad4babbc 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1479,6 +1479,7 @@ private struct LunagramMediaState: Equatable {
+     var musicDim: Int = 0
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
++    var avatarShape: Int = 0
+     var wordingPack: Int = 0
+     /// Отпечаток своих наборов: номера и названия. Нужен затем же, зачем
+     /// остальное в этом состоянии, — чтобы список заметил перемену.
+@@ -1518,6 +1519,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicDim = LunagramSettings.profileMusicBgDim
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
++        state.avatarShape = LunagramSettings.avatarShape
+         state.wordingPack = LunagramWording.pack
+         state.wordingOwn = LunagramWording.ownPacks.map({ "\($0.id):\($0.title):\($0.strings.count)" }).joined(separator: "|")
+         state.sendFontStyleLatin = LunagramSettings.sendFontStyleLatin
+@@ -2309,6 +2311,13 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+                 LunagramSettings.listTextMode = index
+                 refreshMedia()
+             }))
++        case .avatarShape:
++            let kinds = LunagramAvatarShape.Kind.allCases
++            let selected = kinds.firstIndex(where: { $0.rawValue == LunagramSettings.avatarShape }) ?? 0
++            shared.push?(lunagramChoiceScreen(context: context, title: "Форма аватарок", options: kinds.map { $0.title }, selected: selected, info: "Форма ставится всем аватаркам: и в списке переписок, и в переписке, и в профиле. «Скругление» — прежний ползунок от квадрата до круга.\n\nФорма вписывается в квадрат по меньшей стороне, поэтому на неквадратных аватарках она остаётся формой, а не растягивается.", select: { index in
++                LunagramSettings.avatarShape = kinds[index].rawValue
++                refreshMedia()
++            }))
+         case .particlesKind:
+             let kinds = LunagramParticleKind.allCases
+             let enabled = LunagramSettings.particlesEnabled
+@@ -2632,6 +2641,8 @@ private enum LunagramChoice: Int32 {
+     case ownReactionsPick = 140
+     // Как появляются набираемые буквы.
+     case typingEffect = 142
++    // Форма аватарки.
++    case avatarShape = 143
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -2955,9 +2966,16 @@ private func lunagramWordingEntries(media: LunagramMediaState) -> [LunagramSetti
+ /// здесь нет: у айфона его нет, вместо него вкладки внизу.
+ private func lunagramAvatarsEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
+     var rows = LunagramRowsBuilder()
+-    rows.header("Закругление аватарок")
+-    rows.row(.preview(.avatar, media.avatarCorners))
+-    rows.row(.cornerSlider(media.avatarCorners))
++    rows.header("Форма аватарок")
++    // Образец перерисовываем и на смену формы: иначе выбрал звезду, а
++    // сверху по-прежнему скруглённый квадрат — и выглядит как поломка.
++    rows.row(.preview(.avatar, media.avatarCorners &+ media.avatarShape &* 1_000))
++    rows.row(.value(LunagramChoice.avatarShape.rawValue, "Форма", (LunagramAvatarShape.Kind(rawValue: media.avatarShape) ?? .rounded).title, "star"))
++    // Ползунок скругления нужен только своей форме — скругление и есть
++    // она; у звезды ему нечего делать.
++    if media.avatarShape == 0 {
++        rows.row(.cornerSlider(media.avatarCorners))
++    }
+     rows.row(.toggle(.avatarSingleCorner, values[.avatarSingleCorner] ?? LunagramToggle.avatarSingleCorner.value, "Единое закругление", nil))
+     rows.info("Форумы будут иметь ту же форму, что и чаты. В уже открытых списках форма сменится, когда они перерисуются, — везде сразу после перезапуска Lunagram.")
+     return rows.entries
