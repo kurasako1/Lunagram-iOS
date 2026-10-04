@@ -1,0 +1,130 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1ebd359d..273c4af5 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -112,6 +112,7 @@ public final class LunagramSettings {
+         static let lyrics = "lunagram.lyrics.enabled"
+         static let saveSticker = "lunagram.saveSticker.enabled"
+         static let foldersBelow = "lunagram.folders.below"
++        static let alwaysShowScheduled = "lunagram.alwaysShowScheduled"
+         static let composeLift = "lunagram.composeLift.enabled"
+         static let longQuote = "lunagram.longQuote.enabled"
+         static let longQuoteLimit = "lunagram.longQuote.limit"
+@@ -945,6 +946,12 @@ public final class LunagramSettings {
+     }
+ 
+     /// Сворачивать длинные свои сообщения в цитату.
++    /// Кнопка отложенных на виду всегда, а не только когда они есть.
++    public static var alwaysShowScheduled: Bool {
++        get { return flag(Key.alwaysShowScheduled, default: false) }
++        set { setFlag(newValue, Key.alwaysShowScheduled) }
++    }
++
+     /// Просвет под полосой ввода.
+     public static var composeLift: Bool {
+         get { return flag(Key.composeLift, default: false) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 55a6d193..8eb2a7f8 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -77,6 +77,7 @@ private enum LunagramToggle: Int32 {
+     case lyrics
+     case saveSticker
+     case foldersBelow
++    case alwaysShowScheduled
+     case composeLift
+     case longQuote
+ 
+@@ -144,6 +145,8 @@ private enum LunagramToggle: Int32 {
+             return LunagramSettings.chatInfoSheet
+         case .noLinkPreview:
+             return LunagramSettings.noLinkPreview
++        case .alwaysShowScheduled:
++            return LunagramSettings.alwaysShowScheduled
+         case .composeLift:
+             return LunagramSettings.composeLift
+         case .glassCycle:
+@@ -267,6 +270,8 @@ private enum LunagramToggle: Int32 {
+             LunagramSettings.chatInfoSheet = value
+         case .noLinkPreview:
+             LunagramSettings.noLinkPreview = value
++        case .alwaysShowScheduled:
++            LunagramSettings.alwaysShowScheduled = value
+         case .composeLift:
+             LunagramSettings.composeLift = value
+         case .glassCycle:
+@@ -390,6 +395,8 @@ private enum LunagramToggle: Int32 {
+             return "Что известно о чате"
+         case .noLinkPreview:
+             return "Убрать предпросмотр ссылок"
++        case .alwaysShowScheduled:
++            return "Кнопка отложенных всегда"
+         case .composeLift:
+             return "Просвет под полосой ввода"
+         case .glassCycle:
+@@ -499,7 +506,7 @@ private enum LunagramToggle: Int32 {
+             return PresentationResourcesSettings.security
+         case .showMutedDeleted:
+             return PresentationResourcesSettings.notifications
+-        case .composeLift, .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow, .longQuote:
++        case .alwaysShowScheduled, .composeLift, .headerCallButton, .chatInfoSheet, .noLinkPreview, .glassCycle, .vignette, .settingsBackground, .voiceLengthInList, .storiesClickOnly, .searchFilterButton, .typingAnimation, .avatarSingleCorner, .composeAuto, .settingIcons, .multiSearch, .chatStickers, .pinnedSearchBar, .mentionAvatars, .mentionAvatarsAfter, .composeHidden, .linkGuard, .linkGuardClean, .scamRegistry, .ownReactions, .keepDownloads, .giftId, .chatExport, .textToolbar, .lyrics, .saveSticker, .foldersBelow, .longQuote:
+             return nil
+         }
+     }
+@@ -624,6 +631,8 @@ extension LunagramToggle {
+             return "info.circle"
+         case .noLinkPreview:
+             return "link.badge.plus,link"
++        case .alwaysShowScheduled:
++            return "clock.badge"
+         case .composeLift:
+             return "rectangle.bottomthird.inset.filled"
+         case .glassCycle:
+@@ -3277,6 +3286,9 @@ private func lunagramPlaceEntries(
+         rows.row(.value(LunagramChoice.typingEffect.rawValue, "Как появляются", LunagramTypingEffect(rawValue: media.typingEffect)?.title ?? "", "textformat"))
+         rows.info("Буквы, которые ты набираешь, появляются не разом: проявляются, прилетают, вырастают — на выбор. Видно только тебе, на отправку не влияет.")
+ 
++        rows.row(.toggle(.alwaysShowScheduled, value(.alwaysShowScheduled), "Кнопка отложенных всегда", "clock.badge"))
++        rows.info("Часики в строке ввода будут на виду всегда, а не только когда отложенные сообщения уже есть.\n\nБез них отложить ПЕРВОЕ сообщение получается лишь долгим нажатием на отправку, а про это мало кто знает. Нажатие открывает раздел отложенных, и строка ввода там сама работает в режиме «отложить».")
++
+         rows.row(.toggle(.composeLift, value(.composeLift), "Просвет под полосой ввода", "rectangle.bottomthird.inset.filled"))
+         rows.info("Полоса ввода отрывается от самого низа экрана: под ней остаётся просвет, и переписка видна насквозь.\n\nТремя отдельными блоками полоса на телефоне разведена и без нас — это родной вид нового Telegram: у скрепки свой кружок, у поля своё окно, у микрофона своё место правее. Поэтому здесь настройка делает только то, чего не хватало, а на ПК ей пришлось разводить и блоки: там полоса была одна.")
+ 
+diff --git a/submodules/TelegramUI/Sources/ChatInterfaceInputContexts.swift b/submodules/TelegramUI/Sources/ChatInterfaceInputContexts.swift
+index 0d6c3115..5ab63559 100644
+--- a/submodules/TelegramUI/Sources/ChatInterfaceInputContexts.swift
++++ b/submodules/TelegramUI/Sources/ChatInterfaceInputContexts.swift
+@@ -6,6 +6,7 @@ import AccountContext
+ import Emoji
+ import ChatInterfaceState
+ import ChatPresentationInterfaceState
++import Lunagram
+ import SwiftSignalKit
+ import TextFormat
+ import ChatContextQuery
+@@ -215,7 +216,24 @@ func inputTextPanelStateForChatPresentationInterfaceState(_ chatPresentationInte
+                     }
+                 }
+                    
+-                if isTextEmpty && chatPresentationInterfaceState.hasScheduledMessages && !hasForward {
++                // Lunagram: кнопку отложенных можно держать на виду всегда,
++                // а не только когда отложенные уже есть. Без неё отложить
++                // ПЕРВОЕ сообщение получается лишь долгим нажатием на
++                // отправку — про это мало кто знает. Кнопка открывает раздел
++                // отложенных, а там строка ввода сама работает в режиме
++                // «отложить».
++                //
++                // Правим ТОЛЬКО это условие, а не сам признак
++                // hasScheduledMessages: он лежит в кэше собеседника и в
++                // сравнении состояний, и подмени мы его там — соврали бы
++                // сетевой части о том, что у переписки есть отложенные.
++                //
++                // Приём не наш: прямо выше так же устроена родная кнопка
++                // подарка (alwaysShowGiftButton).
++                if isTextEmpty
++                    && (chatPresentationInterfaceState.hasScheduledMessages
++                        || LunagramSettings.alwaysShowScheduled)
++                    && !hasForward {
+                     accessoryItems.append(.scheduledMessages)
+                 }
+                     
