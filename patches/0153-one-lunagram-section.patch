@@ -1,0 +1,198 @@
+diff --git a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift
+index 62a1fe32..e28ad8bd 100644
+--- a/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
++++ b/submodules/SettingsUI/Sources/Privacy and Security/PrivacyAndSecurityController.swift	
+@@ -701,12 +701,6 @@ private func privacyAndSecurityControllerEntries(
+ ) -> [PrivacyAndSecurityEntry] {
+     var entries: [PrivacyAndSecurityEntry] = []
+     
+-    // Lunagram: наш блок — первым в списке.
+-    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.ghost, .privacy, .safety] {
+-        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+-    }
+-
+     entries.append(.blockedPeers(presentationData.theme, presentationData.strings.Settings_BlockedUsers, blockedPeerCount == nil ? "" : (blockedPeerCount == 0 ? presentationData.strings.PrivacySettings_BlockedPeersEmpty : "\(blockedPeerCount!)")))
+     if activeWebsitesCount != 0 {
+         entries.append(.activeSessions(presentationData.theme, presentationData.strings.PrivacySettings_WebSessions, activeWebsitesCount == 0 ? "" : "\(activeWebsitesCount)"))
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index 752432c8..d7520b83 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -450,14 +450,6 @@ private func themeSettingsControllerEntries(
+ ) -> [ThemeSettingsControllerEntry] {
+     var entries: [ThemeSettingsControllerEntry] = []
+     
+-    // Lunagram: наш блок — первым в списке. Порядок на экране задаётся
+-    // порядком складывания, а не номерами строк: на этом я и споткнулся,
+-    // и из-за этого же список сличался по неверным местам и вылетал.
+-    entries.append(.lunagramHeader(presentationData.theme, "LUNAGRAM"))
+-    for place in [LunagramPlace.wallpaper, .dialogList, .avatars, .particles, .glass, .appIcons, .wording] {
+-        entries.append(.lunagramPlace(presentationData.theme, place.rawValue, place.title))
+-    }
+-
+     let strings = presentationData.strings
+     let title = presentationData.autoNightModeTriggered ? strings.Appearance_ColorThemeNight.uppercased() : strings.Appearance_ColorTheme.uppercased()
+     entries.append(.themeListHeader(presentationData.theme, title))
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramRootScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramRootScreen.swift
+new file mode 100644
+index 00000000..b3f34eaa
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramRootScreen.swift
+@@ -0,0 +1,114 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import PresentationDataUtils
++import AccountContext
++import Lunagram
++
++// Lunagram: корень раздела — все наши экраны одним столбиком.
++//
++// Сделан отдельным файлом и БЕЗ общей машинерии выключателей: своего
++// состояния у него нет, это просто перечень входов. Потяни он сюда общее
++// состояние — каждая правка в нём била бы по всем пятнадцати экранам, а
++// менять ему нечего.
++//
++// Порядок строк — порядок перечисления LunagramPlace.allCases. Один список,
++// одно место правки: добавил место в перечень — оно появилось и здесь.
++
++private final class LunagramRootArguments {
++    let open: (LunagramPlace) -> Void
++
++    init(open: @escaping (LunagramPlace) -> Void) {
++        self.open = open
++    }
++}
++
++private enum LunagramRootEntry: ItemListNodeEntry {
++    case place(Int32, LunagramPlace)
++
++    var section: ItemListSectionId {
++        return 0
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .place(index, _):
++            return index
++        }
++    }
++
++    static func <(lhs: LunagramRootEntry, rhs: LunagramRootEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    static func ==(lhs: LunagramRootEntry, rhs: LunagramRootEntry) -> Bool {
++        switch lhs {
++        case let .place(lhsIndex, lhsPlace):
++            if case let .place(rhsIndex, rhsPlace) = rhs,
++               lhsIndex == rhsIndex, lhsPlace == rhsPlace {
++                return true
++            }
++            return false
++        }
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! LunagramRootArguments
++        switch self {
++        case let .place(_, place):
++            return ItemListDisclosureItem(
++                presentationData: presentationData,
++                systemStyle: .glass,
++                icon: place.tileIcon,
++                title: place.title,
++                label: "",
++                sectionId: self.section,
++                style: .blocks,
++                action: {
++                    arguments.open(place)
++                })
++        }
++    }
++}
++
++public func lunagramRootController(context: AccountContext) -> ViewController {
++    var pushImpl: ((ViewController) -> Void)?
++
++    let arguments = LunagramRootArguments(open: { place in
++        pushImpl?(lunagramPlaceController(context: context, place: place))
++    })
++
++    let signal = context.sharedContext.presentationData
++    |> deliverOnMainQueue
++    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        var entries: [LunagramRootEntry] = []
++        var index: Int32 = 0
++        for place in LunagramPlace.allCases {
++            entries.append(.place(index, place))
++            index += 1
++        }
++        let controllerState = ItemListControllerState(
++            presentationData: ItemListPresentationData(presentationData),
++            title: .text("Lunagram"),
++            leftNavigationButton: nil,
++            rightNavigationButton: nil,
++            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(
++            presentationData: ItemListPresentationData(presentationData),
++            entries: entries,
++            style: .blocks,
++            animateChanges: false)
++        return (controllerState, (listState, arguments))
++    }
++
++    let controller = ItemListController(context: context, state: signal)
++    // Под нашими экранами — та же картинка, что под профилем.
++    controller.lunagramShowsBackground = true
++    pushImpl = { [weak controller] next in
++        controller?.push(next)
++    }
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 92c7deeb..2a030c34 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -307,21 +307,25 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+         }
+     }
+     
+-    // Lunagram: то, чему нет места в родных разделах, — своими строками в
+-    // корне. Остальное переехало туда, где стоит то, чего оно касается:
+-    // маскировка устройства в «Устройства», призрак в «Конфиденциальность»,
+-    // вид в «Оформление».
++    // Lunagram: ОДНА строка, а внутри всё наше.
++    //
++    // До 4 октября настройки были растащены по родным разделам Telegram —
++    // призрак в «Конфиденциальность», вид в «Оформление». Смысл был
++    // «настройка рядом с тем, чего касается». Хозяин попросил наоборот: всё
++    // своё в одном месте, как в exteraGram, — так проще искать, и видно, где
++    // кончается Telegram и начинаемся мы.
++    //
++    // Раздел .lunagram в перечне SettingsSection стоит выше «Моего аккаунта»,
++    // поэтому строка и оказывается самой первой.
+     do {
+-        let pushPlace: (LunagramPlace) -> Void = { place in
+-            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(lunagramPlaceController(context: context, place: place))
+-        }
+         // Плашка, а не контур: родные строки рядом помечены цветными
+         // квадратиками, и серый контур среди них читался как чужой.
+-        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: LunagramPlace.deleted.title, icon: LunagramPlace.deleted.tileIcon, action: {
+-            pushPlace(.deleted)
+-        }))
+-        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 101, label: .text(""), text: LunagramPlace.messages.title, icon: LunagramPlace.messages.tileIcon, action: {
+-            pushPlace(.messages)
++        let icon = LunagramPlaceIcon.image(
++            symbols: "moon.stars",
++            top: 0xFF6B6B,
++            bottom: 0xD8321C)
++        items[.lunagram]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: "Lunagram", icon: icon, action: {
++            (context.sharedContext.mainWindow?.viewController as? NavigationController)?.pushViewController(lunagramRootController(context: context))
+         }))
+     }
+ 
