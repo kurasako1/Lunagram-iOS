@@ -1,0 +1,247 @@
+diff --git a/submodules/Lunagram/Sources/LunagramAvatarFeather.swift b/submodules/Lunagram/Sources/LunagramAvatarFeather.swift
+new file mode 100644
+index 00000000..b98d8756
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramAvatarFeather.swift
+@@ -0,0 +1,94 @@
++import UIKit
++import CoreImage
++
++/// Растушёвка краёв аватарки профиля.
++///
++/// Из плагина Custom Profile: «Растушёвка краёв» с радиусом. Край аватарки
++/// перестаёт быть резаным и уходит в прозрачность.
++///
++/// Делаем маской-картинкой: контур рисуется белым, потом размывается, и
++/// получившееся служит маской слоя. Контур берём тот же, что у формы, поэтому
++/// растушёвка следует и за звездой, и за сердцем, а не только за кругом.
++///
++/// ВАЖНО — только для аватарки профиля, как и в плагине. Форма у нас общая на
++/// все аватарки, включая список переписок, и размытая маска на каждый размер
++/// там была бы прямой платой за прокрутку. В профиле аватарка одна, размер
++/// один, маска считается однажды и запоминается.
++public enum LunagramAvatarFeather {
++    private static let lock = NSLock()
++    private static var cache: [String: UIImage] = [:]
++    private static let context = CIContext(options: [.useSoftwareRenderer: false])
++
++    /// Маска для аватарки этого размера, или `nil` — если растушёвка выключена
++    /// либо собрать её не удалось.
++    public static func mask(size: CGSize, radius: Int) -> UIImage? {
++        guard radius > 0, size.width > 1.0, size.height > 1.0 else {
++            return nil
++        }
++        // Радиус задан в процентах от половины стороны: так один и тот же
++        // ползунок одинаково смотрится на любом размере аватарки.
++        let side = min(size.width, size.height)
++        let blur = side / 2.0 * CGFloat(radius) / 100.0
++        guard blur > 0.4 else {
++            return nil
++        }
++
++        let key = "\(Int(size.width))x\(Int(size.height))|\(radius)|\(LunagramSettings.avatarShape)|\(LunagramSettings.avatarCorners)"
++        lock.lock()
++        if let cached = cache[key] {
++            lock.unlock()
++            return cached
++        }
++        lock.unlock()
++
++        // Запас по краям: размытие выходит за контур, и без запаса хвост
++        // обрезался бы рамкой картинки — вместо мягкого края получилась бы
++        // резаная полоса.
++        let inset = ceil(blur * 2.0)
++        let canvas = CGSize(width: size.width + inset * 2.0, height: size.height + inset * 2.0)
++
++        let renderer = UIGraphicsImageRenderer(size: canvas)
++        let solid = renderer.image { context in
++            let cg = context.cgContext
++            cg.setFillColor(UIColor.white.cgColor)
++            // Контур сжимаем на величину размытия: размытие «съедает» край в
++            // обе стороны, и без сжатия аватарка стала бы заметно больше.
++            let shapeRect = CGRect(
++                x: inset + blur / 2.0,
++                y: inset + blur / 2.0,
++                width: size.width - blur,
++                height: size.height - blur)
++            cg.addPath(LunagramAvatarShape.path(in: shapeRect))
++            cg.fillPath()
++        }
++
++        guard let input = CIImage(image: solid),
++              let filter = CIFilter(name: "CIGaussianBlur") else {
++            return nil
++        }
++        filter.setValue(input, forKey: kCIInputImageKey)
++        filter.setValue(blur / 2.0, forKey: kCIInputRadiusKey)
++        guard let output = filter.outputImage else {
++            return nil
++        }
++        // Размытие раздвигает границы картинки — берём ровно свой кусок,
++        // иначе маска сдвинется относительно аватарки.
++        let crop = CGRect(origin: CGPoint(x: inset, y: inset), size: size)
++        guard let cgImage = self.context.createCGImage(output, from: crop) else {
++            return nil
++        }
++        let image = UIImage(cgImage: cgImage)
++
++        lock.lock()
++        cache[key] = image
++        lock.unlock()
++        return image
++    }
++
++    /// Сбросить запомненное: сменилась форма, скругление или радиус.
++    public static func reset() {
++        lock.lock()
++        cache.removeAll()
++        lock.unlock()
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 1b3f2fed..5ad2145c 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -138,6 +138,7 @@ public final class LunagramSettings {
+         static let avatarCorners = "lunagram.avatars.corners"
+         static let avatarSingleCorner = "lunagram.avatars.singleCorner"
+         static let avatarShape = "lunagram.avatars.shape"
++        static let avatarFeather = "lunagram.avatars.feather"
+         static let composeColor = "lunagram.compose.color"
+         static let composeDensity = "lunagram.compose.density"
+         static let composeAuto = "lunagram.compose.auto"
+@@ -583,6 +584,16 @@ public final class LunagramSettings {
+     }
+ 
+     /// «Единое закругление»: форумы той же формы, что и чаты — как на ПК.
++    /// Растушёвка краёв аватарки ПРОФИЛЯ, в процентах от половины стороны.
++    ///
++    /// Только профиля, как и в плагине: форма у нас общая на все аватарки,
++    /// и размытая маска на каждый размер в списке переписок была бы прямой
++    /// платой за прокрутку.
++    public static var avatarFeather: Int {
++        get { return clamped(Key.avatarFeather, 0, 60, 0) }
++        set { setClamped(newValue, Key.avatarFeather, 0, 60) }
++    }
++
+     /// Форма аватарки: 0 — скругление ползунком, дальше свои контуры
+     /// (см. LunagramAvatarShape.Kind).
+     public static var avatarShape: Int {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index ce3a9bdb..ae54a56e 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1485,6 +1485,7 @@ private struct LunagramMediaState: Equatable {
+     var musicBlur: Int = 0
+     var avatarCorners: Int = 23
+     var avatarShape: Int = 0
++    var avatarFeather: Int = 0
+     var wordingPack: Int = 0
+     /// Отпечаток своих наборов: номера и названия. Нужен затем же, зачем
+     /// остальное в этом состоянии, — чтобы список заметил перемену.
+@@ -1530,6 +1531,7 @@ private struct LunagramMediaState: Equatable {
+         state.musicBlur = LunagramSettings.profileMusicBgBlur
+         state.avatarCorners = LunagramSettings.avatarCorners
+         state.avatarShape = LunagramSettings.avatarShape
++        state.avatarFeather = LunagramSettings.avatarFeather
+         state.wordingPack = LunagramWording.pack
+         state.wordingOwn = LunagramWording.ownPacks.map({ "\($0.id):\($0.title):\($0.strings.count)" }).joined(separator: "|")
+         state.sendFontStyleLatin = LunagramSettings.sendFontStyleLatin
+@@ -2157,6 +2159,7 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+         case 90:
+             // Закругление аватарок — ступенями от квадрата до круга, как на ПК.
+             LunagramSettings.avatarCorners = value
++            LunagramAvatarFeather.reset()
+         case 80:
+             LunagramSettings.profileMusicBgDim = value
+         case 81:
+@@ -2182,6 +2185,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.glassTintStrength = value
+         case 122:
+             LunagramSettings.glassTintCycleSpeed = value
++        case 124:
++            LunagramSettings.avatarFeather = value
++            LunagramAvatarFeather.reset()
+         case 123:
+             LunagramSettings.vignetteStrength = value
+         case 92:
+@@ -2338,6 +2344,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             let selected = kinds.firstIndex(where: { $0.rawValue == LunagramSettings.avatarShape }) ?? 0
+             shared.push?(lunagramChoiceScreen(context: context, title: "Форма аватарок", options: kinds.map { $0.title }, selected: selected, info: "Форма ставится всем аватаркам: и в списке переписок, и в переписке, и в профиле. «Скругление» — прежний ползунок от квадрата до круга.\n\nФорма вписывается в квадрат по меньшей стороне, поэтому на неквадратных аватарках она остаётся формой, а не растягивается.", select: { index in
+                 LunagramSettings.avatarShape = kinds[index].rawValue
++                // Контур другой — запомненная маска больше не годится.
++                LunagramAvatarFeather.reset()
+                 refreshMedia()
+             }))
+         case .particlesKind:
+@@ -3025,6 +3033,8 @@ private func lunagramAvatarsEntries(values: [LunagramToggle: Bool], media: Lunag
+     if media.avatarShape == 0 {
+         rows.row(.cornerSlider(media.avatarCorners))
+     }
++    rows.row(.slider(124, "Растушевать край", media.avatarFeather, 0, 60, 5, media.avatarFeather == 0 ? "нет" : "\(media.avatarFeather)%"))
++    rows.info("Край аватарки в ПРОФИЛЕ уходит в прозрачность вместо резаной линии. Растушёвка следует за формой: и за звездой, и за сердцем.\n\nТолько в профиле, и это нарочно: форма общая на все аватарки, а размытая маска на каждый размер в списке переписок стоила бы прокрутки.")
+     rows.row(.toggle(.avatarSingleCorner, values[.avatarSingleCorner] ?? LunagramToggle.avatarSingleCorner.value, "Единое закругление", nil))
+     rows.info("Форумы будут иметь ту же форму, что и чаты. В уже открытых списках форма сменится, когда они перерисуются, — везде сразу после перезапуска Lunagram.")
+     return rows.entries
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoAvatarTransformContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoAvatarTransformContainerNode.swift
+index 89dc09d0..017cfb03 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoAvatarTransformContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoAvatarTransformContainerNode.swift
+@@ -17,6 +17,7 @@ import TelegramCore
+ import EmojiStatusComponent
+ import GalleryUI
+ import HierarchyTrackingLayer
++import Lunagram
+ 
+ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
+     let context: AccountContext
+@@ -250,6 +251,40 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
+         )
+     }
+ 
++    /// Lunagram: мягкий край аватарки профиля.
++    ///
++    /// Маску вешаем на содержимое аватарки, а не на контейнер: контейнер
++    /// участвует в переходах шапки и меняет масштаб, и маска на нём
++    /// растягивалась бы вместе с ним — край то резал бы, то расплывался.
++    ///
++    /// Снимаем только СВОЮ маску, по имени: у аватарки бывает своя под
++    /// истории и под раскрытый вид, и затереть её значило бы сломать
++    /// чужое.
++    private func lunagramApplyFeather(isSettings: Bool) {
++        let layer = self.avatarNode.contentNode.layer
++        let size = self.avatarNode.bounds.size
++        let radius = isSettings ? LunagramSettings.avatarFeather : 0
++        guard radius > 0, let mask = LunagramAvatarFeather.mask(size: size, radius: radius) else {
++            if layer.mask?.name == "lunagramFeather" {
++                layer.mask = nil
++            }
++            return
++        }
++        let maskLayer: CALayer
++        if let current = layer.mask, current.name == "lunagramFeather" {
++            maskLayer = current
++        } else {
++            maskLayer = CALayer()
++            maskLayer.name = "lunagramFeather"
++            layer.mask = maskLayer
++        }
++        maskLayer.frame = CGRect(origin: CGPoint(), size: size)
++        maskLayer.contents = mask.cgImage
++        // Обрезка по рамке теперь мешает: мягкий край должен выходить за
++        // неё, иначе его срежет ровно там, где он начинается.
++        layer.masksToBounds = false
++    }
++
+     func update(peer: EnginePeer?, threadId: Int64?, threadInfo: EngineMessageHistoryThread.Info?, item: PeerInfoAvatarListItem?, theme: PresentationTheme, avatarSize: CGFloat, isExpanded: Bool, isSettings: Bool) {
+         self.params = Params(peer: peer, threadId: threadId, threadInfo: threadInfo, item: item, theme: theme, avatarSize: avatarSize, isExpanded: isExpanded, isSettings: isSettings)
+ 
+@@ -344,6 +379,8 @@ final class PeerInfoAvatarTransformContainerNode: ASDisplayNode {
+             self.containerNode.frame = CGRect(origin: CGPoint(x: -avatarSize / 2.0, y: -avatarSize / 2.0), size: CGSize(width: avatarSize, height: avatarSize))
+             self.avatarNode.frame = self.containerNode.bounds
+             self.avatarNode.font = avatarPlaceholderFont(size: floor(avatarSize * 16.0 / 37.0))
++            // Lunagram: растушёвка краёв — только у своего профиля.
++            self.lunagramApplyFeather(isSettings: isSettings)
+ 
+             if let item = item {
+                 let representations: [ImageRepresentationWithReference]
