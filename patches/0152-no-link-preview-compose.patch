@@ -1,0 +1,36 @@
+diff --git a/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift b/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
+index ae5118b8..3add7688 100644
+--- a/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
++++ b/submodules/TelegramUI/Sources/Chat/UpdateChatPresentationInterfaceState.swift
+@@ -6,6 +6,7 @@ import SwiftSignalKit
+ import TelegramCore
+ import TelegramPresentationData
+ import AccountContext
++import Lunagram
+ import ChatPresentationInterfaceState
+ import ChatInterfaceState
+ import TelegramNotices
+@@ -306,7 +307,22 @@ func updateChatPresentationInterfaceStateImpl(
+         var inScope = true
+         var inScopeResult: ((TelegramMediaWebpage?) -> (TelegramMediaWebpage, String)?)?
+         let linkPreviews: Signal<Bool, NoError>
+-        if case let .peer(peerId) = selfController.chatLocation, peerId.namespace == Namespaces.Peer.SecretChat {
++        if LunagramSettings.noLinkPreview {
++            // Lunagram: предпросмотр ссылок убран настройкой — тогда не
++            // запрашиваем его вовсе.
++            //
++            // Заслонка тут УЖЕ есть: тем же `.single(false)` родной код гасит
++            // предпросмотр там, где ссылки запрещены в переписке (ниже,
++            // bannedEmbedLinks). Своего пути не изобретаем.
++            //
++            // Это ВТОРАЯ половина настройки. Первая, в ChatControllerNode,
++            // ставит пометку в самом отправляемом сообщении: без неё
++            // предпросмотр сделал бы сам сервер. Нужны обе — эта про то, что
++            // видишь ты, пока набираешь, та про то, что уйдёт на сервер.
++            // Раньше тут была дырка: предпросмотр мелькал при наборе, хотя
++            // уходило без него. На ПК закрыто так же, двумя правками.
++            linkPreviews = .single(false)
++        } else if case let .peer(peerId) = selfController.chatLocation, peerId.namespace == Namespaces.Peer.SecretChat {
+             linkPreviews = interactiveChatLinkPreviewsEnabled(accountManager: selfController.context.sharedContext.accountManager, displayAlert: { [weak selfController] f in
+                 guard let selfController else {
+                     return
