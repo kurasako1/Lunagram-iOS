@@ -1,0 +1,137 @@
+diff --git a/submodules/Lunagram/Sources/LunagramProfileBanner.swift b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+index 515d684b..35729ead 100644
+--- a/submodules/Lunagram/Sources/LunagramProfileBanner.swift
++++ b/submodules/Lunagram/Sources/LunagramProfileBanner.swift
+@@ -52,6 +52,9 @@ public final class LunagramProfileBannerView: UIView {
+     // работает и для фото, и для ролика.
+     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+     private let dimView = UIView()
++    // Растворение нижнего края: прозрачность задаёт маска, сам баннер
++    // не трогаем. Иначе пришлось бы разбирать на слои и фото, и видео.
++    private let fadeMask = CAGradientLayer()
+     private var restHeight: CGFloat
+     private var shownURL: URL?
+     private var shownPreset: LunagramBannerPreset?
+@@ -66,6 +69,14 @@ public final class LunagramProfileBannerView: UIView {
+         super.init(frame: CGRect())
+         self.isUserInteractionEnabled = false
+         self.clipsToBounds = true
++        // Маска сверху донизу: доля сверху непрозрачна, хвост тает.
++        self.fadeMask.colors = [
++            UIColor.white.cgColor,
++            UIColor.white.cgColor,
++            UIColor.white.withAlphaComponent(0.0).cgColor,
++        ]
++        self.fadeMask.startPoint = CGPoint(x: 0.5, y: 0.0)
++        self.fadeMask.endPoint = CGPoint(x: 0.5, y: 1.0)
+         // Подложка меняет размер и между нашими обновлениями — при своих
+         // анимациях. Пусть баннер следует за ней сам.
+         self.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+@@ -139,9 +150,43 @@ public final class LunagramProfileBannerView: UIView {
+             self.playerView?.frame = placed
+             CATransaction.commit()
+         }
++        self.lunagramLayoutFade(size: size)
+         self.renderPresetIfNeeded()
+     }
+ 
++    /// Поставить или снять растворение нижнего края.
++    ///
++    /// Маску вешаем на СЕБЯ, а не на contentView: внутри и картинка, и
++    /// затемнение, и размытие — таять они должны вместе, иначе на хвосте
++    /// останется висеть затемнение без картинки.
++    ///
++    /// Ноль — маску снимаем совсем. Пустая маска стоит кадра на каждой
++    /// перерисовке шапки, а шапку перерисовывают на каждом движении
++    /// прокрутки.
++    private func lunagramLayoutFade(size: CGSize) {
++        let share = CGFloat(LunagramSettings.profileBannerFade) / 100.0
++        guard share > 0.001, size.height > 1.0, size.width > 1.0 else {
++            if self.layer.mask === self.fadeMask {
++                self.layer.mask = nil
++            }
++            return
++        }
++        if self.layer.mask !== self.fadeMask {
++            self.layer.mask = self.fadeMask
++        }
++        // Шапку тянут и отпускают — рамку маски двигаем без анимации,
++        // иначе хвост отстаёт от баннера и на миг видно шов.
++        CATransaction.begin()
++        CATransaction.setDisableActions(true)
++        self.fadeMask.frame = CGRect(origin: CGPoint(), size: size)
++        self.fadeMask.locations = [
++            0.0,
++            NSNumber(value: Float(1.0 - share)),
++            1.0,
++        ]
++        CATransaction.commit()
++    }
++
+     /// Нарисованный баннер рисуем под высоту шапки в покое, а не под
+     /// текущую: когда шапку тянут вниз, картинка растягивается, как фото, и
+     /// перерисовывать звёзды на каждом кадре не приходится.
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 273c4af5..d3fbe107 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -35,6 +35,7 @@ public final class LunagramSettings {
+         static let profileBannerEnabled = "lunagram.banner.enabled"
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerBlur = "lunagram.banner.blur"
++        static let profileBannerFade = "lunagram.banner.fade"
+         static let profileBannerFile = "lunagram.banner.file"
+         static let profileBannerPreset = "lunagram.banner.preset"
+         static let profileBannerOffsetX = "lunagram.banner.offsetX"
+@@ -1556,6 +1557,13 @@ public final class LunagramSettings {
+     }
+ 
+     /// Затемнение своего баннера в процентах — как ползунок на ПК.
++    /// Насколько нижний край баннера растворяется в фон, в процентах его
++    /// высоты. Ноль — обрубается ровно, как было.
++    public static var profileBannerFade: Int {
++        get { return clamped(Key.profileBannerFade, 0, 60, 0) }
++        set { setClamped(newValue, Key.profileBannerFade, 0, 60) }
++    }
++
+     public static var profileBannerDimPercent: Int {
+         get {
+             if defaults.object(forKey: Key.profileBannerDimPercent) != nil {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 8eb2a7f8..6c0ec709 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1471,6 +1471,7 @@ private struct LunagramMediaState: Equatable {
+     var wallpaperZoom: Int = 100
+     var cardsDimPercent: Int = 0
+     var bannerDimPercent: Int = 0
++    var bannerFade: Int = 0
+     var nameGlowPercent: Int = 0
+     var nameColorRGB: UInt32 = 0xFFFFFF
+     var musicFile: String = ""
+@@ -1510,6 +1511,7 @@ private struct LunagramMediaState: Equatable {
+         state.wallpaperZoom = LunagramSettings.wallpaperCrop.zoom
+         state.cardsDimPercent = LunagramSettings.dialogCardsDimPercent
+         state.bannerDimPercent = LunagramSettings.profileBannerDimPercent
++        state.bannerFade = LunagramSettings.profileBannerFade
+         state.nameGlowPercent = LunagramSettings.profileNameGlowPercent
+         state.musicFile = LunagramSettings.profileMusicBgURL?.lastPathComponent ?? ""
+         state.musicColor = LunagramSettings.profileMusicBgColor
+@@ -1690,6 +1692,8 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             // Затемнение и размытие — ползунками, как на ПК.
+             entries.append(.slider(.bannerPhoto, 10, "Затемнение", media.bannerDimPercent, 0, 100, 5, "\(media.bannerDimPercent)%"))
+             entries.append(.slider(.bannerPhoto, 11, "Размытие", media.bannerBlur, 0, 100, 10, "\(media.bannerBlur)%"))
++            // Растворение нижнего края — как «Соединить с фоном» в плагине.
++            entries.append(.slider(.bannerPhoto, 12, "Растворить край", media.bannerFade, 0, 60, 5, media.bannerFade == 0 ? "нет" : "\(media.bannerFade)%"))
+         }
+         entries.append(.info(.bannerPhoto, 0, media.hasBanner
+             ? "«Подогнать кадр» — двигай пальцем и приближай щипком, как на ПК. Затемнение — чтобы на светлом фото читались имя и статус. Размытие смягчает пёстрый фон."
+@@ -2112,6 +2116,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBannerDimPercent = value
+         case 11:
+             LunagramSettings.profileBannerBlur = value
++        case 12:
++            LunagramSettings.profileBannerFade = value
+         case 20:
+             LunagramSettings.liveWallpaperDimPercent = value
+         case 23:
