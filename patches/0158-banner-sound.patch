@@ -1,0 +1,196 @@
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 770d91d1..48b2b4cd 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -36,6 +36,8 @@ public final class LunagramSettings {
+         static let profileBannerDim = "lunagram.banner.dim"
+         static let profileBannerBlur = "lunagram.banner.blur"
+         static let profileBannerFade = "lunagram.banner.fade"
++        static let profileBannerSound = "lunagram.banner.sound"
++        static let profileBannerVolume = "lunagram.banner.volume"
+         static let profileBannerFile = "lunagram.banner.file"
+         static let profileBannerPreset = "lunagram.banner.preset"
+         static let profileBannerOffsetX = "lunagram.banner.offsetX"
+@@ -1595,6 +1597,21 @@ public final class LunagramSettings {
+     }
+ 
+     /// Затемнение своего баннера в процентах — как ползунок на ПК.
++    /// Играть ли звук у видео-баннера.
++    ///
++    /// По умолчанию выключено, и это не осторожность ради осторожности:
++    /// звук в профиле человек не ждёт, а музыку в наушниках он слушает.
++    public static var profileBannerSound: Bool {
++        get { return flag(Key.profileBannerSound, default: false) }
++        set { setFlag(newValue, Key.profileBannerSound) }
++    }
++
++    /// Громкость звука баннера в процентах.
++    public static var profileBannerVolume: Int {
++        get { return clamped(Key.profileBannerVolume, 0, 100, 0) }
++        set { setClamped(newValue, Key.profileBannerVolume, 0, 100) }
++    }
++
+     /// Насколько нижний край баннера растворяется в фон, в процентах его
+     /// высоты. Ноль — обрубается ровно, как было.
+     public static var profileBannerFade: Int {
+diff --git a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+index c079c9fa..7a2f6835 100644
+--- a/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
++++ b/submodules/Lunagram/Sources/LunagramVideoWallpaper.swift
+@@ -26,9 +26,21 @@ public final class LunagramVideoWallpaper {
+             return nil
+         }
+         return LunagramSettings.profileBannerURL
++    }, wantsSound: {
++        return LunagramSettings.profileBannerSound
++    }, soundVolume: {
++        return Float(LunagramSettings.profileBannerVolume) / 100.0
+     })
+ 
+     let player: AVQueuePlayer
++    /// Нужен ли этому проигрывателю звук. У обоев переписки — никогда:
++    /// они фон, и звучать фону незачем. У баннера — по настройке.
++    private let wantsSound: () -> Bool
++    /// Громкость в долях единицы, 0…1.
++    private let soundVolume: () -> Float
++    /// С какой дорожкой сейчас заряжен ролик — чтобы перезарядить его,
++    /// когда звук включили или выключили.
++    private var loadedWithSound = false
+     /// Какой ролик сейчас нужен по настройкам. Пусто — никакой.
+     private let source: () -> URL?
+     private var looper: AVPlayerLooper?
+@@ -38,9 +50,17 @@ public final class LunagramVideoWallpaper {
+     private var attached = 0
+     private var foregroundObserver: NSObjectProtocol?
+ 
+-    private init(source: @escaping () -> URL?) {
++    private init(
++        source: @escaping () -> URL?,
++        wantsSound: @escaping () -> Bool = { false },
++        soundVolume: @escaping () -> Float = { 0.0 }
++    ) {
+         self.source = source
++        self.wantsSound = wantsSound
++        self.soundVolume = soundVolume
+         let player = AVQueuePlayer()
++        // Заглушку снимаем только там, где звук попросили, — ниже, при
++        // заряжании ролика. По умолчанию молчим.
+         player.isMuted = true
+         // Обои не должны мешать телефону засыпать.
+         player.preventsDisplaySleepDuringVideoPlayback = false
+@@ -79,6 +99,12 @@ public final class LunagramVideoWallpaper {
+             self.stop()
+             return
+         }
++        // Звук включили или выключили — дорожка в ролике другая, надо
++        // заряжать заново. Без этой проверки настройка срабатывала бы
++        // только после перезапуска.
++        if self.currentURL != nil, self.loadedWithSound != self.wantsSound() {
++            self.stop()
++        }
+         if url != self.currentURL {
+             self.open(url)
+         }
+@@ -91,8 +117,20 @@ public final class LunagramVideoWallpaper {
+         self.looper?.disableLooping()
+         self.looper = nil
+         self.player.removeAllItems()
+-        let item = AVPlayerItem(asset: LunagramVideoWallpaper.silentAsset(url))
++        // Со звуком берём ролик как есть, без звука — вырезаем дорожку.
++        // Вырезать важнее, чем приглушить: см. silentAsset.
++        let withSound = self.wantsSound()
++        let asset: AVAsset = withSound
++            ? AVURLAsset(url: url)
++            : LunagramVideoWallpaper.silentAsset(url)
++        let item = AVPlayerItem(asset: asset)
+         self.looper = AVPlayerLooper(player: self.player, templateItem: item)
++        self.player.isMuted = !withSound
++        self.player.volume = withSound ? self.soundVolume() : 0.0
++        if withSound {
++            LunagramVideoWallpaper.allowMixing()
++        }
++        self.loadedWithSound = withSound
+         self.currentURL = url
+     }
+ 
+@@ -104,6 +142,35 @@ public final class LunagramVideoWallpaper {
+         self.currentURL = nil
+     }
+ 
++    /// Разрешить своему звуку подмешиваться к чужому.
++    ///
++    /// Без этого наш баннер оборвал бы музыку в наушниках, стоило зайти в
++    /// свой профиль. Ambient + mixWithOthers значит «мой звук
++    /// необязательный, чужой важнее»: он подмешивается и глохнет сам,
++    /// когда телефон переводят в беззвучный режим. Для украшения это
++    /// ровно то, что нужно.
++    ///
++    /// Сеанс просим ОДИН РАЗ: каждая просьба стоит обращения к системе, а
++    /// ролик перезаряжается на каждое открытие профиля.
++    private static var mixingAllowed = false
++
++    private static func allowMixing() {
++        guard !mixingAllowed else {
++            return
++        }
++        mixingAllowed = true
++        do {
++            try AVAudioSession.sharedInstance().setCategory(
++                .ambient,
++                mode: .default,
++                options: [.mixWithOthers])
++        } catch {
++            // Не вышло — значит звука не будет. Это не повод падать и не
++            // повод жаловаться: украшение не стоит ни того, ни другого.
++            mixingAllowed = false
++        }
++    }
++
+     /// Ролик без звуковой дорожки.
+     ///
+     /// Приглушить мало: даже беззвучный проигрыватель с дорожкой может
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 583b5e34..214e6ea8 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1472,6 +1472,8 @@ private struct LunagramMediaState: Equatable {
+     var cardsDimPercent: Int = 0
+     var bannerDimPercent: Int = 0
+     var bannerFade: Int = 0
++    var bannerVolume: Int = 0
++    var bannerIsVideo: Bool = false
+     var nameGlowPercent: Int = 0
+     var nameColor2: Int = 0
+     var nameGradient: Int = 0
+@@ -1515,6 +1517,8 @@ private struct LunagramMediaState: Equatable {
+         state.cardsDimPercent = LunagramSettings.dialogCardsDimPercent
+         state.bannerDimPercent = LunagramSettings.profileBannerDimPercent
+         state.bannerFade = LunagramSettings.profileBannerFade
++        state.bannerVolume = LunagramSettings.profileBannerVolume
++        state.bannerIsVideo = LunagramSettings.profileBannerIsVideo
+         state.nameGlowPercent = LunagramSettings.profileNameGlowPercent
+         state.nameColor2 = LunagramSettings.profileNameColor2
+         state.nameGradient = LunagramSettings.profileNameGradient
+@@ -1700,6 +1704,13 @@ private func lunagramSectionEntries(section: LunagramSettingsSection, values: [L
+             entries.append(.slider(.bannerPhoto, 11, "Размытие", media.bannerBlur, 0, 100, 10, "\(media.bannerBlur)%"))
+             // Растворение нижнего края — как «Соединить с фоном» в плагине.
+             entries.append(.slider(.bannerPhoto, 12, "Растворить край", media.bannerFade, 0, 60, 5, media.bannerFade == 0 ? "нет" : "\(media.bannerFade)%"))
++            // Звук — только у видео: у фото ему взяться неоткуда.
++            //
++            // Ноль и есть «без звука»: отдельного выключателя не
++            // заводим, он был бы вторым рычагом к тому же самому.
++            if media.bannerIsVideo {
++                entries.append(.slider(.bannerPhoto, 13, "Звук", media.bannerVolume, 0, 100, 10, media.bannerVolume == 0 ? "нет" : "\(media.bannerVolume)%"))
++            }
+         }
+         entries.append(.info(.bannerPhoto, 0, media.hasBanner
+             ? "«Подогнать кадр» — двигай пальцем и приближай щипком, как на ПК. Затемнение — чтобы на светлом фото читались имя и статус. Размытие смягчает пёстрый фон."
+@@ -2127,6 +2138,8 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             LunagramSettings.profileBannerBlur = value
+         case 12:
+             LunagramSettings.profileBannerFade = value
++        case 13:
++            LunagramSettings.profileBannerVolume = value
+         case 20:
+             LunagramSettings.liveWallpaperDimPercent = value
+         case 23:
