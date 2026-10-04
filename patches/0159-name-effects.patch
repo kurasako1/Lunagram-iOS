@@ -1,0 +1,266 @@
+diff --git a/submodules/Lunagram/Sources/LunagramNameFill.swift b/submodules/Lunagram/Sources/LunagramNameFill.swift
+index 75bdf78e..5ef11b5a 100644
+--- a/submodules/Lunagram/Sources/LunagramNameFill.swift
++++ b/submodules/Lunagram/Sources/LunagramNameFill.swift
+@@ -11,6 +11,63 @@ import UIKit
+ /// что заливка привязана к началу надписи и повторяется дальше, поэтому
+ /// картинку делаем заведомо шире любого имени — тогда повтора не видно.
+ public enum LunagramNameFill {
++    /// Готовый вид имени.
++    ///
++    /// Огонь, лёд и неон — это пары цветов, движения в них нет. Радуга и
++    /// пульс — движение, и они считаются от текущего времени.
++    public enum Effect: Int, CaseIterable {
++        case own = 0
++        case fire = 1
++        case ice = 2
++        case neon = 3
++        case rainbow = 4
++        case pulse = 5
++
++        public var title: String {
++            switch self {
++            case .own: return "Свой цвет"
++            case .fire: return "Огонь"
++            case .ice: return "Лёд"
++            case .neon: return "Неон"
++            case .rainbow: return "Радуга"
++            case .pulse: return "Пульс"
++            }
++        }
++
++        /// Движется ли эффект. По этому признаку решается, нужен ли
++        /// таймер: за неподвижным следить незачем.
++        public var isAnimated: Bool {
++            switch self {
++            case .rainbow, .pulse: return true
++            default: return false
++            }
++        }
++
++        /// Пара цветов у неподвижных эффектов.
++        var pair: (CGColor, CGColor)? {
++            func rgb(_ value: UInt32) -> CGColor {
++                return UIColor(
++                    red: CGFloat((value >> 16) & 0xFF) / 255.0,
++                    green: CGFloat((value >> 8) & 0xFF) / 255.0,
++                    blue: CGFloat(value & 0xFF) / 255.0,
++                    alpha: 1.0).cgColor
++            }
++            switch self {
++            case .fire:
++                return (rgb(0xFFD166), rgb(0xE8411A))
++            case .ice:
++                return (rgb(0xE8FBFF), rgb(0x3FA9F5))
++            case .neon:
++                return (rgb(0xFF4FD8), rgb(0x3FF0FF))
++            default:
++                return nil
++            }
++        }
++    }
++
++    public static var effect: Effect {
++        return Effect(rawValue: LunagramSettings.profileNameEffect) ?? .own
++    }
+     /// Шире любого имени: при 28 пунктах даже длинное имя короче.
+     private static let width: CGFloat = 520.0
+     private static let height: CGFloat = 44.0
+@@ -23,13 +80,51 @@ public enum LunagramNameFill {
+     /// Возвращает `nil`, когда своего цвета нет вовсе — тогда имя остаётся
+     /// телеграмовским, и вмешиваться незачем.
+     public static func color() -> UIColor? {
++        let effect = self.effect
++        switch effect {
++        case .rainbow:
++            // Полный оборот за десять секунд — как у переливания в
++            // списке переписок. Быстрее рябит и мешает читать,
++            // медленнее — не заметно.
++            let phase = CGFloat(fmod(CFAbsoluteTimeGetCurrent(), 10.0) / 10.0)
++            return UIColor(hue: phase, saturation: 0.6, brightness: 1.0, alpha: 1.0)
++        case .pulse:
++            // Дышит яркостью своего цвета, а не чужого: пульс — это
++            // «моё имя дышит», а не «моё имя мигает белым».
++            let base = LunagramSettings.profileNameTint().flatMap({ UIColor(cgColor: $0) }) ?? .white
++            var hue: CGFloat = 0.0
++            var saturation: CGFloat = 0.0
++            var brightness: CGFloat = 0.0
++            var alpha: CGFloat = 0.0
++            guard base.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha) else {
++                return base
++            }
++            // Полный вдох-выдох за две секунды. Качаем от 0.6 до 1.0 от
++            // своей яркости: ниже имя становится плохо читаемым.
++            let wave = (1.0 + cos(CFAbsoluteTimeGetCurrent() * .pi)) / 2.0
++            let factor = 0.6 + 0.4 * CGFloat(wave)
++            return UIColor(hue: hue, saturation: saturation, brightness: min(1.0, brightness * factor), alpha: alpha)
++        default:
++            break
++        }
++        // Готовая пара цветов берётся вместо своей — она и есть эффект.
++        if let pair = effect.pair {
++            return self.gradient(first: pair.0, second: pair.1, vertical: LunagramSettings.profileNameGradient == 1)
++        }
+         guard let first = LunagramSettings.profileNameTint() else {
+             return nil
+         }
+         guard let second = LunagramSettings.profileNameTint2() else {
+             return UIColor(cgColor: first)
+         }
+-        let vertical = LunagramSettings.profileNameGradient == 1
++        return self.gradient(
++            first: first,
++            second: second,
++            vertical: LunagramSettings.profileNameGradient == 1)
++    }
++
++    /// Заливка-градиент из двух цветов. Запоминается по самим цветам.
++    private static func gradient(first: CGColor, second: CGColor, vertical: Bool) -> UIColor {
+         let key = "\(first.components ?? [])|\(second.components ?? [])|\(vertical)"
+ 
+         lock.lock()
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 48b2b4cd..1b3f2fed 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -88,6 +88,7 @@ public final class LunagramSettings {
+         static let profileNameGlowPercent = "lunagram.profile.nameGlowPercent"
+         static let profileNameColor2 = "lunagram.profile.nameColor2"
+         static let profileNameGradient = "lunagram.profile.nameGradient"
++        static let profileNameEffect = "lunagram.profile.nameEffect"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
+         static let profileButtonsColor = "lunagram.profile.buttonsColor"
+         static let profileGlassColor = "lunagram.profile.glassColor"
+@@ -1296,6 +1297,12 @@ public final class LunagramSettings {
+ 
+ 
+     /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
++    /// Эффект имени: 0 — свой цвет, дальше готовые (см. LunagramNameFill).
++    public static var profileNameEffect: Int {
++        get { return clamped(Key.profileNameEffect, 0, 5, 0) }
++        set { setClamped(newValue, Key.profileNameEffect, 0, 5) }
++    }
++
+     /// Второй цвет имени — номер в той же палитре. Ноль — градиента нет.
+     public static var profileNameColor2: Int {
+         get { return clamped(Key.profileNameColor2, 0, profileNameColors.count, 0) }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index 214e6ea8..ce3a9bdb 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1477,6 +1477,7 @@ private struct LunagramMediaState: Equatable {
+     var nameGlowPercent: Int = 0
+     var nameColor2: Int = 0
+     var nameGradient: Int = 0
++    var nameEffect: Int = 0
+     var nameColorRGB: UInt32 = 0xFFFFFF
+     var musicFile: String = ""
+     var musicColor: UInt32? = nil
+@@ -1522,6 +1523,7 @@ private struct LunagramMediaState: Equatable {
+         state.nameGlowPercent = LunagramSettings.profileNameGlowPercent
+         state.nameColor2 = LunagramSettings.profileNameColor2
+         state.nameGradient = LunagramSettings.profileNameGradient
++        state.nameEffect = LunagramSettings.profileNameEffect
+         state.musicFile = LunagramSettings.profileMusicBgURL?.lastPathComponent ?? ""
+         state.musicColor = LunagramSettings.profileMusicBgColor
+         state.musicDim = LunagramSettings.profileMusicBgDim
+@@ -2377,6 +2379,14 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.arguments?.pick(.listText)
+         case .editWallpaperCrop:
+             shared.arguments?.openEditor(.liveWallpaper)
++        case .nameEffect:
++            let effects = LunagramNameFill.Effect.allCases
++            let selected = effects.firstIndex(where: { $0.rawValue == LunagramSettings.profileNameEffect }) ?? 0
++            shared.push?(lunagramChoiceScreen(context: context, title: "Вид имени", options: effects.map { $0.title }, selected: selected, info: "Огонь, лёд и неон — готовые пары цветов, они заливают имя вместо своего цвета. Радуга и пульс движутся: радуга обходит круг за десять секунд, пульс дышит яркостью твоего цвета за две.\n\nШиммера тут нет нарочно: блик бежит вдоль букв и его надо рисовать каждый кадр, а наше имя перерисовывается целой шапкой. Дёргающийся блик хуже, чем его отсутствие.", select: { index in
++                LunagramSettings.profileNameEffect = effects[index].rawValue
++                LunagramNameFill.reset()
++                refreshMedia()
++            }))
+         case .nameColor2:
+             let titles = ["Нет"] + LunagramSettings.profileNameColors.map { $0.title }
+             shared.push?(lunagramChoiceScreen(context: context, title: "Второй цвет имени", options: titles, selected: LunagramSettings.profileNameColor2, info: "Имя заливается градиентом из первого цвета во второй. «Нет» — обычный ровный цвет.", select: { index in
+@@ -2680,6 +2690,8 @@ private enum LunagramChoice: Int32 {
+     // Второй цвет имени и направление градиента.
+     case nameColor2 = 144
+     case nameGradient = 145
++    // Готовый вид имени.
++    case nameEffect = 146
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -3632,6 +3644,7 @@ func lunagramAvatarFrameScreen(context: AccountContext) -> ViewController {
+ private func lunagramNameEntries(values: [LunagramToggle: Bool], media: LunagramMediaState) -> [LunagramSettingsEntry] {
+     var rows = LunagramRowsBuilder()
+     rows.row(.preview(.name, Int(media.nameColorRGB % 1_000_003) &* 1_000 &+ media.nameGlowPercent))
++    rows.row(.value(LunagramChoice.nameEffect.rawValue, "Вид", (LunagramNameFill.Effect(rawValue: media.nameEffect) ?? .own).title, "sparkles"))
+     rows.row(.color(LunagramChoice.nameColor.rawValue, "Цвет имени", media.nameColorRGB))
+     rows.row(.action(LunagramChoice.nameColorReset.rawValue, "Вернуть обычный цвет", nil))
+     // Градиент показываем только когда свой цвет уже выбран: без первого
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index 99183481..0fb0a200 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -211,6 +211,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+     
+     // Lunagram: следим за настройками, чтобы баннер появлялся сразу.
+     private var lunagramSettingsObserver: NSObjectProtocol?
++    /// Таймер движущихся эффектов имени. Живёт только при них.
++    private var lunagramNameTicker: Foundation.Timer?
+ 
+     init(context: AccountContext, controller: PeerInfoScreenImpl, avatarInitiallyExpanded: Bool, isOpenedFromChat: Bool, isMediaOnly: Bool, isSettings: Bool, isMyProfile: Bool, forumTopicThreadId: Int64?, chatLocation: ChatLocation) {
+         self.context = context
+@@ -320,7 +322,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         if isSettings || isMyProfile {
+             self.lunagramSettingsObserver = NotificationCenter.default.addObserver(forName: LunagramSettings.didChangeNotification, object: nil, queue: .main, using: { [weak self] _ in
+                 self?.requestUpdateLayout?(false)
++                self?.lunagramUpdateNameTicker()
+             })
++            self.lunagramUpdateNameTicker()
+         }
+ 
+         self.view.addSubview(self.backgroundBannerView)
+@@ -395,11 +399,44 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         }
+     }
+     
++    /// Движущиеся эффекты имени — радуга и пульс — считают цвет от
++    /// текущего времени. Значит шапку надо просить перерисоваться.
++    ///
++    /// Таймер МЕСТНЫЙ и живёт только при движущемся эффекте. Через общее
++    /// оповещение о смене настроек этого делать нельзя: его слушают строки
++    /// настроек по всему приложению, и мы перерисовывали бы их раз в
++    /// секунду без всякой нужды.
++    ///
++    /// Раз в секунду, не чаще: радуга обходит круг за десять секунд, пульс
++    /// дышит за две — на глаз этого хватает, а шапка тяжёлая.
++    private func lunagramUpdateNameTicker() {
++        let needed = LunagramNameFill.effect.isAnimated
++        if needed {
++            guard self.lunagramNameTicker == nil else {
++                return
++            }
++            let timer = Foundation.Timer(timeInterval: 1.0, repeats: true, block: { [weak self] _ in
++                // Не видно — не рисуем: профиль могли закрыть, а таймер
++                // снимается не мгновенно.
++                guard let self, self.view.window != nil else {
++                    return
++                }
++                self.requestUpdateLayout?(false)
++            })
++            RunLoop.main.add(timer, forMode: .common)
++            self.lunagramNameTicker = timer
++        } else {
++            self.lunagramNameTicker?.invalidate()
++            self.lunagramNameTicker = nil
++        }
++    }
++
+     deinit {
+         self.emojiStatusPackDisposable.dispose()
+         if let lunagramSettingsObserver = self.lunagramSettingsObserver {
+             NotificationCenter.default.removeObserver(lunagramSettingsObserver)
+         }
++        self.lunagramNameTicker?.invalidate()
+     }
+     
+     override func didLoad() {
