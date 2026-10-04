@@ -1,0 +1,231 @@
+diff --git a/submodules/Lunagram/Sources/LunagramNameFill.swift b/submodules/Lunagram/Sources/LunagramNameFill.swift
+new file mode 100644
+index 00000000..75bdf78e
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramNameFill.swift
+@@ -0,0 +1,75 @@
++import UIKit
++
++/// Заливка имени профиля градиентом.
++///
++/// Имя рисуется обычной надписью, и цвет ей задаётся одним `UIColor`. Чтобы
++/// залить буквы градиентом, не переписывая отрисовку имени, отдаём ей цвет
++/// ЗАЛИВКОЙ КАРТИНКОЙ: `UIColor(patternImage:)`. Буквы заливаются картинкой,
++/// а картинка у нас — градиент.
++///
++/// Так ни узел надписи, ни шапка профиля не меняются вовсе. Цена приёма в том,
++/// что заливка привязана к началу надписи и повторяется дальше, поэтому
++/// картинку делаем заведомо шире любого имени — тогда повтора не видно.
++public enum LunagramNameFill {
++    /// Шире любого имени: при 28 пунктах даже длинное имя короче.
++    private static let width: CGFloat = 520.0
++    private static let height: CGFloat = 44.0
++
++    private static let lock = NSLock()
++    private static var cache: [String: UIColor] = [:]
++
++    /// Цвет для имени: градиент, если выбран второй цвет, иначе ровный.
++    ///
++    /// Возвращает `nil`, когда своего цвета нет вовсе — тогда имя остаётся
++    /// телеграмовским, и вмешиваться незачем.
++    public static func color() -> UIColor? {
++        guard let first = LunagramSettings.profileNameTint() else {
++            return nil
++        }
++        guard let second = LunagramSettings.profileNameTint2() else {
++            return UIColor(cgColor: first)
++        }
++        let vertical = LunagramSettings.profileNameGradient == 1
++        let key = "\(first.components ?? [])|\(second.components ?? [])|\(vertical)"
++
++        lock.lock()
++        if let cached = cache[key] {
++            lock.unlock()
++            return cached
++        }
++        lock.unlock()
++
++        let size = CGSize(width: width, height: height)
++        let renderer = UIGraphicsImageRenderer(size: size)
++        let image = renderer.image { context in
++            let cg = context.cgContext
++            guard let gradient = CGGradient(
++                colorsSpace: CGColorSpaceCreateDeviceRGB(),
++                colors: [first, second] as CFArray,
++                locations: [0.0, 1.0]
++            ) else {
++                cg.setFillColor(first)
++                cg.fill(CGRect(origin: CGPoint(), size: size))
++                return
++            }
++            let start = CGPoint()
++            let end = vertical
++                ? CGPoint(x: 0.0, y: size.height)
++                : CGPoint(x: size.width, y: 0.0)
++            cg.drawLinearGradient(gradient, start: start, end: end, options: [])
++        }
++        let color = UIColor(patternImage: image)
++
++        lock.lock()
++        cache[key] = color
++        lock.unlock()
++        return color
++    }
++
++    /// Сбросить запомненное — цвета сменились.
++    public static func reset() {
++        lock.lock()
++        cache.removeAll()
++        lock.unlock()
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index e2701a77..770d91d1 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -84,6 +84,8 @@ public final class LunagramSettings {
+         static let profileNameGlow = "lunagram.profile.nameGlow"
+         // Свечение имени в процентах — ползунком, как на ПК (раньше ступени).
+         static let profileNameGlowPercent = "lunagram.profile.nameGlowPercent"
++        static let profileNameColor2 = "lunagram.profile.nameColor2"
++        static let profileNameGradient = "lunagram.profile.nameGradient"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
+         static let profileButtonsColor = "lunagram.profile.buttonsColor"
+         static let profileGlassColor = "lunagram.profile.glassColor"
+@@ -1292,6 +1294,34 @@ public final class LunagramSettings {
+ 
+ 
+     /// Цвет имени, которым его рисовать, или `nil` — тогда обычный белый.
++    /// Второй цвет имени — номер в той же палитре. Ноль — градиента нет.
++    public static var profileNameColor2: Int {
++        get { return clamped(Key.profileNameColor2, 0, profileNameColors.count, 0) }
++        set { setClamped(newValue, Key.profileNameColor2, 0, profileNameColors.count) }
++    }
++
++    /// Направление градиента: 0 — вбок, 1 — вниз.
++    public static var profileNameGradient: Int {
++        get { return clamped(Key.profileNameGradient, 0, 1, 0) }
++        set { setClamped(newValue, Key.profileNameGradient, 0, 1) }
++    }
++
++    /// Второй цвет градиента, если он выбран и первый цвет вообще есть.
++    ///
++    /// Без первого цвета градиент не собираем: имя тогда белое по воле
++    /// Telegram, и мешать в него один свой цвет — значит получить
++    /// переход из белого в непонятно что.
++    public static func profileNameTint2() -> CGColor? {
++        guard profileNameTint() != nil else {
++            return nil
++        }
++        let index = profileNameColor2
++        guard index > 0, index <= profileNameColors.count else {
++            return nil
++        }
++        return color(from: profileNameColors[index - 1].rgb, alpha: 1.0)
++    }
++
+     public static func profileNameTint() -> CGColor? {
+         if let custom = profileNameCustomColor {
+             return color(from: custom, alpha: 1.0)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+index ad4babbc..583b5e34 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
+@@ -1473,6 +1473,8 @@ private struct LunagramMediaState: Equatable {
+     var bannerDimPercent: Int = 0
+     var bannerFade: Int = 0
+     var nameGlowPercent: Int = 0
++    var nameColor2: Int = 0
++    var nameGradient: Int = 0
+     var nameColorRGB: UInt32 = 0xFFFFFF
+     var musicFile: String = ""
+     var musicColor: UInt32? = nil
+@@ -1514,6 +1516,8 @@ private struct LunagramMediaState: Equatable {
+         state.bannerDimPercent = LunagramSettings.profileBannerDimPercent
+         state.bannerFade = LunagramSettings.profileBannerFade
+         state.nameGlowPercent = LunagramSettings.profileNameGlowPercent
++        state.nameColor2 = LunagramSettings.profileNameColor2
++        state.nameGradient = LunagramSettings.profileNameGradient
+         state.musicFile = LunagramSettings.profileMusicBgURL?.lastPathComponent ?? ""
+         state.musicColor = LunagramSettings.profileMusicBgColor
+         state.musicDim = LunagramSettings.profileMusicBgDim
+@@ -1972,6 +1976,9 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             }
+             let delegate = LunagramColorPickerDelegate(changed: { color in
+                 LunagramSettings.profileNameCustomColor = lunagramPackColor(color)
++                // Заливку запоминаем по цветам: сменился первый — прежняя
++                // осталась бы висеть до перезапуска.
++                LunagramNameFill.reset()
+                 refreshMedia()
+             }, finished: {
+                 shared.pickerHolder.delegate = nil
+@@ -2357,12 +2364,26 @@ private func lunagramMakeArguments(context: AccountContext, shared: LunagramShar
+             shared.arguments?.pick(.listText)
+         case .editWallpaperCrop:
+             shared.arguments?.openEditor(.liveWallpaper)
++        case .nameColor2:
++            let titles = ["Нет"] + LunagramSettings.profileNameColors.map { $0.title }
++            shared.push?(lunagramChoiceScreen(context: context, title: "Второй цвет имени", options: titles, selected: LunagramSettings.profileNameColor2, info: "Имя заливается градиентом из первого цвета во второй. «Нет» — обычный ровный цвет.", select: { index in
++                LunagramSettings.profileNameColor2 = index
++                LunagramNameFill.reset()
++                refreshMedia()
++            }))
++        case .nameGradient:
++            shared.push?(lunagramChoiceScreen(context: context, title: "Направление градиента", options: ["Вбок", "Вниз"], selected: LunagramSettings.profileNameGradient, info: nil, select: { index in
++                LunagramSettings.profileNameGradient = index
++                LunagramNameFill.reset()
++                refreshMedia()
++            }))
+         case .nameColor:
+             // Палитра айфона: любой цвет, имя перекрашивается на ходу.
+             shared.arguments?.pick(.profileNameColor)
+         case .nameColorReset:
+             LunagramSettings.profileNameCustomColor = nil
+             LunagramSettings.profileNameColor = 0
++            LunagramNameFill.reset()
+             refreshMedia()
+         case .musicPick:
+             shared.arguments?.pick(.music)
+@@ -2643,6 +2664,9 @@ private enum LunagramChoice: Int32 {
+     case typingEffect = 142
+     // Форма аватарки.
+     case avatarShape = 143
++    // Второй цвет имени и направление градиента.
++    case nameColor2 = 144
++    case nameGradient = 145
+ }
+ 
+ private enum LunagramChoiceEntry: ItemListNodeEntry {
+@@ -3597,8 +3621,16 @@ private func lunagramNameEntries(values: [LunagramToggle: Bool], media: Lunagram
+     rows.row(.preview(.name, Int(media.nameColorRGB % 1_000_003) &* 1_000 &+ media.nameGlowPercent))
+     rows.row(.color(LunagramChoice.nameColor.rawValue, "Цвет имени", media.nameColorRGB))
+     rows.row(.action(LunagramChoice.nameColorReset.rawValue, "Вернуть обычный цвет", nil))
++    // Градиент показываем только когда свой цвет уже выбран: без первого
++    // цвета второй не значит ничего, имя тогда белое по воле Telegram.
++    if media.nameColorRGB != 0xFFFFFF || media.nameColor != 0 {
++        rows.row(.value(LunagramChoice.nameColor2.rawValue, "Второй цвет", media.nameColor2 == 0 ? "нет" : (LunagramSettings.profileNameColors[min(media.nameColor2, LunagramSettings.profileNameColors.count) - 1].title), "paintpalette"))
++        if media.nameColor2 != 0 {
++            rows.row(.value(LunagramChoice.nameGradient.rawValue, "Направление", media.nameGradient == 1 ? "вниз" : "вбок", "arrow.left.and.right"))
++        }
++    }
+     rows.row(.slider(70, "Свечение", media.nameGlowPercent, 0, 100, 5))
+-    rows.info("Свечение берёт цвет имени. Если цвет обычный, свечение будет белым.")
++    rows.info("Свечение берёт цвет имени. Если цвет обычный, свечение будет белым.\n\nВторой цвет заливает имя градиентом из первого во второй. Буквы заливаются картинкой-градиентом, поэтому отрисовку имени это не трогает вовсе.")
+     return rows.entries
+ }
+ 
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index cc46ec1e..99183481 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -1276,7 +1276,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             // телеграмовскими. Свечение подменяет тень лишь когда включено:
+             // без него тень нужна, чтобы имя читалось на светлой аватарке.
+             let lunagramIsOwnProfile = self.isSettings || peer.id == self.context.account.peerId
+-            let lunagramNameColor = (lunagramIsOwnProfile ? LunagramSettings.profileNameTint() : nil).flatMap { UIColor(cgColor: $0) } ?? .white
++            // Градиент собирает LunagramNameFill: он же отдаёт ровный цвет,
++            // когда второй не выбран, — чтобы здесь не было двух путей.
++            let lunagramNameColor = (lunagramIsOwnProfile ? LunagramNameFill.color() : nil) ?? .white
+             let lunagramNameGlow = (lunagramIsOwnProfile ? LunagramSettings.profileNameGlowColor() : nil).flatMap { UIColor(cgColor: $0) }
+             titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: lunagramNameColor, shadowColor: lunagramNameGlow)
+             smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: lunagramNameColor, shadowColor: lunagramNameGlow ?? titleShadowColor)
