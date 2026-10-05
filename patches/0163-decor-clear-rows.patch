@@ -1,0 +1,63 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+index ffb5d0b0..19b24e8f 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+@@ -765,6 +765,15 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+                 { [weak self] in
+                     self?.openCrop(kind: .banner)
+                 }))
++            // Без этой строки выбранную картинку нельзя отменить: в старых
++            // экранах для того был пункт «Без картинки» в общем списке.
++            // Сам файл остаётся в ряду своих — снимается только выбор.
++            rows.append(.action(
++                "Убрать картинку",
++                nil,
++                {
++                    LunagramSettings.selectLibraryFile(.banner, name: nil)
++                }))
+         }
+ 
+         rows.append(.header("Как показывать"))
+@@ -834,6 +843,12 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+                 { [weak self] in
+                     self?.openCrop(kind: .profileBackground)
+                 }))
++            rows.append(.action(
++                "Убрать фон",
++                nil,
++                {
++                    LunagramSettings.clearProfileBackground()
++                }))
+         }
+         rows.append(.header("Как показывать"))
+         rows.append(.slider(
+@@ -994,6 +1009,14 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+             { [weak self] in
+                 self?.openFramePicker()
+             }))
++        if LunagramSettings.avatarFrameImageURL != nil {
++            rows.append(.action(
++                "Убрать свою картинку",
++                nil,
++                {
++                    LunagramSettings.clearAvatarFrameImage()
++                }))
++        }
+         rows.append(.slider(
+             "Размер", LunagramSettings.avatarFrameScale, 80, 160, 5,
+             { value in
+@@ -1073,6 +1096,14 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+                 { [weak self] in
+                     self?.openMusicPicker()
+                 }))
++            if LunagramSettings.profileMusicBgURL != nil {
++                rows.append(.action(
++                    "Убрать свой фон",
++                    nil,
++                    {
++                        LunagramSettings.clearProfileMusicBackground()
++                    }))
++            }
+         } else {
+             rows.append(.color(
+                 "Цвет полоски",
