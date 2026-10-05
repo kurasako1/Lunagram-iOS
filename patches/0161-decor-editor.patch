@@ -1,0 +1,2100 @@
+diff --git a/submodules/Lunagram/Sources/LunagramColorWheel.swift b/submodules/Lunagram/Sources/LunagramColorWheel.swift
+new file mode 100644
+index 00000000..e4685662
+--- /dev/null
++++ b/submodules/Lunagram/Sources/LunagramColorWheel.swift
+@@ -0,0 +1,588 @@
++import UIKit
++
++/// Своё окошко выбора цвета — как в плагине Custom Profile.
++///
++/// Почему своё, а не родное iOS (`UIColorPickerViewController`): хозяин
++/// сказал «точь в точь как в плагине». У них квадрат оттенков, под ним
++/// полоса радуги, полоса прозрачности и поле с кодом вида `#00000000`.
++/// Родное окошко iOS выглядит иначе и поля кода с прозрачностью не даёт.
++///
++/// Обычное окно UIKit, а не экран Telegram: внутри только свои рисунки и
++/// жесты, зависимостей не нужно. Так же сделано окно подгонки кадра
++/// (`LunagramCropEditor`) — беру тот же приём.
++public final class LunagramColorWheel: UIViewController {
++    /// Показать окошко. `color` — что выбрано сейчас (nil — ничего).
++    /// `onPick` зовётся при нажатии «Готово», `onClear` — при «Убрать цвет».
++    public static func present(
++        from presenter: UIViewController,
++        title: String,
++        color: UInt32?,
++        allowsAlpha: Bool = true,
++        allowsClear: Bool = true,
++        onPick: @escaping (UInt32) -> Void,
++        onClear: (() -> Void)? = nil
++    ) {
++        let wheel = LunagramColorWheel(
++            titleText: title,
++            color: color,
++            allowsAlpha: allowsAlpha,
++            allowsClear: allowsClear && onClear != nil,
++            onPick: onPick,
++            onClear: onClear)
++        wheel.modalPresentationStyle = .overFullScreen
++        wheel.modalTransitionStyle = .crossDissolve
++        presenter.present(wheel, animated: true, completion: nil)
++    }
++
++    // Цвет держу в HSV, а не в RGB: квадрат и радуга правят именно
++    // насыщенность, яркость и оттенок. Переводить туда-обратно на каждом
++    // движении пальца — значит терять оттенок на чёрном (у чёрного оттенка
++    // нет) и дёргать ползунок радуги.
++    private var hue: CGFloat = 0.0
++    private var saturation: CGFloat = 1.0
++    private var brightness: CGFloat = 1.0
++    private var alpha: CGFloat = 1.0
++
++    private let titleText: String
++    private let allowsAlpha: Bool
++    private let allowsClear: Bool
++    private let onPick: (UInt32) -> Void
++    private let onClear: (() -> Void)?
++
++    private let dimView = UIView()
++    private let sheetView = UIView()
++    private let titleLabel = UILabel()
++    private let squareView = LunagramColorSquareView()
++    private let squareKnob = UIView()
++    private let hueView = LunagramColorStripView(kind: .hue)
++    private let hueKnob = UIView()
++    private let alphaView = LunagramColorStripView(kind: .alpha)
++    private let alphaKnob = UIView()
++    private let previewView = UIView()
++    private let codeField = UITextField()
++    private let clearButton = UIButton(type: .system)
++    private let doneButton = UIButton(type: .system)
++
++    private init(
++        titleText: String,
++        color: UInt32?,
++        allowsAlpha: Bool,
++        allowsClear: Bool,
++        onPick: @escaping (UInt32) -> Void,
++        onClear: (() -> Void)?
++    ) {
++        self.titleText = titleText
++        self.allowsAlpha = allowsAlpha
++        self.allowsClear = allowsClear
++        self.onPick = onPick
++        self.onClear = onClear
++        super.init(nibName: nil, bundle: nil)
++
++        if let color = color {
++            let source = UIColor(
++                red: CGFloat((color >> 16) & 0xFF) / 255.0,
++                green: CGFloat((color >> 8) & 0xFF) / 255.0,
++                blue: CGFloat(color & 0xFF) / 255.0,
++                alpha: 1.0)
++            var h: CGFloat = 0.0
++            var s: CGFloat = 0.0
++            var b: CGFloat = 0.0
++            var a: CGFloat = 0.0
++            if source.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
++                self.hue = h
++                self.saturation = s
++                self.brightness = b
++            }
++            self.alpha = allowsAlpha ? CGFloat((color >> 24) & 0xFF) / 255.0 : 1.0
++            // Старые цвета писались без прозрачности — там верхний байт
++            // ноль, и цвет вышел бы невидимым. Считаю такой непрозрачным.
++            if (color >> 24) == 0 {
++                self.alpha = 1.0
++            }
++        }
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("не используется")
++    }
++
++    public override func viewDidLoad() {
++        super.viewDidLoad()
++        self.view.backgroundColor = .clear
++
++        self.dimView.backgroundColor = UIColor(white: 0.0, alpha: 0.45)
++        self.dimView.addGestureRecognizer(
++            UITapGestureRecognizer(target: self, action: #selector(self.dismissSelf)))
++        self.view.addSubview(self.dimView)
++
++        self.sheetView.backgroundColor = UIColor(white: 0.11, alpha: 1.0)
++        self.sheetView.layer.cornerRadius = 20.0
++        self.sheetView.clipsToBounds = true
++        self.view.addSubview(self.sheetView)
++
++        self.titleLabel.text = self.titleText
++        self.titleLabel.font = .systemFont(ofSize: 17.0, weight: .semibold)
++        self.titleLabel.textColor = .white
++        self.titleLabel.textAlignment = .center
++        self.sheetView.addSubview(self.titleLabel)
++
++        self.sheetView.addSubview(self.squareView)
++        self.sheetView.addSubview(self.hueView)
++        if self.allowsAlpha {
++            self.sheetView.addSubview(self.alphaView)
++        }
++
++        for knob in [self.squareKnob, self.hueKnob, self.alphaKnob] {
++            knob.isUserInteractionEnabled = false
++            knob.layer.borderWidth = 3.0
++            knob.layer.borderColor = UIColor.white.cgColor
++            knob.layer.shadowColor = UIColor.black.cgColor
++            knob.layer.shadowOpacity = 0.35
++            knob.layer.shadowRadius = 2.0
++            knob.layer.shadowOffset = CGSize(width: 0.0, height: 1.0)
++        }
++        self.sheetView.addSubview(self.squareKnob)
++        self.sheetView.addSubview(self.hueKnob)
++        if self.allowsAlpha {
++            self.sheetView.addSubview(self.alphaKnob)
++        }
++
++        self.previewView.layer.cornerRadius = 8.0
++        self.previewView.layer.borderWidth = 1.0
++        self.previewView.layer.borderColor = UIColor(white: 1.0, alpha: 0.25).cgColor
++        self.sheetView.addSubview(self.previewView)
++
++        // Поле кода. Правка кода руками — как у них: вставил «#FF3B30» и
++        // ползунки сами встали на место.
++        self.codeField.font = UIFont.monospacedDigitSystemFont(ofSize: 16.0, weight: .regular)
++        self.codeField.textColor = .white
++        self.codeField.backgroundColor = UIColor(white: 1.0, alpha: 0.08)
++        self.codeField.layer.cornerRadius = 8.0
++        self.codeField.autocapitalizationType = .allCharacters
++        self.codeField.autocorrectionType = .no
++        self.codeField.spellCheckingType = .no
++        self.codeField.returnKeyType = .done
++        self.codeField.textAlignment = .center
++        self.codeField.delegate = self
++        self.codeField.addTarget(
++            self, action: #selector(self.codeChanged), for: .editingDidEnd)
++        self.codeField.addTarget(
++            self, action: #selector(self.codeChanged), for: .editingDidEndOnExit)
++        self.sheetView.addSubview(self.codeField)
++
++        self.clearButton.setTitle("Убрать цвет", for: .normal)
++        self.clearButton.setTitleColor(UIColor(red: 1.0, green: 0.27, blue: 0.23, alpha: 1.0), for: .normal)
++        self.clearButton.titleLabel?.font = .systemFont(ofSize: 17.0)
++        self.clearButton.addTarget(self, action: #selector(self.clearPressed), for: .touchUpInside)
++        self.clearButton.isHidden = !self.allowsClear
++        self.sheetView.addSubview(self.clearButton)
++
++        self.doneButton.setTitle("Готово", for: .normal)
++        self.doneButton.setTitleColor(.white, for: .normal)
++        self.doneButton.titleLabel?.font = .systemFont(ofSize: 17.0, weight: .semibold)
++        self.doneButton.backgroundColor = UIColor(red: 0.2, green: 0.52, blue: 0.9, alpha: 1.0)
++        self.doneButton.layer.cornerRadius = 12.0
++        self.doneButton.addTarget(self, action: #selector(self.donePressed), for: .touchUpInside)
++        self.sheetView.addSubview(self.doneButton)
++
++        let squarePan = UIPanGestureRecognizer(target: self, action: #selector(self.squareTouched(_:)))
++        let squareTap = UITapGestureRecognizer(target: self, action: #selector(self.squareTouched(_:)))
++        self.squareView.addGestureRecognizer(squarePan)
++        self.squareView.addGestureRecognizer(squareTap)
++
++        let huePan = UIPanGestureRecognizer(target: self, action: #selector(self.hueTouched(_:)))
++        let hueTap = UITapGestureRecognizer(target: self, action: #selector(self.hueTouched(_:)))
++        self.hueView.addGestureRecognizer(huePan)
++        self.hueView.addGestureRecognizer(hueTap)
++
++        let alphaPan = UIPanGestureRecognizer(target: self, action: #selector(self.alphaTouched(_:)))
++        let alphaTap = UITapGestureRecognizer(target: self, action: #selector(self.alphaTouched(_:)))
++        self.alphaView.addGestureRecognizer(alphaPan)
++        self.alphaView.addGestureRecognizer(alphaTap)
++
++        self.refresh()
++    }
++
++    public override func viewDidLayoutSubviews() {
++        super.viewDidLayoutSubviews()
++        let bounds = self.view.bounds
++        self.dimView.frame = bounds
++
++        let inset: CGFloat = 16.0
++        let width = min(bounds.width - inset * 2.0, 400.0)
++        let contentWidth = width - inset * 2.0
++        let squareSide = contentWidth
++        let stripHeight: CGFloat = 28.0
++
++        var y: CGFloat = 16.0
++        self.titleLabel.frame = CGRect(x: inset, y: y, width: contentWidth, height: 24.0)
++        y += 24.0 + 14.0
++
++        self.squareView.frame = CGRect(x: inset, y: y, width: squareSide, height: squareSide)
++        y += squareSide + 16.0
++
++        self.hueView.frame = CGRect(x: inset, y: y, width: contentWidth, height: stripHeight)
++        self.hueView.layer.cornerRadius = stripHeight / 2.0
++        self.hueView.clipsToBounds = true
++        y += stripHeight + 14.0
++
++        if self.allowsAlpha {
++            self.alphaView.frame = CGRect(x: inset, y: y, width: contentWidth, height: stripHeight)
++            self.alphaView.layer.cornerRadius = stripHeight / 2.0
++            self.alphaView.clipsToBounds = true
++            y += stripHeight + 14.0
++        }
++
++        let previewSide: CGFloat = 40.0
++        self.previewView.frame = CGRect(x: inset, y: y, width: previewSide, height: previewSide)
++        self.codeField.frame = CGRect(
++            x: inset + previewSide + 10.0,
++            y: y,
++            width: contentWidth - previewSide - 10.0,
++            height: previewSide)
++        y += previewSide + 16.0
++
++        if self.allowsClear {
++            self.clearButton.frame = CGRect(x: inset, y: y, width: contentWidth, height: 40.0)
++            y += 40.0 + 4.0
++        }
++
++        self.doneButton.frame = CGRect(x: inset, y: y, width: contentWidth, height: 48.0)
++        y += 48.0 + 16.0
++
++        let height = y
++        self.sheetView.frame = CGRect(
++            x: floor((bounds.width - width) / 2.0),
++            y: floor((bounds.height - height) / 2.0),
++            width: width,
++            height: height)
++
++        self.layoutKnobs()
++    }
++
++    // MARK: Жесты
++
++    @objc private func squareTouched(_ gesture: UIGestureRecognizer) {
++        let point = gesture.location(in: self.squareView)
++        let size = self.squareView.bounds.size
++        guard size.width > 0.0, size.height > 0.0 else {
++            return
++        }
++        self.saturation = max(0.0, min(1.0, point.x / size.width))
++        self.brightness = max(0.0, min(1.0, 1.0 - point.y / size.height))
++        self.refresh()
++    }
++
++    @objc private func hueTouched(_ gesture: UIGestureRecognizer) {
++        let point = gesture.location(in: self.hueView)
++        let width = self.hueView.bounds.width
++        guard width > 0.0 else {
++            return
++        }
++        self.hue = max(0.0, min(0.9999, point.x / width))
++        self.refresh()
++    }
++
++    @objc private func alphaTouched(_ gesture: UIGestureRecognizer) {
++        let point = gesture.location(in: self.alphaView)
++        let width = self.alphaView.bounds.width
++        guard width > 0.0 else {
++            return
++        }
++        self.alpha = max(0.0, min(1.0, point.x / width))
++        self.refresh()
++    }
++
++    // MARK: Кнопки
++
++    @objc private func dismissSelf() {
++        self.dismiss(animated: true, completion: nil)
++    }
++
++    @objc private func clearPressed() {
++        let onClear = self.onClear
++        self.dismiss(animated: true, completion: {
++            onClear?()
++        })
++    }
++
++    @objc private func donePressed() {
++        let packed = self.packed
++        let onPick = self.onPick
++        self.dismiss(animated: true, completion: {
++            onPick(packed)
++        })
++    }
++
++    @objc private func codeChanged() {
++        guard let text = self.codeField.text else {
++            return
++        }
++        guard let parsed = LunagramColorWheel.parse(text) else {
++            // Набрано не то — возвращаю прежний код, молча. Ругаться окошком
++            // на каждую опечатку хуже, чем просто не послушаться.
++            self.refresh()
++            return
++        }
++        let source = UIColor(
++            red: CGFloat((parsed >> 16) & 0xFF) / 255.0,
++            green: CGFloat((parsed >> 8) & 0xFF) / 255.0,
++            blue: CGFloat(parsed & 0xFF) / 255.0,
++            alpha: 1.0)
++        var h: CGFloat = 0.0
++        var s: CGFloat = 0.0
++        var b: CGFloat = 0.0
++        var a: CGFloat = 0.0
++        if source.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
++            self.hue = h
++            self.saturation = s
++            self.brightness = b
++        }
++        if self.allowsAlpha {
++            self.alpha = CGFloat((parsed >> 24) & 0xFF) / 255.0
++        }
++        self.refresh()
++    }
++
++    // MARK: Пересчёт
++
++    /// Цвет одним числом: прозрачность в верхнем байте, дальше красный,
++    /// зелёный, синий.
++    private var packed: UInt32 {
++        let color = UIColor(
++            hue: self.hue,
++            saturation: self.saturation,
++            brightness: self.brightness,
++            alpha: 1.0)
++        var r: CGFloat = 0.0
++        var g: CGFloat = 0.0
++        var b: CGFloat = 0.0
++        var a: CGFloat = 0.0
++        color.getRed(&r, green: &g, blue: &b, alpha: &a)
++        let alphaByte = UInt32(round(max(0.0, min(1.0, self.alpha)) * 255.0))
++        return (alphaByte << 24)
++            | (UInt32(round(r * 255.0)) << 16)
++            | (UInt32(round(g * 255.0)) << 8)
++            | UInt32(round(b * 255.0))
++    }
++
++    private func refresh() {
++        let solid = UIColor(
++            hue: self.hue,
++            saturation: self.saturation,
++            brightness: self.brightness,
++            alpha: 1.0)
++        self.squareView.hue = self.hue
++        self.alphaView.solidColor = solid
++        self.previewView.backgroundColor = solid.withAlphaComponent(self.alpha)
++        let packed = self.packed
++        if !self.codeField.isFirstResponder {
++            self.codeField.text = String(format: "#%08X", packed)
++        }
++        self.layoutKnobs()
++    }
++
++    private func layoutKnobs() {
++        let squareFrame = self.squareView.frame
++        guard squareFrame.width > 0.0 else {
++            return
++        }
++        let knobSide: CGFloat = 22.0
++        self.squareKnob.layer.cornerRadius = knobSide / 2.0
++        self.squareKnob.backgroundColor = UIColor(
++            hue: self.hue, saturation: self.saturation, brightness: self.brightness, alpha: 1.0)
++        self.squareKnob.frame = CGRect(
++            x: squareFrame.minX + self.saturation * squareFrame.width - knobSide / 2.0,
++            y: squareFrame.minY + (1.0 - self.brightness) * squareFrame.height - knobSide / 2.0,
++            width: knobSide,
++            height: knobSide)
++
++        let hueFrame = self.hueView.frame
++        let stripKnob = hueFrame.height + 4.0
++        self.hueKnob.layer.cornerRadius = stripKnob / 2.0
++        self.hueKnob.backgroundColor = UIColor(
++            hue: self.hue, saturation: 1.0, brightness: 1.0, alpha: 1.0)
++        self.hueKnob.frame = CGRect(
++            x: hueFrame.minX + self.hue * hueFrame.width - stripKnob / 2.0,
++            y: hueFrame.midY - stripKnob / 2.0,
++            width: stripKnob,
++            height: stripKnob)
++
++        guard self.allowsAlpha else {
++            return
++        }
++        let alphaFrame = self.alphaView.frame
++        self.alphaKnob.layer.cornerRadius = stripKnob / 2.0
++        self.alphaKnob.backgroundColor = UIColor(
++            hue: self.hue, saturation: self.saturation, brightness: self.brightness, alpha: 1.0)
++        self.alphaKnob.frame = CGRect(
++            x: alphaFrame.minX + self.alpha * alphaFrame.width - stripKnob / 2.0,
++            y: alphaFrame.midY - stripKnob / 2.0,
++            width: stripKnob,
++            height: stripKnob)
++    }
++
++    /// Разобрать код цвета. Понимаю и «#RRGGBB», и «#AARRGGBB», и без решётки.
++    private static func parse(_ text: String) -> UInt32? {
++        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
++        if cleaned.hasPrefix("#") {
++            cleaned.removeFirst()
++        }
++        guard cleaned.count == 6 || cleaned.count == 8 else {
++            return nil
++        }
++        guard let value = UInt32(cleaned, radix: 16) else {
++            return nil
++        }
++        if cleaned.count == 6 {
++            return 0xFF00_0000 | value
++        }
++        return value
++    }
++}
++
++extension LunagramColorWheel: UITextFieldDelegate {
++    public func textFieldShouldReturn(_ textField: UITextField) -> Bool {
++        textField.resignFirstResponder()
++        return true
++    }
++}
++
++/// Квадрат оттенков: слева налево насыщенность, сверху вниз яркость.
++final class LunagramColorSquareView: UIView {
++    var hue: CGFloat = 0.0 {
++        didSet {
++            if abs(self.hue - oldValue) > 0.0001 {
++                self.updateFill()
++            }
++        }
++    }
++
++    private let saturationLayer = CAGradientLayer()
++    private let brightnessLayer = CAGradientLayer()
++
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        self.layer.cornerRadius = 12.0
++        self.clipsToBounds = true
++
++        // Два слоя вместо рисования каждой точки: насыщенность слева направо,
++        // поверх — затемнение сверху вниз. Так квадрат не перерисовывается
++        // на каждое движение пальца, меняется только цвет справа.
++        self.saturationLayer.startPoint = CGPoint(x: 0.0, y: 0.5)
++        self.saturationLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
++        self.layer.addSublayer(self.saturationLayer)
++
++        self.brightnessLayer.colors = [
++            UIColor(white: 0.0, alpha: 0.0).cgColor,
++            UIColor(white: 0.0, alpha: 1.0).cgColor,
++        ]
++        self.brightnessLayer.startPoint = CGPoint(x: 0.5, y: 0.0)
++        self.brightnessLayer.endPoint = CGPoint(x: 0.5, y: 1.0)
++        self.layer.addSublayer(self.brightnessLayer)
++
++        self.updateFill()
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("не используется")
++    }
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        self.saturationLayer.frame = self.bounds
++        self.brightnessLayer.frame = self.bounds
++    }
++
++    private func updateFill() {
++        self.saturationLayer.colors = [
++            UIColor.white.cgColor,
++            UIColor(hue: self.hue, saturation: 1.0, brightness: 1.0, alpha: 1.0).cgColor,
++        ]
++    }
++}
++
++/// Полоса: либо радуга оттенков, либо прозрачность выбранного цвета.
++final class LunagramColorStripView: UIView {
++    enum Kind {
++        case hue
++        case alpha
++    }
++
++    private let kind: Kind
++    private let gradientLayer = CAGradientLayer()
++    private var checkerLayer: CALayer?
++
++    var solidColor: UIColor = .white {
++        didSet {
++            if self.kind == .alpha {
++                self.updateFill()
++            }
++        }
++    }
++
++    init(kind: Kind) {
++        self.kind = kind
++        super.init(frame: CGRect())
++
++        if kind == .alpha {
++            // Под прозрачностью нужна шашечка, иначе на тёмном окне не видно,
++            // где цвет уже прозрачный.
++            let checker = CALayer()
++            checker.backgroundColor = UIColor(
++                patternImage: LunagramColorStripView.checkerImage()).cgColor
++            self.layer.addSublayer(checker)
++            self.checkerLayer = checker
++        }
++
++        self.gradientLayer.startPoint = CGPoint(x: 0.0, y: 0.5)
++        self.gradientLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
++        self.layer.addSublayer(self.gradientLayer)
++        self.updateFill()
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("не используется")
++    }
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        self.checkerLayer?.frame = self.bounds
++        self.gradientLayer.frame = self.bounds
++    }
++
++    private func updateFill() {
++        switch self.kind {
++        case .hue:
++            var colors: [CGColor] = []
++            var step = 0
++            while step <= 12 {
++                colors.append(UIColor(
++                    hue: CGFloat(step) / 12.0,
++                    saturation: 1.0,
++                    brightness: 1.0,
++                    alpha: 1.0).cgColor)
++                step += 1
++            }
++            self.gradientLayer.colors = colors
++        case .alpha:
++            self.gradientLayer.colors = [
++                self.solidColor.withAlphaComponent(0.0).cgColor,
++                self.solidColor.withAlphaComponent(1.0).cgColor,
++            ]
++        }
++    }
++
++    private static func checkerImage() -> UIImage {
++        let cell: CGFloat = 6.0
++        let size = CGSize(width: cell * 2.0, height: cell * 2.0)
++        return UIGraphicsImageRenderer(size: size).image { context in
++            let cg = context.cgContext
++            cg.setFillColor(UIColor(white: 0.85, alpha: 1.0).cgColor)
++            cg.fill(CGRect(origin: CGPoint(), size: size))
++            cg.setFillColor(UIColor(white: 0.65, alpha: 1.0).cgColor)
++            cg.fill(CGRect(x: 0.0, y: 0.0, width: cell, height: cell))
++            cg.fill(CGRect(x: cell, y: cell, width: cell, height: cell))
++        }
++    }
++}
+diff --git a/submodules/Lunagram/Sources/LunagramSettings.swift b/submodules/Lunagram/Sources/LunagramSettings.swift
+index 5ad2145c..dadeed0e 100644
+--- a/submodules/Lunagram/Sources/LunagramSettings.swift
++++ b/submodules/Lunagram/Sources/LunagramSettings.swift
+@@ -90,6 +90,7 @@ public final class LunagramSettings {
+         static let profileNameGradient = "lunagram.profile.nameGradient"
+         static let profileNameEffect = "lunagram.profile.nameEffect"
+         static let profileNameCustomColor = "lunagram.profile.nameCustomColor"
++        static let profileNameCustomColor2 = "lunagram.profile.nameCustomColor2"
+         static let profileButtonsColor = "lunagram.profile.buttonsColor"
+         static let profileGlassColor = "lunagram.profile.glassColor"
+         static let profileGlassStrength = "lunagram.profile.glassStrength"
+@@ -1231,6 +1232,29 @@ public final class LunagramSettings {
+         }
+     }
+ 
++    /// Свой второй цвет имени — любой, а не номер в палитре.
++    ///
++    /// Палитра из десятка готовых цветов осталась (`profileNameColor2`), но в
++    /// панели правки выбор идёт своим окошком цвета, как в плагине: там любой
++    /// оттенок. Поэтому второй цвет тоже получил своё число, и `profileNameTint2`
++    /// смотрит сначала сюда — ровно так же, как первый цвет.
++    public static var profileNameCustomColor2: UInt32? {
++        get {
++            guard defaults.object(forKey: Key.profileNameCustomColor2) != nil else {
++                return nil
++            }
++            return UInt32(truncatingIfNeeded: defaults.integer(forKey: Key.profileNameCustomColor2))
++        }
++        set {
++            if let newValue = newValue {
++                defaults.set(Int(newValue), forKey: Key.profileNameCustomColor2)
++            } else {
++                defaults.removeObject(forKey: Key.profileNameCustomColor2)
++            }
++            changed()
++        }
++    }
++
+     /// Свой цвет кнопок QR и «Изменить» и строки с номером и @ником.
+     ///
+     /// Пусто — Telegram подбирает цвет сам, под обложку профиля. Своего
+@@ -1335,6 +1359,10 @@ public final class LunagramSettings {
+         guard profileNameTint() != nil else {
+             return nil
+         }
++        // Свой цвет главнее палитры — как у первого цвета.
++        if let custom = profileNameCustomColor2 {
++            return color(from: custom, alpha: 1.0)
++        }
+         let index = profileNameColor2
+         guard index > 0, index <= profileNameColors.count else {
+             return nil
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift
+new file mode 100644
+index 00000000..12a50817
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift
+@@ -0,0 +1,337 @@
++import Foundation
++import UIKit
++import AsyncDisplayKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import AccountContext
++import Lunagram
++
++// Lunagram: панель правки оформления профиля — вид по плагину Custom Profile.
++//
++// Хозяин прислал снимки и сказал «точь в точь». Вид строк взят с них:
++//   * заголовок раздела прописными и серым («БАННЕР ПРОФИЛЯ»);
++//   * строка: слева крупное название, под ним серая подпись, справа рычаг;
++//   * полоска из плашек для выбора одного из нескольких (Медиа · Цвет ·
++//     Градиент), выбранная светлая;
++//   * цвет: название слева, кружок цвета и код вида #00000000 справа.
++//
++// Строки пишу СВОИ, а не беру готовые из настроек Telegram: готовые дают
++// родной вид списка, а весь смысл просьбы — чтобы выглядело как в плагине.
++// Ради этого же панель не прокручивает профиль: она живёт в окошке снизу, а
++// профиль над ней настоящий и меняется на ходу.
++
++let lgDecorRowHeight: CGFloat = 56.0
++let lgDecorRowHeightSub: CGFloat = 64.0
++let lgDecorInset: CGFloat = 16.0
++let lgDecorTabHeight: CGFloat = 36.0
++
++/// Что правим. Порядок вкладок — он же порядок в панели.
++public enum LunagramDecorTab: Int, CaseIterable {
++    case banner
++    case background
++    case name
++    case avatar
++    case frame
++    case buttons
++    case music
++
++    var title: String {
++        switch self {
++        case .banner: return "Баннер"
++        case .background: return "Фон"
++        case .name: return "Ник"
++        case .avatar: return "Аватар"
++        case .frame: return "Рамка"
++        case .buttons: return "Кнопки"
++        case .music: return "Музыка"
++        }
++    }
++}
++
++/// Одна строка панели.
++enum LunagramDecorRow {
++    /// Заголовок раздела: прописными и серым.
++    case header(String)
++    /// Переключатель: название, подпись под ним, включён ли.
++    case toggle(String, String?, Bool, (Bool) -> Void)
++    /// Полоска плашек: названия, какая выбрана.
++    case segments([String], Int, (Int) -> Void)
++    /// Цвет: название, сам цвет (nil — не выбран), что делать по нажатию.
++    case color(String, UInt32?, () -> Void)
++    /// Ползунок: название, значение, от, до, шаг.
++    case slider(String, Int, Int, Int, Int, (Int) -> Void)
++    /// Строка-действие со стрелкой: название и подпись.
++    case action(String, String?, () -> Void)
++}
++
++/// Переключатель с подписью — как «Включить баннер / Заменять фон шапки».
++final class LunagramDecorToggleNode: ASDisplayNode {
++    private let titleNode = ImmediateTextNode()
++    private let subtitleNode = ImmediateTextNode()
++    private let switchView = UISwitch()
++    private var changed: ((Bool) -> Void)?
++
++    override init() {
++        super.init()
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.subtitleNode)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        self.switchView.addTarget(self, action: #selector(self.switched), for: .valueChanged)
++        self.view.addSubview(self.switchView)
++    }
++
++    @objc private func switched() {
++        self.changed?(self.switchView.isOn)
++    }
++
++    func update(title: String, subtitle: String?, value: Bool, theme: PresentationTheme, width: CGFloat, changed: @escaping (Bool) -> Void) -> CGFloat {
++        self.changed = changed
++        // Название крупное и жирное — на снимке оно заметно больше подписи.
++        self.titleNode.attributedText = NSAttributedString(
++            string: title,
++            font: Font.semibold(17.0),
++            textColor: theme.list.itemPrimaryTextColor)
++        self.subtitleNode.attributedText = subtitle.flatMap {
++            NSAttributedString(
++                string: $0,
++                font: Font.regular(13.0),
++                textColor: theme.list.itemSecondaryTextColor)
++        }
++        self.switchView.isOn = value
++        self.switchView.onTintColor = theme.list.itemSwitchColors.positiveColor
++
++        let height = (subtitle == nil) ? lgDecorRowHeight : lgDecorRowHeightSub
++        let switchSize = self.switchView.bounds.size
++        let available = width - lgDecorInset * 2.0 - switchSize.width - 12.0
++        let titleSize = self.titleNode.updateLayout(CGSize(width: available, height: 100.0))
++        let subtitleSize = self.subtitleNode.updateLayout(CGSize(width: available, height: 100.0))
++
++        let textHeight = titleSize.height + (subtitle == nil ? 0.0 : subtitleSize.height + 2.0)
++        var y = floor((height - textHeight) / 2.0)
++        self.titleNode.frame = CGRect(origin: CGPoint(x: lgDecorInset, y: y), size: titleSize)
++        y += titleSize.height + 2.0
++        self.subtitleNode.frame = CGRect(origin: CGPoint(x: lgDecorInset, y: y), size: subtitleSize)
++        self.switchView.frame = CGRect(
++            x: width - lgDecorInset - switchSize.width,
++            y: floor((height - switchSize.height) / 2.0),
++            width: switchSize.width,
++            height: switchSize.height)
++        return height
++    }
++}
++
++/// Полоска плашек — как «Медиа · Цвет · Градиент».
++final class LunagramDecorSegmentsNode: ASDisplayNode {
++    private var buttons: [HighlightTrackingButtonNode] = []
++    private var labels: [ImmediateTextNode] = []
++    private var selected: ((Int) -> Void)?
++
++    func update(titles: [String], selectedIndex: Int, theme: PresentationTheme, width: CGFloat, selected: @escaping (Int) -> Void) -> CGFloat {
++        self.selected = selected
++        while self.buttons.count > titles.count {
++            self.buttons.removeLast().removeFromSupernode()
++            self.labels.removeLast().removeFromSupernode()
++        }
++        while self.buttons.count < titles.count {
++            let button = HighlightTrackingButtonNode()
++            button.addTarget(self, action: #selector(self.pressed(_:)), forControlEvents: .touchUpInside)
++            self.addSubnode(button)
++            self.buttons.append(button)
++            let label = ImmediateTextNode()
++            label.isUserInteractionEnabled = false
++            self.addSubnode(label)
++            self.labels.append(label)
++        }
++
++        let height = lgDecorTabHeight + 8.0
++        let gap: CGFloat = 8.0
++        let total = width - lgDecorInset * 2.0 - gap * CGFloat(max(0, titles.count - 1))
++        let itemWidth = floor(total / CGFloat(max(1, titles.count)))
++        for (index, title) in titles.enumerated() {
++            let isOn = index == selectedIndex
++            let frame = CGRect(
++                x: lgDecorInset + CGFloat(index) * (itemWidth + gap),
++                y: 4.0,
++                width: itemWidth,
++                height: lgDecorTabHeight)
++            let button = self.buttons[index]
++            button.frame = frame
++            button.backgroundColor = isOn
++                ? theme.list.itemPrimaryTextColor.withAlphaComponent(0.92)
++                : theme.list.itemBlocksBackgroundColor
++            button.cornerRadius = lgDecorTabHeight / 2.0
++            button.clipsToBounds = true
++
++            let label = self.labels[index]
++            label.attributedText = NSAttributedString(
++                string: title,
++                font: Font.semibold(15.0),
++                textColor: isOn
++                    ? theme.list.itemBlocksBackgroundColor
++                    : theme.list.itemPrimaryTextColor)
++            let size = label.updateLayout(CGSize(width: itemWidth, height: lgDecorTabHeight))
++            label.frame = CGRect(
++                x: frame.minX + floor((itemWidth - size.width) / 2.0),
++                y: frame.minY + floor((lgDecorTabHeight - size.height) / 2.0),
++                width: size.width,
++                height: size.height)
++        }
++        return height
++    }
++
++    @objc private func pressed(_ sender: HighlightTrackingButtonNode) {
++        guard let index = self.buttons.firstIndex(where: { $0 === sender }) else {
++            return
++        }
++        self.selected?(index)
++    }
++}
++
++/// Цвет: название слева, кружок и код справа — как «Цвет баннера #00000000».
++final class LunagramDecorColorNode: ASDisplayNode {
++    private let titleNode = ImmediateTextNode()
++    private let codeNode = ImmediateTextNode()
++    private let swatchNode = ASImageNode()
++    private let button = HighlightTrackingButtonNode()
++    private var action: (() -> Void)?
++
++    override init() {
++        super.init()
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.swatchNode)
++        self.addSubnode(self.codeNode)
++        self.addSubnode(self.button)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        self.button.addTarget(self, action: #selector(self.pressed), forControlEvents: .touchUpInside)
++    }
++
++    @objc private func pressed() {
++        self.action?()
++    }
++
++    func update(title: String, color: UInt32?, theme: PresentationTheme, width: CGFloat, action: @escaping () -> Void) -> CGFloat {
++        self.action = action
++        self.titleNode.attributedText = NSAttributedString(
++            string: title,
++            font: Font.semibold(17.0),
++            textColor: theme.list.itemPrimaryTextColor)
++        // Код цвета как у них: восемь цифр с прозрачностью впереди.
++        let code = color.map { String(format: "#FF%06X", $0 & 0xFFFFFF) } ?? "#00000000"
++        self.codeNode.attributedText = NSAttributedString(
++            string: code,
++            font: Font.regular(15.0),
++            textColor: theme.list.itemSecondaryTextColor)
++
++        let swatchSide: CGFloat = 36.0
++        self.swatchNode.image = LunagramDecorColorNode.swatch(
++            color: color,
++            side: swatchSide)
++
++        let titleSize = self.titleNode.updateLayout(CGSize(width: width / 2.0, height: 100.0))
++        let codeSize = self.codeNode.updateLayout(CGSize(width: width / 2.0, height: 100.0))
++        self.titleNode.frame = CGRect(
++            x: lgDecorInset,
++            y: floor((lgDecorRowHeight - titleSize.height) / 2.0),
++            width: titleSize.width,
++            height: titleSize.height)
++        self.codeNode.frame = CGRect(
++            x: width - lgDecorInset - codeSize.width,
++            y: floor((lgDecorRowHeight - codeSize.height) / 2.0),
++            width: codeSize.width,
++            height: codeSize.height)
++        self.swatchNode.frame = CGRect(
++            x: self.codeNode.frame.minX - 10.0 - swatchSide,
++            y: floor((lgDecorRowHeight - swatchSide) / 2.0),
++            width: swatchSide,
++            height: swatchSide)
++        self.button.frame = CGRect(x: 0.0, y: 0.0, width: width, height: lgDecorRowHeight)
++        return lgDecorRowHeight
++    }
++
++    /// Кружок цвета. Не выбран — рисуем шашечку, как у них: так сразу видно,
++    /// что цвета нет, а не что он чёрный.
++    private static func swatch(color: UInt32?, side: CGFloat) -> UIImage? {
++        let size = CGSize(width: side, height: side)
++        return UIGraphicsImageRenderer(size: size).image { context in
++            let cg = context.cgContext
++            let rect = CGRect(origin: CGPoint(), size: size)
++            cg.addPath(UIBezierPath(roundedRect: rect, cornerRadius: 8.0).cgPath)
++            cg.clip()
++            if let color = color {
++                cg.setFillColor(UIColor(rgb: color).cgColor)
++                cg.fill(rect)
++            } else {
++                let cell: CGFloat = 6.0
++                var row = 0
++                var y: CGFloat = 0.0
++                while y < size.height {
++                    var column = 0
++                    var x: CGFloat = 0.0
++                    while x < size.width {
++                        let light = (row + column) % 2 == 0
++                        cg.setFillColor((light ? UIColor.white : UIColor(white: 0.78, alpha: 1.0)).cgColor)
++                        cg.fill(CGRect(x: x, y: y, width: cell, height: cell))
++                        x += cell
++                        column += 1
++                    }
++                    y += cell
++                    row += 1
++                }
++            }
++        }
++    }
++}
++
++/// Значок палитры для верхней полосы профиля.
++///
++/// Рисую сам: в Telegram такого значка нет, а брать чужой файл шрифта или
++/// картинки хозяин запретил. Палитра — скруглённый блин с выемкой под
++/// большой палец и три пятна краски.
++public func lunagramDecorIcon(_ theme: PresentationTheme) -> UIImage? {
++    let side: CGFloat = 26.0
++    return generateImage(CGSize(width: side, height: side), rotatedContext: { size, context in
++        context.clear(CGRect(origin: CGPoint(), size: size))
++        context.setStrokeColor(UIColor.white.cgColor)
++        context.setFillColor(UIColor.white.cgColor)
++        context.setLineWidth(1.6)
++
++        let inset: CGFloat = 3.0
++        let body = CGRect(
++            x: inset, y: inset,
++            width: size.width - inset * 2.0,
++            height: size.height - inset * 2.0)
++
++        // Сам блин — кругом, обводкой.
++        context.strokeEllipse(in: body)
++
++        // Выемка под палец: маленький круг у правого края, тоже обводкой.
++        let thumbSide: CGFloat = 5.0
++        context.strokeEllipse(in: CGRect(
++            x: body.maxX - thumbSide - 1.2,
++            y: body.midY - thumbSide / 2.0,
++            width: thumbSide,
++            height: thumbSide))
++
++        // Три пятна краски. Залиты — чтобы значок читался и в 26 точек.
++        let dotSide: CGFloat = 3.4
++        let dots = [
++            CGPoint(x: body.midX - 4.2, y: body.midY - 4.4),
++            CGPoint(x: body.midX + 1.4, y: body.midY - 5.0),
++            CGPoint(x: body.midX - 5.4, y: body.midY + 1.6),
++        ]
++        for dot in dots {
++            context.fillEllipse(in: CGRect(
++                x: dot.x - dotSide / 2.0,
++                y: dot.y - dotSide / 2.0,
++                width: dotSide,
++                height: dotSide))
++        }
++    })
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+new file mode 100644
+index 00000000..f92eb559
+--- /dev/null
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+@@ -0,0 +1,1044 @@
++import Foundation
++import UIKit
++import PhotosUI
++import UniformTypeIdentifiers
++import AsyncDisplayKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import ItemListUI
++import AccountContext
++import Lunagram
++
++// Lunagram: сама панель правки оформления — вкладки сверху, строки под ними.
++//
++// Вид по снимкам из плагина Custom Profile: ряд плашек-вкладок (Баннер · Фон ·
++// Ник · Аватар · Рамка · Кнопки · Музыка), под ним строки выбранной вкладки.
++// Живой профиль — НАД панелью: панель живёт в окошке снизу
++// (`LunagramEditorSheet`), и шапка профиля видна и меняется на ходу.
++//
++// Строки собираются заново на каждую перестройку, а узлы под них берутся из
++// запаса и переиспользуются: вкладок семь, строк в каждой до десятка, и
++// плодить по узлу на строку при каждом щелчке рычага незачем.
++//
++// Заголовки, ползунки и действия описаны здесь же, а переключатель, плашки и
++// цвет — в `LunagramDecorEditor.swift`. Делить по файлам пришлось из-за
++// размера, работают они вместе.
++
++/// Заголовок раздела: прописными и серым, как «БАННЕР ПРОФИЛЯ» на снимке.
++final class LunagramDecorHeaderNode: ASDisplayNode {
++    private let titleNode = ImmediateTextNode()
++
++    override init() {
++        super.init()
++        self.addSubnode(self.titleNode)
++    }
++
++    func update(title: String, theme: PresentationTheme, width: CGFloat) -> CGFloat {
++        self.titleNode.attributedText = NSAttributedString(
++            string: title.uppercased(),
++            font: Font.semibold(13.0),
++            textColor: theme.list.itemSecondaryTextColor)
++        let size = self.titleNode.updateLayout(CGSize(width: width - lgDecorInset * 2.0, height: 100.0))
++        let height: CGFloat = 38.0
++        self.titleNode.frame = CGRect(
++            x: lgDecorInset,
++            y: height - size.height - 8.0,
++            width: size.width,
++            height: size.height)
++        return height
++    }
++}
++
++/// Ползунок: название слева, значение справа, под ними сама полоска.
++///
++/// Беру родной `UISlider`, а не рисую свой: на снимке он и есть обычный
++/// ползунок, а своему пришлось бы объяснять все мелочи вроде нажатия мимо
++/// кружка. Выигрыша нет, а поломаться есть чему.
++final class LunagramDecorSliderNode: ASDisplayNode {
++    private let titleNode = ImmediateTextNode()
++    private let valueNode = ImmediateTextNode()
++    private let sliderView = UISlider()
++    private var changed: ((Int) -> Void)?
++    private var step = 1
++
++    override init() {
++        super.init()
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.valueNode)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        self.sliderView.addTarget(self, action: #selector(self.slid), for: .valueChanged)
++        self.view.addSubview(self.sliderView)
++    }
++
++    @objc private func slid() {
++        // Округляю к шагу: иначе «затемнение 0…3» ехало бы дробями.
++        let raw = Int(self.sliderView.value.rounded())
++        let snapped = self.step > 1 ? (raw / self.step) * self.step : raw
++        self.changed?(snapped)
++    }
++
++    func update(
++        title: String,
++        value: Int,
++        minValue: Int,
++        maxValue: Int,
++        step: Int,
++        theme: PresentationTheme,
++        width: CGFloat,
++        changed: @escaping (Int) -> Void
++    ) -> CGFloat {
++        self.changed = changed
++        self.step = max(1, step)
++        self.titleNode.attributedText = NSAttributedString(
++            string: title,
++            font: Font.semibold(17.0),
++            textColor: theme.list.itemPrimaryTextColor)
++        self.valueNode.attributedText = NSAttributedString(
++            string: "\(value)",
++            font: Font.regular(15.0),
++            textColor: theme.list.itemSecondaryTextColor)
++        self.sliderView.minimumValue = Float(minValue)
++        self.sliderView.maximumValue = Float(maxValue)
++        self.sliderView.value = Float(value)
++        self.sliderView.minimumTrackTintColor = theme.list.itemAccentColor
++        self.sliderView.maximumTrackTintColor = theme.list.controlSecondaryColor
++
++        let titleSize = self.titleNode.updateLayout(CGSize(width: width * 0.7, height: 100.0))
++        let valueSize = self.valueNode.updateLayout(CGSize(width: width * 0.3, height: 100.0))
++        self.titleNode.frame = CGRect(
++            x: lgDecorInset, y: 10.0, width: titleSize.width, height: titleSize.height)
++        self.valueNode.frame = CGRect(
++            x: width - lgDecorInset - valueSize.width,
++            y: 10.0 + floor((titleSize.height - valueSize.height) / 2.0),
++            width: valueSize.width,
++            height: valueSize.height)
++        self.sliderView.frame = CGRect(
++            x: lgDecorInset,
++            y: 10.0 + titleSize.height + 4.0,
++            width: width - lgDecorInset * 2.0,
++            height: 30.0)
++        return 10.0 + titleSize.height + 4.0 + 30.0 + 8.0
++    }
++}
++
++/// Строка-действие со стрелкой: открывает что-то ещё.
++final class LunagramDecorActionNode: ASDisplayNode {
++    private let titleNode = ImmediateTextNode()
++    private let subtitleNode = ImmediateTextNode()
++    private let arrowNode = ASImageNode()
++    private let button = HighlightTrackingButtonNode()
++    private var action: (() -> Void)?
++
++    override init() {
++        super.init()
++        self.addSubnode(self.titleNode)
++        self.addSubnode(self.subtitleNode)
++        self.addSubnode(self.arrowNode)
++        self.addSubnode(self.button)
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        self.button.addTarget(self, action: #selector(self.pressed), forControlEvents: .touchUpInside)
++    }
++
++    @objc private func pressed() {
++        self.action?()
++    }
++
++    func update(
++        title: String,
++        subtitle: String?,
++        theme: PresentationTheme,
++        width: CGFloat,
++        action: @escaping () -> Void
++    ) -> CGFloat {
++        self.action = action
++        self.titleNode.attributedText = NSAttributedString(
++            string: title,
++            font: Font.semibold(17.0),
++            textColor: theme.list.itemPrimaryTextColor)
++        self.subtitleNode.attributedText = subtitle.flatMap {
++            NSAttributedString(
++                string: $0,
++                font: Font.regular(13.0),
++                textColor: theme.list.itemSecondaryTextColor)
++        }
++        self.arrowNode.image = PresentationResourcesItemList.disclosureArrowImage(theme)
++
++        let height = (subtitle == nil) ? lgDecorRowHeight : lgDecorRowHeightSub
++        let arrowSize = self.arrowNode.image?.size ?? CGSize()
++        let available = width - lgDecorInset * 2.0 - arrowSize.width - 10.0
++        let titleSize = self.titleNode.updateLayout(CGSize(width: available, height: 100.0))
++        let subtitleSize = self.subtitleNode.updateLayout(CGSize(width: available, height: 100.0))
++        let textHeight = titleSize.height + (subtitle == nil ? 0.0 : subtitleSize.height + 2.0)
++        var y = floor((height - textHeight) / 2.0)
++        self.titleNode.frame = CGRect(origin: CGPoint(x: lgDecorInset, y: y), size: titleSize)
++        y += titleSize.height + 2.0
++        self.subtitleNode.frame = CGRect(origin: CGPoint(x: lgDecorInset, y: y), size: subtitleSize)
++        self.arrowNode.frame = CGRect(
++            x: width - lgDecorInset - arrowSize.width,
++            y: floor((height - arrowSize.height) / 2.0),
++            width: arrowSize.width,
++            height: arrowSize.height)
++        self.button.frame = CGRect(x: 0.0, y: 0.0, width: width, height: height)
++        return height
++    }
++}
++
++/// Ряд вкладок сверху панели. Семь штук в ширину телефона не влезают,
++/// поэтому ряд прокручивается боком — как у них.
++private final class LunagramDecorTabsNode: ASDisplayNode, UIScrollViewDelegate {
++    private let scrollNode: ASScrollNode
++    private var buttons: [HighlightTrackingButtonNode] = []
++    private var labels: [ImmediateTextNode] = []
++    private var selectedIndex = 0
++    var selected: ((Int) -> Void)?
++
++    override init() {
++        self.scrollNode = ASScrollNode()
++        super.init()
++        self.scrollNode.view.showsHorizontalScrollIndicator = false
++        self.scrollNode.view.alwaysBounceHorizontal = false
++        self.addSubnode(self.scrollNode)
++    }
++
++    func update(selectedIndex: Int, theme: PresentationTheme, width: CGFloat) -> CGFloat {
++        self.selectedIndex = selectedIndex
++        let tabs = LunagramDecorTab.allCases
++        while self.buttons.count < tabs.count {
++            let button = HighlightTrackingButtonNode()
++            button.addTarget(self, action: #selector(self.pressed(_:)), forControlEvents: .touchUpInside)
++            self.scrollNode.addSubnode(button)
++            self.buttons.append(button)
++            let label = ImmediateTextNode()
++            label.isUserInteractionEnabled = false
++            self.scrollNode.addSubnode(label)
++            self.labels.append(label)
++        }
++
++        let height = lgDecorTabHeight + 16.0
++        var x = lgDecorInset
++        for (index, tab) in tabs.enumerated() {
++            let isOn = index == selectedIndex
++            let label = self.labels[index]
++            label.attributedText = NSAttributedString(
++                string: tab.title,
++                font: Font.semibold(15.0),
++                textColor: isOn
++                    ? theme.list.itemCheckColors.foregroundColor
++                    : theme.list.itemPrimaryTextColor)
++            let textSize = label.updateLayout(CGSize(width: 200.0, height: lgDecorTabHeight))
++            let itemWidth = textSize.width + 28.0
++
++            let button = self.buttons[index]
++            button.frame = CGRect(x: x, y: 8.0, width: itemWidth, height: lgDecorTabHeight)
++            button.backgroundColor = isOn
++                ? theme.list.itemAccentColor
++                : theme.list.itemPrimaryTextColor.withAlphaComponent(0.08)
++            button.cornerRadius = lgDecorTabHeight / 2.0
++            button.clipsToBounds = true
++
++            label.frame = CGRect(
++                x: x + floor((itemWidth - textSize.width) / 2.0),
++                y: 8.0 + floor((lgDecorTabHeight - textSize.height) / 2.0),
++                width: textSize.width,
++                height: textSize.height)
++            x += itemWidth + 8.0
++        }
++
++        self.scrollNode.frame = CGRect(x: 0.0, y: 0.0, width: width, height: height)
++        self.scrollNode.view.contentSize = CGSize(width: x - 8.0 + lgDecorInset, height: height)
++        return height
++    }
++
++    @objc private func pressed(_ sender: HighlightTrackingButtonNode) {
++        guard let index = self.buttons.firstIndex(where: { $0 === sender }) else {
++            return
++        }
++        self.selected?(index)
++    }
++}
++
++/// Узел панели: ряд вкладок и прокручиваемые строки под ним.
++private final class LunagramDecorEditorNode: ViewControllerTracingNode {
++    private weak var controller: ViewController?
++    private let context: AccountContext
++    private var theme: PresentationTheme
++
++    private let tabsNode = LunagramDecorTabsNode()
++    private let separatorNode = ASDisplayNode()
++    private let scrollNode: ASScrollNode
++
++    private var tab: LunagramDecorTab = .banner
++    /// Какой вид заливки выбран в этой вкладке: 0 — медиа, 1 — цвет,
++    /// 2 — градиент. Хранится только пока панель открыта: у нас цвет и
++    /// картинка живут рядом и не исключают друг друга, а плашки нужны
++    /// затем, чтобы показывать по одной группе строк, а не всё разом.
++    private var fillMode: [LunagramDecorTab: Int] = [:]
++
++    /// Запас узлов: на перестройку достаём отсюда, лишние прячем.
++    private var toggleNodes: [LunagramDecorToggleNode] = []
++    private var headerNodes: [LunagramDecorHeaderNode] = []
++    private var sliderNodes: [LunagramDecorSliderNode] = []
++    private var colorNodes: [LunagramDecorColorNode] = []
++    private var actionNodes: [LunagramDecorActionNode] = []
++    private var segmentNodes: [LunagramDecorSegmentsNode] = []
++
++    private var validLayout: ContainerViewLayout?
++    private var settingsDisposable: Any?
++    /// Приёмщик выбранного файла, пока окошко выбора открыто.
++    fileprivate var pickerDelegate: AnyObject?
++
++    init(controller: ViewController, context: AccountContext) {
++        self.controller = controller
++        self.context = context
++        self.theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++        self.scrollNode = ASScrollNode()
++
++        super.init()
++
++        self.backgroundColor = self.theme.list.blocksBackgroundColor
++        self.addSubnode(self.tabsNode)
++
++        self.separatorNode.backgroundColor = self.theme.list.itemBlocksSeparatorColor
++        self.addSubnode(self.separatorNode)
++
++        self.scrollNode.view.alwaysBounceVertical = true
++        self.addSubnode(self.scrollNode)
++
++        self.tabsNode.selected = { [weak self] index in
++            guard let self = self, let tab = LunagramDecorTab(rawValue: index) else {
++                return
++            }
++            self.tab = tab
++            self.scrollNode.view.setContentOffset(CGPoint(), animated: false)
++            self.rebuild()
++        }
++    }
++
++    deinit {
++        if let token = self.settingsDisposable as? NSObjectProtocol {
++            NotificationCenter.default.removeObserver(token)
++        }
++    }
++
++    override func didLoad() {
++        super.didLoad()
++        // Панель слушает те же настройки, что и шапка профиля: цвет мог
++        // смениться в окошке цвета, и строка должна показать новый код.
++        self.settingsDisposable = NotificationCenter.default.addObserver(
++            forName: LunagramSettings.didChangeNotification,
++            object: nil,
++            queue: .main,
++            using: { [weak self] _ in
++                self?.rebuild()
++            })
++    }
++
++    func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++        self.validLayout = layout
++        self.rebuild()
++    }
++
++    /// Какая плашка выбрана в этой вкладке.
++    ///
++    /// Пока человек её не трогал, беру из настроек: уже выбран цвет — значит
++    /// открывать надо на «Цвете», а не на «Как в теме» со спрятанной строкой
++    /// цвета. Иначе выходило бы, что цвет стоит, а панель это скрывает.
++    private func mode(for tab: LunagramDecorTab) -> Int {
++        if let stored = self.fillMode[tab] {
++            return stored
++        }
++        switch tab {
++        case .name:
++            if LunagramSettings.profileNameCustomColor2 != nil {
++                return 2
++            }
++            return LunagramSettings.profileNameCustomColor != nil ? 1 : 0
++        case .music:
++            return (LunagramSettings.profileMusicBgURL == nil
++                && LunagramSettings.profileMusicBgColor != nil) ? 1 : 0
++        default:
++            return 0
++        }
++    }
++
++    /// Собрать строки выбранной вкладки и разложить их.
++    private func rebuild() {
++        guard let layout = self.validLayout else {
++            return
++        }
++        let width = layout.size.width
++
++        let tabsHeight = self.tabsNode.update(
++            selectedIndex: self.tab.rawValue, theme: self.theme, width: width)
++        self.tabsNode.frame = CGRect(x: 0.0, y: 0.0, width: width, height: tabsHeight)
++        self.separatorNode.frame = CGRect(
++            x: 0.0, y: tabsHeight, width: width, height: UIScreenPixel)
++
++        let rows = self.rows(for: self.tab)
++
++        var toggleIndex = 0
++        var headerIndex = 0
++        var sliderIndex = 0
++        var colorIndex = 0
++        var actionIndex = 0
++        var segmentIndex = 0
++        var y: CGFloat = 0.0
++
++        for row in rows {
++            switch row {
++            case let .header(title):
++                while self.headerNodes.count <= headerIndex {
++                    let node = LunagramDecorHeaderNode()
++                    self.scrollNode.addSubnode(node)
++                    self.headerNodes.append(node)
++                }
++                let node = self.headerNodes[headerIndex]
++                headerIndex += 1
++                node.isHidden = false
++                let height = node.update(title: title, theme: self.theme, width: width)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            case let .toggle(title, subtitle, value, changed):
++                while self.toggleNodes.count <= toggleIndex {
++                    let node = LunagramDecorToggleNode()
++                    self.scrollNode.addSubnode(node)
++                    self.toggleNodes.append(node)
++                }
++                let node = self.toggleNodes[toggleIndex]
++                toggleIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    title: title,
++                    subtitle: subtitle,
++                    value: value,
++                    theme: self.theme,
++                    width: width,
++                    changed: changed)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            case let .segments(titles, selectedIndex, selected):
++                while self.segmentNodes.count <= segmentIndex {
++                    let node = LunagramDecorSegmentsNode()
++                    self.scrollNode.addSubnode(node)
++                    self.segmentNodes.append(node)
++                }
++                let node = self.segmentNodes[segmentIndex]
++                segmentIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    titles: titles,
++                    selectedIndex: selectedIndex,
++                    theme: self.theme,
++                    width: width,
++                    selected: selected)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            case let .color(title, value, action):
++                while self.colorNodes.count <= colorIndex {
++                    let node = LunagramDecorColorNode()
++                    self.scrollNode.addSubnode(node)
++                    self.colorNodes.append(node)
++                }
++                let node = self.colorNodes[colorIndex]
++                colorIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    title: title, color: value, theme: self.theme, width: width, action: action)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            case let .slider(title, value, minValue, maxValue, step, changed):
++                while self.sliderNodes.count <= sliderIndex {
++                    let node = LunagramDecorSliderNode()
++                    self.scrollNode.addSubnode(node)
++                    self.sliderNodes.append(node)
++                }
++                let node = self.sliderNodes[sliderIndex]
++                sliderIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    title: title,
++                    value: value,
++                    minValue: minValue,
++                    maxValue: maxValue,
++                    step: step,
++                    theme: self.theme,
++                    width: width,
++                    changed: changed)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            case let .action(title, subtitle, action):
++                while self.actionNodes.count <= actionIndex {
++                    let node = LunagramDecorActionNode()
++                    self.scrollNode.addSubnode(node)
++                    self.actionNodes.append(node)
++                }
++                let node = self.actionNodes[actionIndex]
++                actionIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    title: title,
++                    subtitle: subtitle,
++                    theme: self.theme,
++                    width: width,
++                    action: action)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
++            }
++        }
++
++        // Лишние узлы из запаса прячем, а не убираем: следующая вкладка,
++        // скорее всего, попросит их снова.
++        for index in toggleIndex ..< self.toggleNodes.count {
++            self.toggleNodes[index].isHidden = true
++        }
++        for index in headerIndex ..< self.headerNodes.count {
++            self.headerNodes[index].isHidden = true
++        }
++        for index in sliderIndex ..< self.sliderNodes.count {
++            self.sliderNodes[index].isHidden = true
++        }
++        for index in colorIndex ..< self.colorNodes.count {
++            self.colorNodes[index].isHidden = true
++        }
++        for index in actionIndex ..< self.actionNodes.count {
++            self.actionNodes[index].isHidden = true
++        }
++        for index in segmentIndex ..< self.segmentNodes.count {
++            self.segmentNodes[index].isHidden = true
++        }
++
++        let scrollTop = tabsHeight + UIScreenPixel
++        self.scrollNode.frame = CGRect(
++            x: 0.0,
++            y: scrollTop,
++            width: width,
++            height: max(0.0, layout.size.height - scrollTop))
++        self.scrollNode.view.contentInset = UIEdgeInsets(
++            top: 0.0, left: 0.0, bottom: layout.intrinsicInsets.bottom + 16.0, right: 0.0)
++        self.scrollNode.view.contentSize = CGSize(width: width, height: y)
++    }
++
++    /// Открыть своё окошко цвета и положить выбранное куда сказано.
++    private func pickColor(
++        title: String,
++        current: UInt32?,
++        allowsClear: Bool,
++        apply: @escaping (UInt32?) -> Void
++    ) {
++        guard let presenter = self.controller?.view.window?.rootViewController else {
++            return
++        }
++        LunagramColorWheel.present(
++            from: presenter,
++            title: title,
++            color: current,
++            allowsAlpha: true,
++            allowsClear: allowsClear,
++            onPick: { packed in
++                apply(packed)
++            },
++            onClear: allowsClear ? { apply(nil) } : nil)
++    }
++
++    // MARK: Строки вкладок
++
++    private func rows(for tab: LunagramDecorTab) -> [LunagramDecorRow] {
++        switch tab {
++        case .banner:
++            return self.bannerRows()
++        case .background:
++            return self.backgroundRows()
++        case .name:
++            return self.nameRows()
++        case .avatar:
++            return self.avatarRows()
++        case .frame:
++            return self.frameRows()
++        case .buttons:
++            return self.buttonsRows()
++        case .music:
++            return self.musicRows()
++        }
++    }
++
++    private func bannerRows() -> [LunagramDecorRow] {
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Баннер профиля"))
++        rows.append(.toggle(
++            "Включить баннер",
++            "Фото или видео за аватаркой и именем",
++            LunagramSettings.profileBannerEnabled,
++            { value in
++                LunagramSettings.profileBannerEnabled = value
++            }))
++        guard LunagramSettings.profileBannerEnabled else {
++            return rows
++        }
++        rows.append(.action(
++            "Выбрать картинку",
++            LunagramSettings.hasProfileBanner ? "Выбрано" : "Не выбрано",
++            { [weak self] in
++                self?.openBannerPicker()
++            }))
++        rows.append(.header("Как показывать"))
++        rows.append(.slider(
++            "Затемнение", LunagramSettings.profileBannerDim, 0, 3, 1,
++            { value in
++                LunagramSettings.profileBannerDim = value
++            }))
++        rows.append(.slider(
++            "Размытие", LunagramSettings.profileBannerBlur, 0, 100, 5,
++            { value in
++                LunagramSettings.profileBannerBlur = value
++            }))
++        rows.append(.slider(
++            "Растворение к низу", LunagramSettings.profileBannerFade, 0, 100, 5,
++            { value in
++                LunagramSettings.profileBannerFade = value
++            }))
++        rows.append(.header("Звук"))
++        rows.append(.toggle(
++            "Звук видео",
++            "Только пока профиль открыт",
++            LunagramSettings.profileBannerSound,
++            { value in
++                LunagramSettings.profileBannerSound = value
++            }))
++        if LunagramSettings.profileBannerSound {
++            rows.append(.slider(
++                "Громкость", LunagramSettings.profileBannerVolume, 0, 100, 5,
++                { value in
++                    LunagramSettings.profileBannerVolume = value
++                }))
++        }
++        return rows
++    }
++
++    private func backgroundRows() -> [LunagramDecorRow] {
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Фон профиля"))
++        rows.append(.action(
++            "Выбрать картинку",
++            LunagramSettings.profileBackgroundURL != nil ? "Выбрано" : "Не выбрано",
++            { [weak self] in
++                self?.openBackgroundPicker()
++            }))
++        rows.append(.slider(
++            "Затемнение", LunagramSettings.profileBackgroundDim, 0, 100, 5,
++            { value in
++                LunagramSettings.profileBackgroundDim = value
++            }))
++        rows.append(.slider(
++            "Размытие", LunagramSettings.profileBackgroundBlur, 0, 100, 5,
++            { value in
++                LunagramSettings.profileBackgroundBlur = value
++            }))
++        return rows
++    }
++
++    private func nameRows() -> [LunagramDecorRow] {
++        let mode = self.mode(for: .name)
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Оформление имени"))
++        rows.append(.segments(["Как в теме", "Цвет", "Градиент"], mode, { [weak self] index in
++            guard let self = self else {
++                return
++            }
++            self.fillMode[.name] = index
++            if index == 0 {
++                LunagramSettings.profileNameCustomColor = nil
++                LunagramSettings.profileNameCustomColor2 = nil
++                LunagramSettings.profileNameGradient = 0
++            } else if index == 1 {
++                // Ушли с градиента — второй цвет убираем, иначе он остался бы
++                // в силе и имя всё равно заливалось переходом.
++                LunagramSettings.profileNameCustomColor2 = nil
++            }
++            LunagramNameFill.reset()
++            self.rebuild()
++        }))
++        if mode >= 1 {
++            rows.append(.color(
++                "Цвет имени",
++                LunagramSettings.profileNameCustomColor,
++                { [weak self] in
++                    self?.pickColor(
++                        title: "Цвет имени",
++                        current: LunagramSettings.profileNameCustomColor,
++                        allowsClear: true,
++                        apply: { value in
++                            LunagramSettings.profileNameCustomColor = value
++                            LunagramNameFill.reset()
++                        })
++                }))
++        }
++        if mode == 2 {
++            rows.append(.color(
++                "Второй цвет",
++                LunagramSettings.profileNameCustomColor2,
++                { [weak self] in
++                    self?.pickColor(
++                        title: "Второй цвет",
++                        current: LunagramSettings.profileNameCustomColor2,
++                        allowsClear: true,
++                        apply: { value in
++                            LunagramSettings.profileNameCustomColor2 = value
++                            // Заливка запоминается по цветам: сменился второй —
++                            // прежняя висела бы до перезапуска.
++                            LunagramNameFill.reset()
++                        })
++                }))
++            rows.append(.segments(
++                ["Вбок", "Вниз"],
++                LunagramSettings.profileNameGradient,
++                { value in
++                    LunagramSettings.profileNameGradient = value
++                    LunagramNameFill.reset()
++                }))
++        }
++        rows.append(.header("Свечение"))
++        rows.append(.slider(
++            "Сила свечения", LunagramSettings.profileNameGlowPercent, 0, 100, 5,
++            { value in
++                LunagramSettings.profileNameGlowPercent = value
++            }))
++        return rows
++    }
++
++    private func avatarRows() -> [LunagramDecorRow] {
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Оформление аватара"))
++        // Форму показываю плашками прямо здесь, а не отдельным экраном: их
++        // всего шесть, и в плагине выбор тоже стоит в самом окошке.
++        rows.append(.segments(
++            LunagramAvatarShape.Kind.allCases.map({ $0.title }),
++            LunagramAvatarShape.kind.rawValue,
++            { value in
++                LunagramSettings.avatarShape = value
++            }))
++        rows.append(.slider(
++            "Скругление", LunagramSettings.avatarCorners, 0, 23, 1,
++            { value in
++                LunagramSettings.avatarCorners = value
++            }))
++        rows.append(.toggle(
++            "Скруглять один угол",
++            "Как в некоторых сборках: острый угол слева снизу",
++            LunagramSettings.avatarSingleCorner,
++            { value in
++                LunagramSettings.avatarSingleCorner = value
++            }))
++        rows.append(.slider(
++            "Мягкий край", LunagramSettings.avatarFeather, 0, 60, 5,
++            { value in
++                LunagramSettings.avatarFeather = value
++            }))
++        return rows
++    }
++
++    private func frameRows() -> [LunagramDecorRow] {
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Рамка аватара"))
++        rows.append(.toggle(
++            "Включить рамку",
++            "Картинка вокруг аватарки в профиле",
++            LunagramSettings.avatarFrameEnabled,
++            { value in
++                LunagramSettings.avatarFrameEnabled = value
++            }))
++        guard LunagramSettings.avatarFrameEnabled else {
++            return rows
++        }
++        rows.append(.action(
++            "Своя картинка рамки",
++            LunagramSettings.avatarFrameImageURL != nil ? "Выбрана" : "Не выбрана",
++            { [weak self] in
++                self?.openFramePicker()
++            }))
++        rows.append(.slider(
++            "Размер", LunagramSettings.avatarFrameScale, 80, 160, 5,
++            { value in
++                LunagramSettings.avatarFrameScale = value
++            }))
++        rows.append(.slider(
++            "Яркость", LunagramSettings.avatarFrameBrightness, 0, 100, 5,
++            { value in
++                LunagramSettings.avatarFrameBrightness = value
++            }))
++        rows.append(.slider(
++            "Свечение", LunagramSettings.avatarFrameGlow, 0, 100, 5,
++            { value in
++                LunagramSettings.avatarFrameGlow = value
++            }))
++        rows.append(.toggle(
++            "Искорки",
++            nil,
++            LunagramSettings.avatarFrameSparkle,
++            { value in
++                LunagramSettings.avatarFrameSparkle = value
++            }))
++        return rows
++    }
++
++    private func buttonsRows() -> [LunagramDecorRow] {
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Кнопки профиля"))
++        rows.append(.color(
++            "Цвет надписей",
++            LunagramSettings.profileButtonsColor,
++            { [weak self] in
++                self?.pickColor(
++                    title: "Цвет надписей",
++                    current: LunagramSettings.profileButtonsColor,
++                    allowsClear: true,
++                    apply: { value in
++                        LunagramSettings.profileButtonsColor = value
++                    })
++            }))
++        // Выключателя у самой оболочки нет намеренно — так и в настройках:
++        // родной вид тех кнопок хозяину не нравился, ради него всё и делалось.
++        // Поэтому тут только цвет и густота.
++        rows.append(.header("Оболочка"))
++        rows.append(.color(
++            "Цвет оболочки",
++            LunagramSettings.profileGlassColor,
++            { [weak self] in
++                self?.pickColor(
++                    title: "Цвет оболочки",
++                    current: LunagramSettings.profileGlassColor,
++                    allowsClear: true,
++                    apply: { value in
++                        LunagramSettings.profileGlassColor = value
++                    })
++            }))
++        rows.append(.slider(
++            "Плотность", LunagramSettings.profileGlassStrength, 0, 100, 5,
++            { value in
++                LunagramSettings.profileGlassStrength = value
++            }))
++        return rows
++    }
++
++    private func musicRows() -> [LunagramDecorRow] {
++        let mode = self.mode(for: .music)
++        var rows: [LunagramDecorRow] = []
++        rows.append(.header("Полоска музыки"))
++        rows.append(.segments(["Медиа", "Цвет"], mode, { [weak self] index in
++            self?.fillMode[.music] = index
++            self?.rebuild()
++        }))
++        if mode == 0 {
++            rows.append(.action(
++                "Выбрать картинку",
++                LunagramSettings.profileMusicBgURL != nil ? "Выбрано" : "Не выбрано",
++                { [weak self] in
++                    self?.openMusicPicker()
++                }))
++        } else {
++            rows.append(.color(
++                "Цвет полоски",
++                LunagramSettings.profileMusicBgColor,
++                { [weak self] in
++                    self?.pickColor(
++                        title: "Цвет полоски",
++                        current: LunagramSettings.profileMusicBgColor,
++                        allowsClear: true,
++                        apply: { value in
++                            LunagramSettings.profileMusicBgColor = value
++                        })
++                }))
++        }
++        rows.append(.slider(
++            "Затемнение", LunagramSettings.profileMusicBgDim, 0, 100, 5,
++            { value in
++                LunagramSettings.profileMusicBgDim = value
++            }))
++        rows.append(.slider(
++            "Размытие", LunagramSettings.profileMusicBgBlur, 0, 100, 5,
++            { value in
++                LunagramSettings.profileMusicBgBlur = value
++            }))
++        return rows
++    }
++
++    // MARK: Выбор картинки
++
++    // Выбираю файл прямо отсюда, а не отправляю на старый экран: весь смысл
++    // панели в том, чтобы не уходить с профиля. Перенос файла к себе уже
++    // написан и проверен (`importProfileBanner` и соседи) — зову его.
++
++    private func openBannerPicker() {
++        self.pickMedia(kind: .banner)
++    }
++
++    private func openBackgroundPicker() {
++        self.pickMedia(kind: .background)
++    }
++
++    private func openFramePicker() {
++        self.pickMedia(kind: .frame)
++    }
++
++    private func openMusicPicker() {
++        self.pickMedia(kind: .music)
++    }
++
++    private enum MediaKind {
++        case banner
++        case background
++        case frame
++        case music
++    }
++
++    private func pickMedia(kind: MediaKind) {
++        guard #available(iOS 14.0, *) else {
++            return
++        }
++        guard let presenter = self.controller?.view.window?.rootViewController else {
++            return
++        }
++        var configuration = PHPickerConfiguration()
++        // Баннером бывает и видео, остальное — только картинка.
++        configuration.filter = (kind == .banner)
++            ? PHPickerFilter.any(of: [.images, .videos])
++            : PHPickerFilter.images
++        configuration.selectionLimit = 1
++        let picker = PHPickerViewController(configuration: configuration)
++        let delegate = LunagramDecorPickerDelegate(importer: { url, isVideo in
++            switch kind {
++            case .banner:
++                try LunagramSettings.importProfileBanner(from: url, isVideo: isVideo)
++                // Выбрал баннер — значит хочет его видеть. Включаю сам:
++                // иначе выбрал файл, а в профиле ничего не изменилось.
++                LunagramSettings.profileBannerEnabled = true
++            case .background:
++                try LunagramSettings.importProfileBackground(from: url)
++            case .frame:
++                try LunagramSettings.importAvatarFrameImage(from: url)
++                LunagramSettings.avatarFrameEnabled = true
++            case .music:
++                try LunagramSettings.importProfileMusicBackground(from: url)
++            }
++        }, completion: { [weak self] in
++            self?.pickerDelegate = nil
++            self?.rebuild()
++        })
++        // Окошко выбора делегата за собой не держит — держу я, иначе его
++        // уберут из памяти до того, как человек что-нибудь выберет.
++        self.pickerDelegate = delegate
++        picker.delegate = delegate
++        presenter.present(picker, animated: true, completion: nil)
++    }
++}
++
++/// Приёмщик выбранного файла. Своя копия, а не общая с настройками: та
++/// лежит внутри другого файла закрытой и завязана на его состояние.
++@available(iOS 14.0, *)
++private final class LunagramDecorPickerDelegate: NSObject, PHPickerViewControllerDelegate {
++    private let importer: (URL, Bool) throws -> Void
++    private let completion: () -> Void
++
++    init(importer: @escaping (URL, Bool) throws -> Void, completion: @escaping () -> Void) {
++        self.importer = importer
++        self.completion = completion
++        super.init()
++    }
++
++    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
++        picker.dismiss(animated: true, completion: nil)
++        guard let item = results.first?.itemProvider else {
++            self.completion()
++            return
++        }
++        let videoType = UTType.movie.identifier
++        let imageType = UTType.image.identifier
++        let isVideo = item.hasItemConformingToTypeIdentifier(videoType)
++        let typeIdentifier = isVideo ? videoType : imageType
++        guard item.hasItemConformingToTypeIdentifier(typeIdentifier) else {
++            self.completion()
++            return
++        }
++        let importer = self.importer
++        let completion = self.completion
++        item.loadFileRepresentation(forTypeIdentifier: typeIdentifier, completionHandler: { url, _ in
++            // Файл выдают во временном месте и забирают сразу после возврата,
++            // поэтому переношу его к себе здесь же, а не потом в главной нити.
++            var imported = false
++            if let url = url {
++                imported = ((try? importer(url, isVideo)) != nil)
++            }
++            DispatchQueue.main.async {
++                _ = imported
++                completion()
++            }
++        })
++    }
++}
++
++/// Панель правки оформления профиля.
++public final class LunagramDecorEditorController: ViewController {
++    private let context: AccountContext
++
++    private var controllerNode: LunagramDecorEditorNode {
++        return self.displayNode as! LunagramDecorEditorNode
++    }
++
++    public init(context: AccountContext) {
++        self.context = context
++
++        let theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++        super.init(navigationBarPresentationData: NavigationBarPresentationData(
++            presentationTheme: theme,
++            presentationStrings: context.sharedContext.currentPresentationData.with({ $0 }).strings))
++
++        // Заголовок как у них — «Custom Profile» по-нашему.
++        self.title = "Оформление"
++        self.navigationPresentation = .modal
++    }
++
++    required public init(coder: NSCoder) {
++        preconditionFailure()
++    }
++
++    override public func loadDisplayNode() {
++        self.displayNode = LunagramDecorEditorNode(controller: self, context: self.context)
++        self.displayNodeDidLoad()
++    }
++
++    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++        super.containerLayoutUpdated(layout, transition: transition)
++
++        let navigationHeight = self.navigationLayout(layout: layout).navigationFrame.maxY
++        let contentLayout = ContainerViewLayout(
++            size: CGSize(width: layout.size.width, height: max(0.0, layout.size.height - navigationHeight)),
++            metrics: layout.metrics,
++            deviceMetrics: layout.deviceMetrics,
++            intrinsicInsets: layout.intrinsicInsets,
++            safeInsets: layout.safeInsets,
++            additionalInsets: layout.additionalInsets,
++            statusBarHeight: nil,
++            inputHeight: layout.inputHeight,
++            inputHeightIsInteractivellyChanging: false,
++            inVoiceOver: false)
++        self.controllerNode.frame = CGRect(
++            x: 0.0,
++            y: navigationHeight,
++            width: contentLayout.size.width,
++            height: contentLayout.size.height)
++        self.controllerNode.containerLayoutUpdated(contentLayout, transition: transition)
++    }
++}
++
++/// Показать правку оформления: панель снизу, живой профиль над ней.
++public func lunagramPresentDecorEditor(context: AccountContext, from controller: ViewController) {
++    let editor = LunagramDecorEditorController(context: context)
++    let sheet = LunagramEditorSheet(context: context, content: editor)
++    controller.present(sheet, in: .window(.root))
++}
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButton.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButton.swift
+index fe4c0b06..6c67f8ca 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButton.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButton.swift
+@@ -262,6 +262,11 @@ final class PeerInfoHeaderNavigationButton: HighlightableButtonNode {
+                 text = ""
+                 accessibilityText = presentationData.strings.PeerInfo_QRCode_Title
+                 icon = PresentationResourcesRootController.navigationQrCodeIcon(presentationData.theme)
++            case .lunagramDecor:
++                // Lunagram: палитра — вход в правку оформления профиля.
++                text = ""
++                accessibilityText = "Оформление"
++                icon = lunagramDecorIcon(presentationData.theme)
+             case .moreSearchSort:
+                 text = ""
+                 accessibilityText = ""
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+index f5d1a35b..2c788ad3 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNavigationButtonContainerNode.swift
+@@ -25,6 +25,8 @@ enum PeerInfoHeaderNavigationButtonKey {
+     case qrCode
+     case moreSearchSort
+     case postStory
++    /// Lunagram: палитра — правка оформления своего профиля.
++    case lunagramDecor
+ }
+ 
+ struct PeerInfoHeaderNavigationButtonSpec: Hashable {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index 1cb3ae99..d9703a61 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -2111,6 +2111,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+                 }
+             case .qrCode:
+                 strongSelf.openQrCode()
++            case .lunagramDecor:
++                // Lunagram: панель правки оформления снизу, профиль над ней
++                // остаётся живым и меняется на ходу.
++                if let controller = strongSelf.controller {
++                    lunagramPresentDecorEditor(context: strongSelf.context, from: controller)
++                }
+             case .postStory:
+                 var sourceFrame: CGRect?
+                 if let source {
+@@ -5957,8 +5963,13 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             } else {
+                 if self.isSettings {
+                     leftNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .qrCode, isForExpandedView: false))
++                    // Lunagram: палитра — правка оформления своего профиля.
++                    // Слева, рядом с кодом: справа «Изменить», и путать их
++                    // не нужно — то про имя и описание, это про вид.
++                    leftNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .lunagramDecor, isForExpandedView: false))
+                     rightNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .edit, isForExpandedView: false))
+                 } else if self.isMyProfile {
++                    leftNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .lunagramDecor, isForExpandedView: false))
+                     rightNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .edit, isForExpandedView: false))
+                 } else if peerInfoCanEdit(peer: self.data?.peer, chatLocation: self.chatLocation, threadData: self.data?.threadData, cachedData: self.data?.cachedData, isContact: self.data?.isContact) {
+                     rightNavigationButtons.append(PeerInfoHeaderNavigationButtonSpec(key: .edit, isForExpandedView: false))
