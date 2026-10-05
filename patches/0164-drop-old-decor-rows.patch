@@ -1,0 +1,67 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index 17ba4c0d..a9261bd4 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -406,14 +406,12 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+     // профиль». Каждая строка открывает свой экран. Всё рисует сам клиент,
+     // на сервер ничего не уходит, видно только тебе.
+     if case .user = data.peer {
+-        // Lunagram: правка оформления открывается ОКОШКОМ СНИЗУ, а не
+-        // отдельным экраном. За окошком остаётся живой профиль, и правки
+-        // видно сразу на себе — так устроено в плагине Custom Profile, и
+-        // хозяин попросил так же.
++        // Окошко снизу для того, что осталось здесь — статуса в имени.
+         //
+-        // «На ходу» нам ничего не стоило: шапка профиля уже слушает смену
+-        // наших настроек и перестраивается сама. Её просто не было видно
+-        // из-за экрана поверх.
++        // Живого предпросмотра за этим окошком НЕТ: открывается оно поверх
++        // «Изменить профиль», и за ним поля имени и фамилии, а не профиль.
++        // Ради предпросмотра и сделана отдельная панель оформления со
++        // значком палитры в своём профиле — всё оформление уехало туда.
+         let pushDecor: (ViewController) -> Void = { screen in
+             let sheet = LunagramEditorSheet(context: context, content: screen)
+             context.sharedContext.mainWindow?.present(sheet, on: .root)
+@@ -421,18 +419,18 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+         // Порядок, названия и контурные значки — как на ПК.
+         let theme = presentationData.theme
+         items[.lunagramDecor]!.append(PeerInfoScreenHeaderItem(id: 199, text: "Оформление Lunagram"))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 200, label: .text(""), text: "Баннер профиля", icon: lunagramContourIcon("paintpalette,paintbrush", theme: theme), action: {
+-            pushDecor(lunagramBannerScreen(context: context))
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 201, label: .text(""), text: "Рамка аватарки", icon: lunagramContourIcon("person.crop.circle", theme: theme), action: {
+-            pushDecor(lunagramAvatarFrameScreen(context: context))
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 205, label: .text(""), text: "Фон профиля", icon: lunagramContourIcon("photo", theme: theme), action: {
+-            pushDecor(lunagramProfileBackgroundScreen(context: context))
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 206, label: .text(""), text: "Фон музыки", icon: lunagramContourIcon("speaker.wave.2", theme: theme), action: {
+-            pushDecor(lunagramMusicBackgroundScreen(context: context))
+-        }))
++        // Баннер, рамка, фон профиля, фон музыки и имя отсюда УБРАНЫ.
++        //
++        // Всё это теперь в панели правки оформления, которая открывается
++        // значком палитры в верхней полосе своего профиля. Хозяин сказал
++        // прямо: «двух путей к одному не бывает». Здесь путь был хуже:
++        // окошко правки открывалось поверх экрана «Изменить профиль», и за
++        // ним был виден не профиль, а поля имени и фамилии — то есть ровно
++        // того предпросмотра, ради которого всё затевалось, тут и не было.
++        //
++        // Остались «Удалить все фотографии» — это действие, а не оформление,
++        // и «Статус в имени»: его во вкладках панели нет, и переносить его
++        // туда самовольно я не стал.
+         items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 204, label: .text(""), text: "Удалить все фотографии", icon: lunagramContourIcon("trash", theme: theme), action: {
+             lunagramDeleteProfilePhotos(context: context, keepMain: false, present: { c in
+                 // Показ ведём через окно приложения: present(_, on:) у окна
+@@ -444,10 +442,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
+         items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 202, label: .text(""), text: "Статус в имени", icon: lunagramContourIcon("face.smiling", theme: theme), action: {
+             pushDecor(lunagramStatusController(context: context))
+         }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenDisclosureItem(id: 203, label: .text(""), text: "Имя", icon: lunagramContourIcon("pencil", theme: theme), action: {
+-            pushDecor(lunagramProfileNameScreen(context: context))
+-        }))
+-        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Рисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.\n\nПоля выше — имя, фамилия, @ник и «о себе» — матовые и скруглённые: родные там сплошные, и на цветной обложке это выглядело заплаткой."))
++        items[.lunagramDecor]!.append(PeerInfoScreenCommentItem(id: 207, text: "Баннер, фон, имя, аватарка, рамка, кнопки и музыка — в панели оформления: значок палитры сверху в своём профиле. Там видно, как получается, прямо на себе.\n\nРисует сам клиент, на сервер ничего не уходит. Пока оформление видно только тебе.\n\nПоля выше — имя, фамилия, @ник и «о себе» — матовые и скруглённые: родные там сплошные, и на цветной обложке это выглядело заплаткой."))
+     }
+ 
+     if let cachedData = data.cachedData as? CachedUserData {
