@@ -989,10 +989,10 @@ index 00000000..12a50817
 +}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
 new file mode 100644
-index 00000000..6b1c7666
+index 00000000..758ec86b
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
-@@ -0,0 +1,1082 @@
+@@ -0,0 +1,1074 @@
 +import Foundation
 +import UIKit
 +import PhotosUI
@@ -1305,6 +1305,10 @@ index 00000000..6b1c7666
 +    private var segmentNodes: [LunagramDecorSegmentsNode] = []
 +
 +    private var validLayout: ContainerViewLayout?
++    /// Высота верхней полосы с заголовком: узел занимает весь экран, а под
++    /// полосу отступает сам. Так устроены остальные экраны здесь — ставить
++    /// рамку узла самому нельзя, её ставит навигация.
++    private var navigationHeight: CGFloat = 0.0
 +    private var settingsDisposable: Any?
 +    /// Держат ли сейчас ползунок пальцем.
 +    private var isDraggingSlider = false
@@ -1357,8 +1361,9 @@ index 00000000..6b1c7666
 +            })
 +    }
 +
-+    func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
++    func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
 +        self.validLayout = layout
++        self.navigationHeight = navigationHeight
 +        self.rebuild()
 +    }
 +
@@ -1397,11 +1402,12 @@ index 00000000..6b1c7666
 +        }
 +        let width = layout.size.width
 +
++        let top = self.navigationHeight
 +        let tabsHeight = self.tabsNode.update(
 +            selectedIndex: self.tab.rawValue, theme: self.theme, width: width)
-+        self.tabsNode.frame = CGRect(x: 0.0, y: 0.0, width: width, height: tabsHeight)
++        self.tabsNode.frame = CGRect(x: 0.0, y: top, width: width, height: tabsHeight)
 +        self.separatorNode.frame = CGRect(
-+            x: 0.0, y: tabsHeight, width: width, height: UIScreenPixel)
++            x: 0.0, y: top + tabsHeight, width: width, height: UIScreenPixel)
 +
 +        let rows = self.rows(for: self.tab)
 +
@@ -1545,7 +1551,7 @@ index 00000000..6b1c7666
 +            self.segmentNodes[index].isHidden = true
 +        }
 +
-+        let scrollTop = tabsHeight + UIScreenPixel
++        let scrollTop = top + tabsHeight + UIScreenPixel
 +        self.scrollNode.frame = CGRect(
 +            x: 0.0,
 +            y: scrollTop,
@@ -2048,24 +2054,10 @@ index 00000000..6b1c7666
 +    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
 +        super.containerLayoutUpdated(layout, transition: transition)
 +
-+        let navigationHeight = self.navigationLayout(layout: layout).navigationFrame.maxY
-+        let contentLayout = ContainerViewLayout(
-+            size: CGSize(width: layout.size.width, height: max(0.0, layout.size.height - navigationHeight)),
-+            metrics: layout.metrics,
-+            deviceMetrics: layout.deviceMetrics,
-+            intrinsicInsets: layout.intrinsicInsets,
-+            safeInsets: layout.safeInsets,
-+            additionalInsets: layout.additionalInsets,
-+            statusBarHeight: nil,
-+            inputHeight: layout.inputHeight,
-+            inputHeightIsInteractivellyChanging: false,
-+            inVoiceOver: false)
-+        self.controllerNode.frame = CGRect(
-+            x: 0.0,
-+            y: navigationHeight,
-+            width: contentLayout.size.width,
-+            height: contentLayout.size.height)
-+        self.controllerNode.containerLayoutUpdated(contentLayout, transition: transition)
++        self.controllerNode.containerLayoutUpdated(
++            layout,
++            navigationHeight: self.navigationLayout(layout: layout).navigationFrame.maxY,
++            transition: transition)
 +    }
 +}
 +
