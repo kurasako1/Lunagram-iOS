@@ -1,0 +1,320 @@
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift
+index 12a50817..98a0899c 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditor.swift
+@@ -55,8 +55,12 @@ enum LunagramDecorRow {
+     case header(String)
+     /// Переключатель: название, подпись под ним, включён ли.
+     case toggle(String, String?, Bool, (Bool) -> Void)
+-    /// Полоска плашек: названия, какая выбрана.
++    /// Полоска плашек: названия, какая выбрана. Ширина делится поровну —
++    /// годится на две-три штуки.
+     case segments([String], Int, (Int) -> Void)
++    /// То же, но плашки по размеру надписи, а строка прокручивается боком.
++    /// Для десятка готовых баннеров или видов рамки.
++    case chips([String], Int, (Int) -> Void)
+     /// Цвет: название, сам цвет (nil — не выбран), что делать по нажатию.
+     case color(String, UInt32?, () -> Void)
+     /// Ползунок: название, значение, от, до, шаг.
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+index 758ec86b..ffb5d0b0 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
+@@ -210,6 +210,95 @@ final class LunagramDecorActionNode: ASDisplayNode {
+     }
+ }
+ 
++/// Полоска плашек С ПРОКРУТКОЙ — для выбора одного из многих.
++///
++/// Обычная полоска (`LunagramDecorSegmentsNode`) делит ширину поровну: на
++/// трёх плашках это красиво, на десяти готовых баннерах названия не влезут.
++/// Здесь плашки по размеру надписи, а строка прокручивается боком — как ряд
++/// вкладок сверху панели.
++final class LunagramDecorChipsNode: ASDisplayNode {
++    private let scrollNode: ASScrollNode
++    private var buttons: [HighlightTrackingButtonNode] = []
++    private var labels: [ImmediateTextNode] = []
++    private var selected: ((Int) -> Void)?
++
++    override init() {
++        self.scrollNode = ASScrollNode()
++        super.init()
++        self.scrollNode.view.showsHorizontalScrollIndicator = false
++        self.scrollNode.view.alwaysBounceHorizontal = false
++        self.addSubnode(self.scrollNode)
++    }
++
++    func update(
++        titles: [String],
++        selectedIndex: Int,
++        theme: PresentationTheme,
++        width: CGFloat,
++        selected: @escaping (Int) -> Void
++    ) -> CGFloat {
++        self.selected = selected
++        while self.buttons.count < titles.count {
++            let button = HighlightTrackingButtonNode()
++            button.addTarget(self, action: #selector(self.pressed(_:)), forControlEvents: .touchUpInside)
++            self.scrollNode.addSubnode(button)
++            self.buttons.append(button)
++            let label = ImmediateTextNode()
++            label.isUserInteractionEnabled = false
++            self.scrollNode.addSubnode(label)
++            self.labels.append(label)
++        }
++        // Лишние прячем: в другой вкладке плашек может быть меньше.
++        for index in titles.count ..< self.buttons.count {
++            self.buttons[index].isHidden = true
++            self.labels[index].isHidden = true
++        }
++
++        let height = lgDecorTabHeight + 16.0
++        var x = lgDecorInset
++        for (index, title) in titles.enumerated() {
++            let isOn = index == selectedIndex
++            let label = self.labels[index]
++            label.isHidden = false
++            label.attributedText = NSAttributedString(
++                string: title,
++                font: Font.semibold(15.0),
++                textColor: isOn
++                    ? theme.list.itemCheckColors.foregroundColor
++                    : theme.list.itemPrimaryTextColor)
++            let textSize = label.updateLayout(CGSize(width: 240.0, height: lgDecorTabHeight))
++            let itemWidth = textSize.width + 28.0
++
++            let button = self.buttons[index]
++            button.isHidden = false
++            button.frame = CGRect(x: x, y: 8.0, width: itemWidth, height: lgDecorTabHeight)
++            button.backgroundColor = isOn
++                ? theme.list.itemAccentColor
++                : theme.list.itemPrimaryTextColor.withAlphaComponent(0.08)
++            button.cornerRadius = lgDecorTabHeight / 2.0
++            button.clipsToBounds = true
++
++            label.frame = CGRect(
++                x: x + floor((itemWidth - textSize.width) / 2.0),
++                y: 8.0 + floor((lgDecorTabHeight - textSize.height) / 2.0),
++                width: textSize.width,
++                height: textSize.height)
++            x += itemWidth + 8.0
++        }
++
++        self.scrollNode.frame = CGRect(x: 0.0, y: 0.0, width: width, height: height)
++        self.scrollNode.view.contentSize = CGSize(width: x - 8.0 + lgDecorInset, height: height)
++        return height
++    }
++
++    @objc private func pressed(_ sender: HighlightTrackingButtonNode) {
++        guard let index = self.buttons.firstIndex(where: { $0 === sender }) else {
++            return
++        }
++        self.selected?(index)
++    }
++}
++
+ /// Ряд вкладок сверху панели. Семь штук в ширину телефона не влезают,
+ /// поэтому ряд прокручивается боком — как у них.
+ private final class LunagramDecorTabsNode: ASDisplayNode, UIScrollViewDelegate {
+@@ -308,6 +397,7 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+     private var colorNodes: [LunagramDecorColorNode] = []
+     private var actionNodes: [LunagramDecorActionNode] = []
+     private var segmentNodes: [LunagramDecorSegmentsNode] = []
++    private var chipsNodes: [LunagramDecorChipsNode] = []
+ 
+     private var validLayout: ContainerViewLayout?
+     /// Высота верхней полосы с заголовком: узел занимает весь экран, а под
+@@ -422,6 +512,7 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+         var colorIndex = 0
+         var actionIndex = 0
+         var segmentIndex = 0
++        var chipsIndex = 0
+         var y: CGFloat = 0.0
+ 
+         for row in rows {
+@@ -473,6 +564,23 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+                     selected: selected)
+                 node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
+                 y += height
++            case let .chips(titles, selectedIndex, selected):
++                while self.chipsNodes.count <= chipsIndex {
++                    let node = LunagramDecorChipsNode()
++                    self.scrollNode.addSubnode(node)
++                    self.chipsNodes.append(node)
++                }
++                let node = self.chipsNodes[chipsIndex]
++                chipsIndex += 1
++                node.isHidden = false
++                let height = node.update(
++                    titles: titles,
++                    selectedIndex: selectedIndex,
++                    theme: self.theme,
++                    width: width,
++                    selected: selected)
++                node.frame = CGRect(x: 0.0, y: y, width: width, height: height)
++                y += height
+             case let .color(title, value, action):
+                 while self.colorNodes.count <= colorIndex {
+                     let node = LunagramDecorColorNode()
+@@ -555,6 +663,9 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+         for index in segmentIndex ..< self.segmentNodes.count {
+             self.segmentNodes[index].isHidden = true
+         }
++        for index in chipsIndex ..< self.chipsNodes.count {
++            self.chipsNodes[index].isHidden = true
++        }
+ 
+         let scrollTop = top + tabsHeight + UIScreenPixel
+         self.scrollNode.frame = CGRect(
+@@ -623,27 +734,71 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+         guard LunagramSettings.profileBannerEnabled else {
+             return rows
+         }
++        // Нарисованные баннеры. Их десять, названия в плашку поровну не
++        // влезают — поэтому полоска с прокруткой.
++        let presets = LunagramBannerPreset.allCases
++        let presetTitles = ["Нет"] + presets.map({ $0.title })
++        let presetIndex = presets.firstIndex(where: {
++            $0.rawValue == LunagramSettings.profileBannerPreset
++        }).map({ $0 + 1 }) ?? 0
++        rows.append(.header("Нарисованные"))
++        rows.append(.chips(presetTitles, presetIndex, { index in
++            LunagramSettings.profileBannerPreset = (index == 0)
++                ? 0
++                : presets[index - 1].rawValue
++        }))
++
++        let hasPreset = LunagramSettings.profileBannerPreset != 0
++        rows.append(.header("Своя картинка"))
+         rows.append(.action(
+             "Выбрать картинку",
+-            LunagramSettings.hasProfileBanner ? "Выбрано" : "Не выбрано",
++            LunagramSettings.hasProfileBanner
++                ? (hasPreset ? "Выбрана, но нарисованный поверх" : "Выбрана")
++                : "Не выбрана",
+             { [weak self] in
+                 self?.openBannerPicker()
+             }))
++        if LunagramSettings.hasProfileBanner {
++            rows.append(.action(
++                "Подгонка кадра",
++                "Двигать и приближать",
++                { [weak self] in
++                    self?.openCrop(kind: .banner)
++                }))
++        }
++
+         rows.append(.header("Как показывать"))
++        // Растворение стоит ВЫШЕ отсечения нарисованных нарочно: оно
++        // вешается маской на весь вид (lunagramLayoutFade) и работает
++        // одинаково и с картинкой, и с нарисованным.
+         rows.append(.slider(
+-            "Затемнение", LunagramSettings.profileBannerDim, 0, 3, 1,
++            "Растворение к низу", LunagramSettings.profileBannerFade, 0, 100, 5,
+             { value in
+-                LunagramSettings.profileBannerDim = value
++                LunagramSettings.profileBannerFade = value
+             }))
++
++        // А вот затемнение с размытием при нарисованном не читаются вовсе:
++        // у него своё затемнение. Мёртвые ползунки показывать нельзя.
++        // Звука у нарисованного тоже нет — он рисуется кодом.
++        guard !hasPreset else {
++            return rows
++        }
++        // Затемнение берём из ПРОЦЕНТОВ, а не из ступени 0…3.
++        //
++        // `profileBannerDim` со ступенями настоящий баннер не читает: он
++        // смотрит только на `profileBannerDimPercent` (см. reload в
++        // LunagramProfileBanner). Сперва я поставил ступень — ползунок
++        // крутился бы, а картинка не темнела. Проверять надо потребителя,
++        // а не похожее имя.
+         rows.append(.slider(
+-            "Размытие", LunagramSettings.profileBannerBlur, 0, 100, 5,
++            "Затемнение", LunagramSettings.profileBannerDimPercent, 0, 100, 5,
+             { value in
+-                LunagramSettings.profileBannerBlur = value
++                LunagramSettings.profileBannerDimPercent = value
+             }))
+         rows.append(.slider(
+-            "Растворение к низу", LunagramSettings.profileBannerFade, 0, 100, 5,
++            "Размытие", LunagramSettings.profileBannerBlur, 0, 100, 5,
+             { value in
+-                LunagramSettings.profileBannerFade = value
++                LunagramSettings.profileBannerBlur = value
+             }))
+         rows.append(.header("Звук"))
+         rows.append(.toggle(
+@@ -672,6 +827,15 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+             { [weak self] in
+                 self?.openBackgroundPicker()
+             }))
++        if LunagramSettings.profileBackgroundURL != nil {
++            rows.append(.action(
++                "Подгонка кадра",
++                "Двигать и приближать",
++                { [weak self] in
++                    self?.openCrop(kind: .profileBackground)
++                }))
++        }
++        rows.append(.header("Как показывать"))
+         rows.append(.slider(
+             "Затемнение", LunagramSettings.profileBackgroundDim, 0, 100, 5,
+             { value in
+@@ -745,6 +909,16 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+                     LunagramNameFill.reset()
+                 }))
+         }
++        // Готовые эффекты: огонь, лёд, неон, радуга, пульс. «Свой цвет» —
++        // нулевой, тогда работают строки выше.
++        rows.append(.header("Эффект"))
++        rows.append(.chips(
++            LunagramNameFill.Effect.allCases.map({ $0.title }),
++            LunagramSettings.profileNameEffect,
++            { value in
++                LunagramSettings.profileNameEffect = value
++                LunagramNameFill.reset()
++            }))
+         rows.append(.header("Свечение"))
+         rows.append(.slider(
+             "Сила свечения", LunagramSettings.profileNameGlowPercent, 0, 100, 5,
+@@ -798,6 +972,22 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+         guard LunagramSettings.avatarFrameEnabled else {
+             return rows
+         }
++        // Нарисованные виды рамки. Как и в настройках: выбрал вид — своя
++        // картинка снимается, иначе непонятно, что из двух рисуется.
++        let styles = LunagramAvatarFrameStyle.allCases
++        let styleIndex = styles.firstIndex(where: {
++            $0.rawValue == LunagramSettings.avatarFrameStyle
++        }).map({ $0 + 1 }) ?? 0
++        rows.append(.header("Вид"))
++        rows.append(.chips(["Нет"] + styles.map({ $0.title }), styleIndex, { index in
++            if index == 0 {
++                LunagramSettings.avatarFrameStyle = 0
++            } else {
++                LunagramSettings.avatarFrameStyle = styles[index - 1].rawValue
++                LunagramSettings.clearAvatarFrameImage()
++            }
++        }))
++        rows.append(.header("Своя картинка"))
+         rows.append(.action(
+             "Своя картинка рамки",
+             LunagramSettings.avatarFrameImageURL != nil ? "Выбрана" : "Не выбрана",
+@@ -932,6 +1122,16 @@ private final class LunagramDecorEditorNode: ViewControllerTracingNode {
+         self.pickMedia(kind: .music)
+     }
+ 
++    /// Подгонка кадра — окно уже написано и работает для всех трёх видов.
++    private func openCrop(kind: LunagramCropEditor.Kind) {
++        guard let presenter = self.controller?.view.window?.rootViewController else {
++            return
++        }
++        LunagramCropEditor.present(from: presenter, kind: kind, onChange: { [weak self] in
++            self?.rebuild()
++        })
++    }
++
+     private enum MediaKind {
+         case banner
+         case background
