@@ -128,7 +128,7 @@ index 1b3f2fed..5ad2145c 100644
      /// (см. LunagramAvatarShape.Kind).
      public static var avatarShape: Int {
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
-index ce3a9bdb..ae54a56e 100644
+index ce3a9bdb..5df88bba 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramSettingsController.swift
 @@ -1485,6 +1485,7 @@ private struct LunagramMediaState: Equatable {
@@ -174,11 +174,14 @@ index ce3a9bdb..ae54a56e 100644
                  refreshMedia()
              }))
          case .particlesKind:
-@@ -3025,6 +3033,8 @@ private func lunagramAvatarsEntries(values: [LunagramToggle: Bool], media: Lunag
+@@ -3025,6 +3033,11 @@ private func lunagramAvatarsEntries(values: [LunagramToggle: Bool], media: Lunag
      if media.avatarShape == 0 {
          rows.row(.cornerSlider(media.avatarCorners))
      }
-+    rows.row(.slider(124, "Растушевать край", media.avatarFeather, 0, 60, 5, media.avatarFeather == 0 ? "нет" : "\(media.avatarFeather)%"))
++    // Подпись у ползунка-строки передавать нельзя: у этого вида строки шесть
++    // значений, а подпись считает lunagramSliderLabel. Передал седьмым —
++    // «extra argument in call», сборка 184.
++    rows.row(.slider(124, "Растушевать край", media.avatarFeather, 0, 60, 5))
 +    rows.info("Край аватарки в ПРОФИЛЕ уходит в прозрачность вместо резаной линии. Растушёвка следует за формой: и за звездой, и за сердцем.\n\nТолько в профиле, и это нарочно: форма общая на все аватарки, а размытая маска на каждый размер в списке переписок стоила бы прокрутки.")
      rows.row(.toggle(.avatarSingleCorner, values[.avatarSingleCorner] ?? LunagramToggle.avatarSingleCorner.value, "Единое закругление", nil))
      rows.info("Форумы будут иметь ту же форму, что и чаты. В уже открытых списках форма сменится, когда они перерисуются, — везде сразу после перезапуска Lunagram.")
