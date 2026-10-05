@@ -1,9 +1,9 @@
 diff --git a/submodules/Lunagram/Sources/LunagramColorWheel.swift b/submodules/Lunagram/Sources/LunagramColorWheel.swift
 new file mode 100644
-index 00000000..e4685662
+index 00000000..06ffd288
 --- /dev/null
 +++ b/submodules/Lunagram/Sources/LunagramColorWheel.swift
-@@ -0,0 +1,588 @@
+@@ -0,0 +1,587 @@
 +import UIKit
 +
 +/// Своё окошко выбора цвета — как в плагине Custom Profile.
@@ -93,8 +93,7 @@ index 00000000..e4685662
 +            var h: CGFloat = 0.0
 +            var s: CGFloat = 0.0
 +            var b: CGFloat = 0.0
-+            var a: CGFloat = 0.0
-+            if source.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
++            if source.getHue(&h, saturation: &s, brightness: &b, alpha: nil) {
 +                self.hue = h
 +                self.saturation = s
 +                self.brightness = b
@@ -338,8 +337,7 @@ index 00000000..e4685662
 +        var h: CGFloat = 0.0
 +        var s: CGFloat = 0.0
 +        var b: CGFloat = 0.0
-+        var a: CGFloat = 0.0
-+        if source.getHue(&h, saturation: &s, brightness: &b, alpha: &a) {
++        if source.getHue(&h, saturation: &s, brightness: &b, alpha: nil) {
 +            self.hue = h
 +            self.saturation = s
 +            self.brightness = b
@@ -363,8 +361,9 @@ index 00000000..e4685662
 +        var r: CGFloat = 0.0
 +        var g: CGFloat = 0.0
 +        var b: CGFloat = 0.0
-+        var a: CGFloat = 0.0
-+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
++        // Прозрачность тут своя, из полосы, а не из цвета: цвет собран
++        // непрозрачным нарочно.
++        color.getRed(&r, green: &g, blue: &b, alpha: nil)
 +        let alphaByte = UInt32(round(max(0.0, min(1.0, self.alpha)) * 255.0))
 +        return (alphaByte << 24)
 +            | (UInt32(round(r * 255.0)) << 16)
