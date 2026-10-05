@@ -990,10 +990,10 @@ index 00000000..12a50817
 +}
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
 new file mode 100644
-index 00000000..f92eb559
+index 00000000..6b1c7666
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/LunagramDecorEditorScreen.swift
-@@ -0,0 +1,1044 @@
+@@ -0,0 +1,1082 @@
 +import Foundation
 +import UIKit
 +import PhotosUI
@@ -1057,6 +1057,13 @@ index 00000000..f92eb559
 +    private let sliderView = UISlider()
 +    private var changed: ((Int) -> Void)?
 +    private var step = 1
++    /// Зовётся, когда ползунок берут пальцем и когда отпускают.
++    ///
++    /// Нужно затем, что запись настройки будит всю панель через
++    /// `didChangeNotification`, а панель переставляет ползунок на значение из
++    /// настроек. Под пальцем это выглядит как дёрганье и мешает тянуть.
++    /// Пока держат — панель не перестраиваем.
++    var dragStateChanged: ((Bool) -> Void)?
 +
 +    override init() {
 +        super.init()
@@ -1067,7 +1074,20 @@ index 00000000..f92eb559
 +    override func didLoad() {
 +        super.didLoad()
 +        self.sliderView.addTarget(self, action: #selector(self.slid), for: .valueChanged)
++        self.sliderView.addTarget(self, action: #selector(self.dragBegan), for: .touchDown)
++        self.sliderView.addTarget(
++            self,
++            action: #selector(self.dragEnded),
++            for: [.touchUpInside, .touchUpOutside, .touchCancel])
 +        self.view.addSubview(self.sliderView)
++    }
++
++    @objc private func dragBegan() {
++        self.dragStateChanged?(true)
++    }
++
++    @objc private func dragEnded() {
++        self.dragStateChanged?(false)
 +    }
 +
 +    @objc private func slid() {
@@ -1287,6 +1307,8 @@ index 00000000..f92eb559
 +
 +    private var validLayout: ContainerViewLayout?
 +    private var settingsDisposable: Any?
++    /// Держат ли сейчас ползунок пальцем.
++    private var isDraggingSlider = false
 +    /// Приёмщик выбранного файла, пока окошко выбора открыто.
 +    fileprivate var pickerDelegate: AnyObject?
 +
@@ -1367,6 +1389,11 @@ index 00000000..f92eb559
 +    /// Собрать строки выбранной вкладки и разложить их.
 +    private func rebuild() {
 +        guard let layout = self.validLayout else {
++            return
++        }
++        // Тянут ползунок — не трогаем панель. Профиль над ней всё равно
++        // обновляется сам, по той же оповестке: предпросмотр не теряется.
++        if self.isDraggingSlider {
 +            return
 +        }
 +        let width = layout.size.width
@@ -1458,6 +1485,15 @@ index 00000000..f92eb559
 +                let node = self.sliderNodes[sliderIndex]
 +                sliderIndex += 1
 +                node.isHidden = false
++                node.dragStateChanged = { [weak self] dragging in
++                    guard let self = self else {
++                        return
++                    }
++                    self.isDraggingSlider = dragging
++                    if !dragging {
++                        self.rebuild()
++                    }
++                }
 +                let height = node.update(
 +                    title: title,
 +                    value: value,
@@ -1989,14 +2025,16 @@ index 00000000..f92eb559
 +    public init(context: AccountContext) {
 +        self.context = context
 +
-+        let theme = context.sharedContext.currentPresentationData.with({ $0 }).theme
++        let presentationData = context.sharedContext.currentPresentationData.with({ $0 })
 +        super.init(navigationBarPresentationData: NavigationBarPresentationData(
-+            presentationTheme: theme,
-+            presentationStrings: context.sharedContext.currentPresentationData.with({ $0 }).strings))
++            presentationData: presentationData))
 +
 +        // Заголовок как у них — «Custom Profile» по-нашему.
++        //
++        // `navigationPresentation` нарочно не трогаю: панель живёт внутри
++        // окошка, и «.modal» добавил бы ей вторую кнопку закрытия поверх
++        // того, что окошко закрывается стягиванием вниз.
 +        self.title = "Оформление"
-+        self.navigationPresentation = .modal
 +    }
 +
 +    required public init(coder: NSCoder) {
